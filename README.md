@@ -73,20 +73,20 @@ The CLI tool can be used outside KiCad for testing or scripted imports:
 
 ```bash
 # Search (default: --min-stock 1, only shows parts in stock)
-python3 -m kicad_jlcimport.cli search "100nF 0402" -t basic
-python3 -m kicad_jlcimport.cli search "ESP32" -n 20 --min-stock 100
+python3 cli.py search "100nF 0402" -t basic
+python3 cli.py search "ESP32" -n 20 --min-stock 100
 
 # Search with CSV output
-python3 -m kicad_jlcimport.cli search "RP2350" --csv > parts.csv
+python3 cli.py search "RP2350" --csv > parts.csv
 
 # Import (prints generated output)
-python3 -m kicad_jlcimport.cli import C427602 --show both
+python3 cli.py import C427602 --show both
 
 # Import to directory (saves .kicad_sym, .kicad_mod, and 3D models)
-python3 -m kicad_jlcimport.cli import C427602 -o ./output
+python3 cli.py import C427602 -o ./output
 
 # Import using a custom library name
-python3 -m kicad_jlcimport.cli import C427602 -o ./output --lib-name MyParts
+python3 cli.py import C427602 -o ./output --lib-name MyParts
 ```
 
 ### TUI
