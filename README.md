@@ -34,13 +34,13 @@ A KiCad 9 Action Plugin that imports symbols, footprints, and 3D models directly
 ### Option 1: Symlink (recommended for development)
 
 ```bash
-ln -s /path/to/kicad_jlcimport ~/Documents/KiCad/9.0/scripting/plugins/kicad_jlcimport
+ln -s /path/to/kicad_jlcimport <plugins-dir>/kicad_jlcimport
 ```
 
 ### Option 2: Copy
 
 ```bash
-cp -r /path/to/kicad_jlcimport ~/Documents/KiCad/9.0/scripting/plugins/kicad_jlcimport
+cp -r /path/to/kicad_jlcimport <plugins-dir>/kicad_jlcimport
 ```
 
 ### Activate
@@ -96,10 +96,10 @@ A terminal-based interface with image preview support (Sixel, Kitty, iTerm2, or 
 ![TUI interface](images/tui.png)
 
 ```bash
-# Install dependencies
-pip install textual textual-image[textual] Pillow
+# Install TUI dependencies (requires Python 3.10+)
+pip install textual "textual-image[textual]" Pillow
 
-# Run with project directory
+# Run from the project directory
 python3 -m tui -p /path/to/kicad/project
 
 # Run without project (global library only)
@@ -115,8 +115,6 @@ Features:
 - Configurable library name (shared with the plugin)
 - Import directly from detail view or import section
 - Links to datasheets and LCSC product pages
-
-Requires Python 3.10+.
 
 ## Configuration
 
@@ -148,7 +146,7 @@ For a detailed look at the architecture, data flow, module responsibilities, and
 - Python 3 (bundled with KiCad)
 - Internet connection
 
-No additional Python packages are required — the plugin uses only the standard library (`urllib`, `json`, `ssl`, `io`, `threading`) and `wx` (bundled with KiCad).
+The plugin requires no additional Python packages — it uses only the standard library and `wx` (both bundled with KiCad). The TUI requires Python 3.10+ and additional packages (see [TUI](#tui) above).
 
 ## License
 
