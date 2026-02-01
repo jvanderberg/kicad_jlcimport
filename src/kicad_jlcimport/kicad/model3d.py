@@ -5,9 +5,6 @@ from typing import Optional, Tuple
 
 from ..easyeda.ee_types import EE3DModel
 
-# EasyEDA 3D coordinates use 100 units per mm
-_EE_3D_UNITS_PER_MM = 100.0
-
 
 def compute_model_transform(
     model: EE3DModel,
@@ -30,10 +27,9 @@ def compute_model_transform(
     Returns (offset, rotation) tuples in mm.
     """
     cx, cy = 0.0, 0.0
-    z_min, z_max = 0.0, 0.0
 
     if obj_source is not None:
-        cx, cy, z_min, z_max = _obj_bounding_box(obj_source)
+        cx, cy, _, _ = _obj_bounding_box(obj_source)
 
     # Detect THT parts by checking if model origin differs from footprint origin
     # EasyEDA coordinates are in mils, convert to mm for comparison
@@ -51,22 +47,12 @@ def compute_model_transform(
             # When OBJ is significantly off-center, combine both
             y_offset = -cy - model_origin_diff_y
 
-        # Z offset: Use heuristic based on geometry
-        if z_max < abs(z_min):
-            # Part extends more below than above, use top surface
-            z_offset = z_max
-        else:
-            # Part extends more above, use half of depth
-            z_offset = -z_min / 2
-
-        offset = (-cx, y_offset, z_offset)
+        offset = (-cx, y_offset, 0.0)
     else:
-        # SMD parts or THT without origin difference: use standard calculation
-        offset = (
-            -cx,
-            -cy,
-            model.z / _EE_3D_UNITS_PER_MM,
-        )
+        # SMD parts: recenter XY from OBJ bounding box, Z=0
+        # EasyEDA OBJ models already encode the correct Z positioning
+        # in their vertex data, so no Z offset is needed.
+        offset = (-cx, -cy, 0.0)
 
     return offset, model.rotation
 

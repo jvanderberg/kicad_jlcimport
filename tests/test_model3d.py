@@ -26,13 +26,13 @@ class TestComputeModelTransform:
         assert offset == (0.0, 0.0, 0.0)
         assert rotation == (0, 0, 0)
 
-    def test_z_offset(self):
-        """Z offset is converted from 3D units (100/mm) to mm."""
+    def test_z_offset_always_zero(self):
+        """Z offset is always zero; OBJ geometry already encodes Z positioning."""
         model = EE3DModel(uuid="test", origin_x=200, origin_y=300, z=50, rotation=(0, 0, 90))
         offset, rotation = compute_model_transform(model, 100, 100)
         assert offset[0] == 0.0
         assert offset[1] == 0.0
-        assert offset[2] == pytest.approx(0.5)
+        assert offset[2] == 0.0
         assert rotation == (0, 0, 90)
 
     def test_rotation_preserved(self):
@@ -51,14 +51,14 @@ class TestComputeModelTransform:
         assert offset[1] == pytest.approx(-3.0)
         assert offset[2] == 0.0
 
-    def test_obj_source_with_z_offset(self):
-        """OBJ XY correction and Z offset combine correctly."""
+    def test_obj_source_with_z_always_zero(self):
+        """OBJ XY correction applied; Z is always zero."""
         obj = "v -1.0 0.0 0.0\nv 5.0 2.0 1.0\n"
         model = EE3DModel(uuid="test", origin_x=0, origin_y=0, z=50, rotation=(0, 0, 0))
         offset, _ = compute_model_transform(model, 0, 0, obj_source=obj)
         assert offset[0] == pytest.approx(-2.0)
         assert offset[1] == pytest.approx(-1.0)
-        assert offset[2] == pytest.approx(0.5)
+        assert offset[2] == 0.0
 
 
 class TestObjXyCenter:
@@ -172,10 +172,10 @@ class TestConvertToVrml:
         assert lines[0] == "#VRML V2.0 utf8"
 
 
-class TestTHTConnectorOffsets:
-    """Test THT connector offset calculations with real component data.
+class TestRealPartOffsets:
+    """Test offset calculations with real component data from testdata/.
 
-    Uses actual footprint and OBJ data from testdata/ to verify against
+    Uses actual footprint and OBJ data to verify against
     user-validated offset values.
     """
 
@@ -202,7 +202,7 @@ class TestTHTConnectorOffsets:
         return footprint.model, fp_origin_x, fp_origin_y, obj_source
 
     def test_c160404_smd_connector(self):
-        """C160404 (SM04B-SRSS-TB) - SMD connector that started issue #29."""
+        """C160404 (SM04B-SRSS-TB) - SMD connector."""
         model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C160404")
 
         offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
@@ -218,32 +218,77 @@ class TestTHTConnectorOffsets:
 
         offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
 
-        # User verified: x=0, y=0, z=-0.134
+        # z=0: OBJ geometry already has correct Z positioning
         assert offset[0] == pytest.approx(0.0, abs=0.01)
         assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(-0.134, abs=0.01)
+        assert offset[2] == pytest.approx(0.0, abs=0.01)
 
     def test_c385834_rj45_connector(self):
-        """C385834 (RJ45) - uses z_max for parts extending below PCB."""
+        """C385834 (RJ45) - THT connector with origin offset."""
         model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C385834")
 
         offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
 
-        # User verified: x=0, y=-1.08, z=6.45
+        # z=0: OBJ geometry already has correct Z positioning
         assert offset[0] == pytest.approx(0.0, abs=0.01)
         assert offset[1] == pytest.approx(-1.08, abs=0.05)
-        assert offset[2] == pytest.approx(6.35, abs=0.15)  # z_max
+        assert offset[2] == pytest.approx(0.0, abs=0.01)
 
     def test_c395958_terminal_block(self):
-        """C395958 (2-pin terminal) - uses -z_min/2 for parts extending above PCB."""
+        """C395958 (2-pin terminal block) - THT with large Y offset."""
         model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C395958")
 
         offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
 
-        # User verified: x=-0.00005, y=-8.9, z=4.2
+        # z=0: OBJ geometry already has correct Z positioning
         assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(-8.9, abs=0.25)  # -cy - model_origin_diff
-        assert offset[2] == pytest.approx(4.2, abs=0.1)  # -z_min/2
+        assert offset[1] == pytest.approx(-8.9, abs=0.25)
+        assert offset[2] == pytest.approx(0.0, abs=0.01)
+
+    def test_c5213_dip8_opamp(self):
+        """C5213 (LM358P DIP-8) - THT IC, z should be 0."""
+        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C5213")
+
+        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
+
+        assert offset[0] == pytest.approx(0.0, abs=0.01)
+        assert offset[2] == pytest.approx(0.0, abs=0.01)
+
+    def test_c3794_tht_part(self):
+        """C3794 - THT part, z should be 0."""
+        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C3794")
+
+        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
+
+        assert offset[0] == pytest.approx(0.0, abs=0.01)
+        assert offset[2] == pytest.approx(0.0, abs=0.01)
+
+    def test_c8852_part(self):
+        """C8852 - z should be 0."""
+        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C8852")
+
+        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
+
+        assert offset[0] == pytest.approx(0.0, abs=0.01)
+        assert offset[2] == pytest.approx(0.0, abs=0.01)
+
+    def test_c18901_part(self):
+        """C18901 - z should be 0."""
+        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C18901")
+
+        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
+
+        assert offset[0] == pytest.approx(0.0, abs=0.01)
+        assert offset[2] == pytest.approx(0.0, abs=0.01)
+
+    def test_c10081_part(self):
+        """C10081 - z should be 0."""
+        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C10081")
+
+        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
+
+        assert offset[0] == pytest.approx(0.0, abs=0.01)
+        assert offset[2] == pytest.approx(0.0, abs=0.01)
 
 
 class TestSaveModels:
