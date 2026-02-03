@@ -24,7 +24,7 @@ A KiCad 8/9 Action Plugin that imports symbols, footprints, and 3D models direct
 
 ### Option 1: Plugin and Content Manager (recommended)
 
-1. Download the latest `kicad_jlcimport-*.zip` from the [Releases](https://github.com/jvanderberg/kicad_jlcimport/releases) page
+1. Go to the [Releases](https://github.com/jvanderberg/kicad_jlcimport/releases) page and download the **Source code (zip)** for the latest release
 2. Open KiCad and go to **Tools > Plugin and Content Manager**
 3. Click **Install from File...** at the bottom of the window
 4. Select the downloaded ZIP file
