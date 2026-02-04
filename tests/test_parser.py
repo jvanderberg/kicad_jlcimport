@@ -180,11 +180,34 @@ class TestParseFootprintShapes:
         shape = "PAD~RECT~400~300~10~10~1~~1~0~~~0~id1"
         fp = parse_footprint_shapes([shape], 200, 100)
         pad = fp.pads[0]
-        # Pad at (400,300) with origin (200,100) => offset (200, 200) in mils
-        expected_x = mil_to_mm(400) - mil_to_mm(200)
-        expected_y = mil_to_mm(300) - mil_to_mm(100)
-        assert abs(pad.x - expected_x) < 0.001
-        assert abs(pad.y - expected_y) < 0.001
+        # Single pad footprint: after origin offset and centroid centering,
+        # the pad is at (0, 0) since it IS the centroid
+        assert abs(pad.x) < 0.001
+        assert abs(pad.y) < 0.001
+
+    def test_centroid_offset_stored(self):
+        """Centroid offset is stored on footprint for 3D model adjustment."""
+        shape = "PAD~RECT~400~300~10~10~1~~1~0~~~0~id1"
+        fp = parse_footprint_shapes([shape], 200, 100)
+        # Centroid offset = original pad position after EasyEDA origin offset
+        # Pad at (400,300) with origin (200,100) => (200,200) mils => ~50.8mm
+        expected_offset = mil_to_mm(200)
+        assert abs(fp.centroid_offset[0] - expected_offset) < 0.001
+        assert abs(fp.centroid_offset[1] - expected_offset) < 0.001
+
+    def test_multi_pad_centroid_centering(self):
+        """Multiple pads are centered on their bounding box centroid."""
+        # Two pads: one at (100, 100), one at (300, 100) => centroid at (200, 100)
+        shapes = [
+            "PAD~RECT~100~100~10~10~1~~1~0~~~0~id1",
+            "PAD~RECT~300~100~10~10~1~~2~0~~~0~id2",
+        ]
+        fp = parse_footprint_shapes(shapes, 0, 0)
+        # After centroid centering, pads should be at (-100, 0) and (100, 0) mils
+        assert abs(fp.pads[0].x - mil_to_mm(-100)) < 0.001
+        assert abs(fp.pads[0].y) < 0.001
+        assert abs(fp.pads[1].x - mil_to_mm(100)) < 0.001
+        assert abs(fp.pads[1].y) < 0.001
 
     def test_parse_text_plus_as_tracks(self):
         """TEXT '+' produces two track segments (vertical + horizontal lines)."""

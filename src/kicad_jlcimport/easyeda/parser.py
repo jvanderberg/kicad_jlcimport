@@ -159,6 +159,38 @@ def parse_footprint_shapes(shapes: List[str], origin_x: float, origin_y: float) 
     for region in fp.regions:
         region.points = [(x - ox, y - oy) for x, y in region.points]
 
+    # Center footprint on pad centroid for correct pick-and-place alignment.
+    # JLCPCB's pick-and-place system uses the pad bounding box center as the
+    # component reference point, not the EasyEDA editor origin.
+    if fp.pads:
+        min_x = min(p.x - p.width / 2 for p in fp.pads)
+        max_x = max(p.x + p.width / 2 for p in fp.pads)
+        min_y = min(p.y - p.height / 2 for p in fp.pads)
+        max_y = max(p.y + p.height / 2 for p in fp.pads)
+        cx = (min_x + max_x) / 2
+        cy = (min_y + max_y) / 2
+
+        # Store the offset for 3D model adjustment
+        fp.centroid_offset = (cx, cy)
+
+        # Shift all geometry so pad centroid is at origin
+        for pad in fp.pads:
+            pad.x -= cx
+            pad.y -= cy
+        for track in fp.tracks:
+            track.points = [(x - cx, y - cy) for x, y in track.points]
+        for arc in fp.arcs:
+            arc.start = (arc.start[0] - cx, arc.start[1] - cy)
+            arc.end = (arc.end[0] - cx, arc.end[1] - cy)
+        for circle in fp.circles:
+            circle.cx -= cx
+            circle.cy -= cy
+        for hole in fp.holes:
+            hole.x -= cx
+            hole.y -= cy
+        for region in fp.regions:
+            region.points = [(x - cx, y - cy) for x, y in region.points]
+
     return fp
 
 

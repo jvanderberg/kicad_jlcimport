@@ -130,3 +130,6 @@ class EEFootprint:
     holes: List[EEHole] = field(default_factory=list)
     regions: List[EESolidRegion] = field(default_factory=list)
     model: Optional[EE3DModel] = None
+    # Offset applied to center footprint on pad centroid (in mm).
+    # Used to adjust 3D model placement accordingly.
+    centroid_offset: Tuple[float, float] = (0.0, 0.0)

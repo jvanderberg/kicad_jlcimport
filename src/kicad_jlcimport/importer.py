@@ -73,6 +73,11 @@ def import_component(
         model_offset, model_rotation = compute_model_transform(
             footprint.model, comp["fp_origin_x"], comp["fp_origin_y"], wrl_source
         )
+        # Adjust model offset for pad centroid shift applied during footprint parsing.
+        # The footprint anchor was moved from EasyEDA origin to pad centroid,
+        # so the 3D model must shift by the same amount.
+        cx, cy = footprint.centroid_offset
+        model_offset = (model_offset[0] - cx, model_offset[1] - cy, model_offset[2])
 
     # Parse symbol
     sym_content = ""
