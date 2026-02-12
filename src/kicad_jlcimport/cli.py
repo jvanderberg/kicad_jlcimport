@@ -128,7 +128,13 @@ def cmd_import(args):
                 kicad_version=kicad_version,
             )
         elif getattr(args, "global_dest", False):
-            lib_dir = get_global_lib_dir(kicad_version)
+            if getattr(args, "global_lib_dir", None):
+                lib_dir = os.path.abspath(args.global_lib_dir)
+                if not os.path.isdir(lib_dir):
+                    print(f"  Error: --global-lib-dir does not exist: {lib_dir}")
+                    return
+            else:
+                lib_dir = get_global_lib_dir(kicad_version)
             result = import_component(
                 lcsc_id,
                 lib_dir,
@@ -242,6 +248,11 @@ examples:
     dest.add_argument("-p", "--project", help="KiCad project directory (where .kicad_pro is)")
     dest.add_argument(
         "--global", dest="global_dest", action="store_true", help="Import into KiCad global 3rd-party library"
+    )
+    ip.add_argument(
+        "--global-lib-dir",
+        metavar="DIR",
+        help="Override global library directory for this run",
     )
     ip.add_argument(
         "--overwrite", action="store_true", help="Overwrite existing symbol/footprint when importing to a library"
