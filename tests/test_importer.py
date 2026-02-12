@@ -397,3 +397,82 @@ class TestImportComponent:
         # Global imports should use absolute paths
         assert len(captured_model_path) == 1
         assert "${KIPRJMOD}" not in captured_model_path[0]
+
+
+class TestImportBackslashPaths:
+    """Tests for backslash path handling in importer."""
+
+    def _make_fake_comp(self, with_3d=True):
+        """Create a fake component dict for testing."""
+        return {
+            "title": "TestPart",
+            "prefix": "U",
+            "description": "Test description",
+            "datasheet": "https://example.com/ds.pdf",
+            "manufacturer": "ACME",
+            "manufacturer_part": "MPN123",
+            "footprint_data": {"dataStr": {"shape": []}},
+            "fp_origin_x": 0,
+            "fp_origin_y": 0,
+            "symbol_data_list": [],
+            "sym_origin_x": 0,
+            "sym_origin_y": 0,
+            "uuid_3d": "model_uuid_123" if with_3d else "",
+        }
+
+    def _make_fake_footprint(self):
+        """Create a fake footprint for testing."""
+        fp = EEFootprint()
+        pad = EEPad(shape="RECT", x=0, y=0, width=1, height=1, layer="1", number="1", drill=0, rotation=0)
+        fp.pads.append(pad)
+        return fp
+
+    def test_global_model_path_uses_forward_slashes(self, tmp_path, monkeypatch):
+        """Ensure model_path passed to write_footprint never contains backslashes."""
+        fake_comp = self._make_fake_comp(with_3d=True)
+        fake_fp = self._make_fake_footprint()
+
+        # Make ensure_lib_structure return paths with backslashes (simulating Windows)
+        def fake_ensure(base_path, lib_name="JLCImport"):
+            models_dir = base_path + "\\TestLib.3dshapes"
+            os.makedirs(os.path.join(base_path, "TestLib.3dshapes"), exist_ok=True)
+            os.makedirs(os.path.join(base_path, "TestLib.pretty"), exist_ok=True)
+            return {
+                "sym_path": os.path.join(base_path, f"{lib_name}.kicad_sym"),
+                "fp_dir": os.path.join(base_path, "TestLib.pretty"),
+                "models_dir": models_dir,
+            }
+
+        def fake_save(dir, name, step_data=None, wrl_source=None):
+            actual_dir = dir.replace("\\", "/")
+            os.makedirs(actual_dir, exist_ok=True)
+            wrl_path = os.path.join(actual_dir, f"{name}.wrl")
+            with open(wrl_path, "w") as f:
+                f.write("WRL")
+            return (None, wrl_path)
+
+        captured_model_path = []
+
+        def capture_write_footprint(*args, **kwargs):
+            captured_model_path.append(kwargs.get("model_path", ""))
+            return "(footprint TestPart)\n"
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "write_footprint", capture_write_footprint)
+        monkeypatch.setattr(importer, "download_step", lambda _: b"STEP")
+        monkeypatch.setattr(importer, "download_wrl_source", lambda _: "wrl-src")
+        monkeypatch.setattr(importer, "save_models", fake_save)
+        monkeypatch.setattr(importer, "ensure_lib_structure", fake_ensure)
+        monkeypatch.setattr(importer, "update_global_lib_tables", lambda *a, **k: None)
+
+        importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            use_global=True,
+            log=lambda msg: None,
+        )
+
+        assert len(captured_model_path) == 1
+        assert "\\" not in captured_model_path[0], f"Backslash found in model path: {captured_model_path[0]}"

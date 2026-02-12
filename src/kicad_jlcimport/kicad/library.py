@@ -7,7 +7,7 @@ import sys
 
 from .version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version, version_dir_name
 
-_DEFAULT_CONFIG = {"lib_name": "JLCImport"}
+_DEFAULT_CONFIG = {"lib_name": "JLCImport", "global_lib_dir": ""}
 
 
 def _config_path() -> str:
@@ -16,17 +16,30 @@ def _config_path() -> str:
 
 
 def load_config() -> dict:
-    """Load config from jlcimport.json, returning defaults for missing keys."""
+    """Load config from jlcimport.json, returning defaults for missing keys.
+
+    Auto-creates the file if missing and backfills any new default keys
+    into existing files.
+    """
     config = dict(_DEFAULT_CONFIG)
     path = _config_path()
+    needs_write = False
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
                 stored = json.load(f)
             if isinstance(stored, dict):
+                # Check if any default keys are missing from stored config
+                for key in _DEFAULT_CONFIG:
+                    if key not in stored:
+                        needs_write = True
                 config.update(stored)
         except (json.JSONDecodeError, OSError):
-            pass
+            needs_write = True
+    else:
+        needs_write = True
+    if needs_write:
+        save_config(config)
     return config
 
 
@@ -217,7 +230,17 @@ def _kicad_config_base() -> str:
 
 
 def get_global_lib_dir(kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
-    """Get the global KiCad 3rd-party library directory for a specific version."""
+    """Get the global KiCad 3rd-party library directory for a specific version.
+
+    If a custom global_lib_dir is set in config, returns that path (ignoring version).
+    Raises ValueError if the custom directory does not exist.
+    """
+    config = load_config()
+    custom = config.get("global_lib_dir", "")
+    if custom:
+        if not os.path.isdir(custom):
+            raise ValueError(f"Custom global library directory does not exist: {custom}")
+        return custom
     ver = version_dir_name(kicad_version)
     return os.path.join(_kicad_data_base(), ver, "3rdparty")
 
@@ -236,8 +259,8 @@ def update_global_lib_tables(
     if not os.path.isdir(config_dir):
         os.makedirs(config_dir, exist_ok=True)
 
-    sym_uri = os.path.join(lib_dir, f"{lib_name}.kicad_sym")
-    fp_uri = os.path.join(lib_dir, f"{lib_name}.pretty")
+    sym_uri = os.path.join(lib_dir, f"{lib_name}.kicad_sym").replace("\\", "/")
+    fp_uri = os.path.join(lib_dir, f"{lib_name}.pretty").replace("\\", "/")
 
     _update_lib_table(os.path.join(config_dir, "sym-lib-table"), "sym_lib_table", lib_name, "KiCad", sym_uri)
     _update_lib_table(os.path.join(config_dir, "fp-lib-table"), "fp_lib_table", lib_name, "KiCad", fp_uri)

@@ -51,6 +51,43 @@ class TestLoadConfig:
         config = library.load_config()
         assert config["lib_name"] == "JLCImport"  # Falls back to default
 
+    def test_default_config_includes_global_lib_dir(self):
+        assert "global_lib_dir" in library._DEFAULT_CONFIG
+        assert library._DEFAULT_CONFIG["global_lib_dir"] == ""
+
+    def test_load_config_auto_creates_file_when_missing(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "jlcimport.json"
+        monkeypatch.setattr(library, "_config_path", lambda: str(config_file))
+
+        library.load_config()
+        assert config_file.exists()
+        stored = json.loads(config_file.read_text())
+        assert "lib_name" in stored
+        assert "global_lib_dir" in stored
+
+    def test_load_config_backfills_missing_keys(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "jlcimport.json"
+        config_file.write_text(json.dumps({"lib_name": "Custom"}))
+        monkeypatch.setattr(library, "_config_path", lambda: str(config_file))
+
+        config = library.load_config()
+        assert config["global_lib_dir"] == ""
+        # File on disk should also be updated
+        stored = json.loads(config_file.read_text())
+        assert "global_lib_dir" in stored
+        assert stored["lib_name"] == "Custom"
+
+    def test_load_config_preserves_unknown_keys(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "jlcimport.json"
+        config_file.write_text(json.dumps({"lib_name": "X", "extra_key": 42}))
+        monkeypatch.setattr(library, "_config_path", lambda: str(config_file))
+
+        config = library.load_config()
+        assert config["extra_key"] == 42
+        # Verify it survives on disk too
+        stored = json.loads(config_file.read_text())
+        assert stored["extra_key"] == 42
+
 
 class TestSaveConfig:
     """Tests for save_config function."""
@@ -166,19 +203,62 @@ class TestKicadConfigBase:
 class TestGetGlobalLibDir:
     """Tests for get_global_lib_dir function."""
 
-    def test_returns_path_with_3rdparty_v9(self, monkeypatch):
+    def test_returns_path_with_3rdparty_v9(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(library, "_kicad_data_base", lambda: "/home/user/kicad")
+        monkeypatch.setattr(library, "_config_path", lambda: str(tmp_path / "cfg.json"))
+
+        result = library.get_global_lib_dir(kicad_version=9)
+        assert "3rdparty" in result
+        assert "9.0" in result
+
+    def test_returns_path_with_3rdparty_v8(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(library, "_kicad_data_base", lambda: "/home/user/kicad")
+        monkeypatch.setattr(library, "_config_path", lambda: str(tmp_path / "cfg.json"))
+
+        result = library.get_global_lib_dir(kicad_version=8)
+        assert "3rdparty" in result
+        assert "8.0" in result
+
+    def test_get_global_lib_dir_uses_custom_when_set(self, tmp_path, monkeypatch):
+        custom_dir = str(tmp_path / "custom_libs")
+        os.makedirs(custom_dir)
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps({"lib_name": "JLCImport", "global_lib_dir": custom_dir}))
+        monkeypatch.setattr(library, "_config_path", lambda: str(config_file))
+
+        result = library.get_global_lib_dir(kicad_version=9)
+        assert result == custom_dir
+
+    def test_get_global_lib_dir_falls_back_when_empty(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps({"lib_name": "JLCImport", "global_lib_dir": ""}))
+        monkeypatch.setattr(library, "_config_path", lambda: str(config_file))
         monkeypatch.setattr(library, "_kicad_data_base", lambda: "/home/user/kicad")
 
         result = library.get_global_lib_dir(kicad_version=9)
         assert "3rdparty" in result
         assert "9.0" in result
 
-    def test_returns_path_with_3rdparty_v8(self, monkeypatch):
-        monkeypatch.setattr(library, "_kicad_data_base", lambda: "/home/user/kicad")
+    def test_get_global_lib_dir_custom_ignores_version(self, tmp_path, monkeypatch):
+        custom_dir = str(tmp_path / "custom_libs")
+        os.makedirs(custom_dir)
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps({"lib_name": "JLCImport", "global_lib_dir": custom_dir}))
+        monkeypatch.setattr(library, "_config_path", lambda: str(config_file))
 
-        result = library.get_global_lib_dir(kicad_version=8)
-        assert "3rdparty" in result
-        assert "8.0" in result
+        result_v8 = library.get_global_lib_dir(kicad_version=8)
+        result_v9 = library.get_global_lib_dir(kicad_version=9)
+        assert result_v8 == result_v9 == custom_dir
+
+    def test_get_global_lib_dir_raises_on_invalid_custom_dir(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps({"lib_name": "JLCImport", "global_lib_dir": "/nonexistent/path"}))
+        monkeypatch.setattr(library, "_config_path", lambda: str(config_file))
+
+        import pytest
+
+        with pytest.raises(ValueError, match="does not exist"):
+            library.get_global_lib_dir(kicad_version=9)
 
 
 class TestGetGlobalConfigDir:
@@ -265,6 +345,30 @@ class TestRemoveSymbolExtended:
         result = library._remove_symbol(content, "R_100")
         assert '(symbol "R_100"' not in result
         assert "(kicad_symbol_lib" in result
+
+
+class TestUpdateGlobalLibTablesBackslash:
+    """Tests for backslash path handling in update_global_lib_tables."""
+
+    def test_global_lib_table_uri_uses_forward_slashes(self, tmp_path, monkeypatch):
+        """Ensure URIs in sym-lib-table and fp-lib-table never contain backslashes."""
+        config_dir = tmp_path / "config"
+        monkeypatch.setattr(library, "get_global_config_dir", lambda _v=9: str(config_dir))
+
+        # Pass a Windows-style backslash path
+        lib_dir = r"C:\Users\admin\AppData\kicad\9.0\3rdparty"
+        library.update_global_lib_tables(lib_dir, "JLCImport")
+
+        for table_name in ("sym-lib-table", "fp-lib-table"):
+            content = (config_dir / table_name).read_text()
+            # Extract URI value from the (uri "...") field
+            import re
+
+            uri_match = re.search(r'\(uri "([^"]+)"\)', content)
+            assert uri_match, f"No URI found in {table_name}"
+            uri = uri_match.group(1)
+            assert "\\" not in uri, f"Backslash found in {table_name} URI: {uri}"
+            assert "/" in uri, f"No forward slash in {table_name} URI: {uri}"
 
 
 class TestAddSymbolToLibExtended:

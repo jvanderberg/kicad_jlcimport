@@ -111,6 +111,78 @@ class SSLWarningScreen(Screen):
         self.dismiss(True)
 
 
+class PathInputScreen(Screen):
+    """Modal screen for entering a custom global library directory path."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Cancel"),
+    ]
+
+    CSS = """
+    PathInputScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.85);
+    }
+    #path-dialog {
+        width: 70;
+        height: auto;
+        max-height: 10;
+        background: #1a1a1a;
+        border: solid #333333;
+        padding: 1 2;
+    }
+    #path-title {
+        text-style: bold;
+        color: #33ff33;
+        width: 100%;
+    }
+    #path-input {
+        margin: 1 0;
+    }
+    #path-error {
+        color: #ff4444;
+        height: auto;
+    }
+    #path-buttons {
+        height: 1;
+        margin-top: 1;
+    }
+    #path-buttons Button { margin-right: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="path-dialog"):
+            yield Static("Global library directory", id="path-title")
+            yield Input(placeholder="/path/to/libraries", id="path-input")
+            yield Static("", id="path-error")
+            with Horizontal(id="path-buttons"):
+                yield Button("OK", id="path-ok", variant="success")
+                yield Button("Cancel", id="path-cancel")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "path-input":
+            self._try_accept()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "path-ok":
+            self._try_accept()
+        elif event.button.id == "path-cancel":
+            self.dismiss("")
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss("")
+
+    def _try_accept(self):
+        path = self.query_one("#path-input", Input).value.strip()
+        if not path:
+            self.dismiss("")
+            return
+        if not os.path.isdir(path):
+            self.query_one("#path-error", Static).update("Directory does not exist")
+            return
+        self.dismiss(path)
+
+
 class JLCImportTUI(App):
     """TUI application for JLCImport - search and import JLCPCB components."""
 
@@ -283,6 +355,8 @@ class JLCImportTUI(App):
         height: auto;
         width: 100%;
     }
+    #global-browse-btn { width: 5; }
+    #global-reset-btn { width: 5; }
     #lib-name-label { width: auto; margin: 0 1; }
     #lib-name-input { width: 16; margin-right: 2; }
     #kicad-version-select { width: 10; margin-right: 1; }
@@ -321,7 +395,13 @@ class JLCImportTUI(App):
         self._project_dir = project_dir
         self._kicad_version = kicad_version or DEFAULT_KICAD_VERSION
         self._lib_name = load_config().get("lib_name", "JLCImport")
-        self._global_lib_dir = get_global_lib_dir(self._kicad_version)
+        try:
+            self._global_lib_dir = get_global_lib_dir(self._kicad_version)
+        except ValueError:
+            config = load_config()
+            config["global_lib_dir"] = ""
+            save_config(config)
+            self._global_lib_dir = get_global_lib_dir(self._kicad_version)
         self._search_results: list = []
         self._raw_search_results: list = []
         self._sort_col: int = -1
@@ -405,6 +485,8 @@ class JLCImportTUI(App):
                             value=not bool(self._project_dir),
                             id="dest-global",
                         )
+                    yield Button("\u2026", id="global-browse-btn")
+                    yield Button("\u2715", id="global-reset-btn")
                     yield Label("Lib", id="lib-name-label")
                     yield Input(value=self._lib_name, id="lib-name-input")
                     yield Select(
@@ -543,6 +625,24 @@ class JLCImportTUI(App):
         elif not new_name:
             self.query_one("#lib-name-input", Input).value = self._lib_name
 
+    def _on_global_browse_result(self, path: str):
+        """Handle result from PathInputScreen."""
+        if not path:
+            return
+        config = load_config()
+        config["global_lib_dir"] = path
+        save_config(config)
+        self._global_lib_dir = path
+        self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
+
+    def _reset_global_dir(self):
+        """Clear the custom global library directory and revert to default."""
+        config = load_config()
+        config["global_lib_dir"] = ""
+        save_config(config)
+        self._global_lib_dir = get_global_lib_dir(self._get_kicad_version())
+        self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
+
     def on_button_pressed(self, event: Button.Pressed):
         """Handle button clicks."""
         self._hide_suggestions()
@@ -557,6 +657,10 @@ class JLCImportTUI(App):
         elif button_id == "detail-lcsc-btn":
             if self._lcsc_page_url:
                 webbrowser.open(self._lcsc_page_url)
+        elif button_id == "global-browse-btn":
+            self.push_screen(PathInputScreen(), self._on_global_browse_result)
+        elif button_id == "global-reset-btn":
+            self._reset_global_dir()
 
     def action_focus_search(self):
         """Focus the search input."""
@@ -727,9 +831,11 @@ class JLCImportTUI(App):
                 self._apply_filters()
                 self._repopulate_results()
         elif event.select.id == "kicad-version-select":
-            version = self._get_kicad_version()
-            self._global_lib_dir = get_global_lib_dir(version)
-            self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
+            config = load_config()
+            if not config.get("global_lib_dir", ""):
+                version = self._get_kicad_version()
+                self._global_lib_dir = get_global_lib_dir(version)
+                self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
 
     def on_radio_set_changed(self, event: RadioSet.Changed):
         """Re-filter when type filter changes."""

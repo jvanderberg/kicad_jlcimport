@@ -242,7 +242,7 @@ def _import_to_library(
         # Use WRL instead of STEP for consistency with offset calculations (which use OBJ/WRL geometry)
         if wrl_path:
             if use_global:
-                model_path = os.path.join(paths["models_dir"], f"{name}.wrl")
+                model_path = os.path.join(paths["models_dir"], f"{name}.wrl").replace("\\", "/")
             else:
                 model_path = f"${{KIPRJMOD}}/{lib_name}.3dshapes/{name}.wrl"
             if wrl_existed and not overwrite:
