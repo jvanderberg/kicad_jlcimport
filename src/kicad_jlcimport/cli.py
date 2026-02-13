@@ -127,7 +127,7 @@ def cmd_import(args):
                 log=log,
                 kicad_version=kicad_version,
             )
-        elif getattr(args, "global_dest", False):
+        elif getattr(args, "global_dest", False) or getattr(args, "global_lib_dir", None):
             if getattr(args, "global_lib_dir", None):
                 lib_dir = os.path.abspath(args.global_lib_dir)
                 if not os.path.isdir(lib_dir):

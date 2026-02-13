@@ -469,6 +469,7 @@ class JLCImportDialog(wx.Dialog):
             config["global_lib_dir"] = path
             save_config(config)
             self._global_lib_dir = path
+            self._global_lib_dir_override = ""
             self._global_path_label.SetLabel(path)
             self._global_path_label.GetParent().Layout()
         dlg.Destroy()
@@ -478,6 +479,7 @@ class JLCImportDialog(wx.Dialog):
         config = load_config()
         config["global_lib_dir"] = ""
         save_config(config)
+        self._global_lib_dir_override = ""
         default_dir = get_global_lib_dir(self._get_kicad_version())
         self._global_lib_dir = default_dir
         self._global_path_label.SetLabel(default_dir)

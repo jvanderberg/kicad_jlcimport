@@ -397,6 +397,7 @@ class JLCImportTUI(App):
         self._project_dir = project_dir
         self._kicad_version = kicad_version or DEFAULT_KICAD_VERSION
         self._lib_name = load_config().get("lib_name", "JLCImport")
+        self._global_lib_dir_override = global_lib_dir
         if global_lib_dir:
             self._global_lib_dir = global_lib_dir
         else:
@@ -641,6 +642,7 @@ class JLCImportTUI(App):
         config["global_lib_dir"] = path
         save_config(config)
         self._global_lib_dir = path
+        self._global_lib_dir_override = ""
         self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
 
     def _reset_global_dir(self):
@@ -648,6 +650,7 @@ class JLCImportTUI(App):
         config = load_config()
         config["global_lib_dir"] = ""
         save_config(config)
+        self._global_lib_dir_override = ""
         self._global_lib_dir = get_global_lib_dir(self._get_kicad_version())
         self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
 
@@ -677,13 +680,15 @@ class JLCImportTUI(App):
         if event.radio_button.id not in ("dest-project", "dest-global"):
             return
         self._toggling_dest = True
-        other_id = "dest-global" if event.radio_button.id == "dest-project" else "dest-project"
-        other = self.query_one(f"#{other_id}", RadioButton)
-        if event.value:
-            other.value = False
-        elif not other.value:
-            event.radio_button.value = True
-        self._toggling_dest = False
+        try:
+            other_id = "dest-global" if event.radio_button.id == "dest-project" else "dest-project"
+            other = self.query_one(f"#{other_id}", RadioButton)
+            if event.value:
+                other.value = False
+            elif not other.value:
+                event.radio_button.value = True
+        finally:
+            self._toggling_dest = False
 
     def action_focus_search(self):
         """Focus the search input."""
@@ -855,7 +860,7 @@ class JLCImportTUI(App):
                 self._repopulate_results()
         elif event.select.id == "kicad-version-select":
             config = load_config()
-            if not config.get("global_lib_dir", ""):
+            if not config.get("global_lib_dir", "") and not self._global_lib_dir_override:
                 version = self._get_kicad_version()
                 self._global_lib_dir = get_global_lib_dir(version)
                 self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
