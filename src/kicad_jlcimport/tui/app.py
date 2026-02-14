@@ -396,7 +396,9 @@ class JLCImportTUI(App):
         super().__init__()
         self._project_dir = project_dir
         self._kicad_version = kicad_version or DEFAULT_KICAD_VERSION
-        self._lib_name = load_config().get("lib_name", "JLCImport")
+        _config = load_config()
+        self._lib_name = _config.get("lib_name", "JLCImport")
+        self._use_global = _config.get("use_global", False)
         self._global_lib_dir_override = global_lib_dir
         if global_lib_dir:
             self._global_lib_dir = global_lib_dir
@@ -481,9 +483,10 @@ class JLCImportTUI(App):
 
             with Vertical(id="import-section"):
                 with Horizontal(id="import-row-1"):
+                    _select_global = self._use_global or not self._project_dir
                     yield RadioButton(
                         f"Proj [b]{self._project_dir or 'n/a'}[/b]",
-                        value=bool(self._project_dir),
+                        value=not _select_global,
                         id="dest-project",
                     )
                     yield Input(placeholder="C427602", id="part-input")
@@ -492,7 +495,7 @@ class JLCImportTUI(App):
                 with Horizontal(id="import-row-2"):
                     yield RadioButton(
                         f"Global [b]{self._global_lib_dir}[/b]",
-                        value=not bool(self._project_dir),
+                        value=_select_global,
                         id="dest-global",
                     )
                     yield Button("\u2026", id="global-browse-btn")
@@ -633,6 +636,12 @@ class JLCImportTUI(App):
             save_config(config)
         elif not new_name:
             self.query_one("#lib-name-input", Input).value = self._lib_name
+
+    def _persist_destination(self, use_global: bool):
+        """Save the destination choice to config."""
+        config = load_config()
+        config["use_global"] = use_global
+        save_config(config)
 
     def _on_global_browse_result(self, path: str):
         """Handle result from PathInputScreen."""
@@ -1115,5 +1124,6 @@ class JLCImportTUI(App):
         title = result["title"]
         name = result["name"]
         log(f"\n[green bold]Done! '{title}' imported as {lib_name}:{name}[/green bold]")
+        self._persist_destination(use_global)
         self.app.call_from_thread(self._refresh_imported_ids)
         self.app.call_from_thread(self._repopulate_results)

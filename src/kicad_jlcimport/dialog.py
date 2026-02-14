@@ -327,10 +327,7 @@ class JLCImportDialog(wx.Dialog):
         self._global_reset_btn.Bind(wx.EVT_BUTTON, self._on_global_reset)
         global_row.Add(self._global_reset_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 2)
 
-        self.dest_project.SetValue(True)
-        if not project_dir:
-            self.dest_project.Disable()
-            self.dest_global.SetValue(True)
+        self._apply_saved_destination(project_dir)
         dest_sizer.Add(proj_row, 0, wx.BOTTOM, 2)
         dest_sizer.Add(global_row, 0, wx.BOTTOM, 2)
 
@@ -437,6 +434,25 @@ class JLCImportDialog(wx.Dialog):
         if self._project_dir:
             return self._project_dir
         return ""
+
+    def _apply_saved_destination(self, project_dir: str):
+        """Set the destination radio buttons from the saved config preference."""
+        config = load_config()
+        saved_use_global = config.get("use_global", False)
+        if not project_dir:
+            self.dest_project.Disable()
+            self.dest_global.SetValue(True)
+        elif saved_use_global:
+            self.dest_global.SetValue(True)
+        else:
+            self.dest_project.SetValue(True)
+
+    def _persist_destination(self):
+        """Save the current destination choice to config."""
+        use_global = self.dest_global.GetValue()
+        config = load_config()
+        config["use_global"] = use_global
+        save_config(config)
 
     def _on_lib_name_change(self, event):
         """Persist library name when the input loses focus."""
@@ -1167,6 +1183,7 @@ class JLCImportDialog(wx.Dialog):
             except SSLCertError:
                 self._handle_ssl_cert_error()
                 self._do_import(lcsc_id, lib_dir, overwrite, use_global)
+            self._persist_destination()
         except APIError as e:
             self._log(f"API Error: {e}")
         except Exception as e:
