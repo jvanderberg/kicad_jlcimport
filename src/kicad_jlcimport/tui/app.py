@@ -355,7 +355,7 @@ class JLCImportTUI(App):
         width: 100%;
     }
     #dest-project { width: 1fr; }
-    #dest-global { width: auto; }
+    #dest-global { width: auto; max-width: 64; }
     #global-browse-btn { width: 3; min-width: 0; padding: 0 0; }
     #global-reset-btn { width: 3; min-width: 0; padding: 0 0; }
     #part-input { width: 16; }
@@ -494,7 +494,7 @@ class JLCImportTUI(App):
                     yield Button("Import", id="import-btn", variant="success")
                 with Horizontal(id="import-row-2"):
                     yield RadioButton(
-                        f"Global [b]{self._global_lib_dir}[/b]",
+                        self._global_label(self._global_lib_dir),
                         value=_select_global,
                         id="dest-global",
                     )
@@ -523,6 +523,7 @@ class JLCImportTUI(App):
         table.add_columns("LCSC", "Type", "Price", "Stock", "Part", "Package", "Description")
         if not self._project_dir:
             self.query_one("#dest-project", RadioButton).disabled = True
+        self.query_one("#dest-global", RadioButton).tooltip = self._global_lib_dir
         self.query_one("#search-input", Input).focus()
 
     def _log(self, msg: str):
@@ -643,6 +644,23 @@ class JLCImportTUI(App):
         config["use_global"] = use_global
         save_config(config)
 
+    @staticmethod
+    def _global_label(path: str, max_len: int = 50) -> str:
+        """Return a truncated label for the global destination radio button."""
+        if len(path) <= max_len:
+            return f"Global [b]{path}[/b]"
+        keep = max_len - 3  # room for ellipsis
+        left = keep // 2
+        right = keep - left
+        truncated = path[:left] + "\u2026" + path[-right:]
+        return f"Global [b]{truncated}[/b]"
+
+    def _update_global_button(self, path: str) -> None:
+        """Update the global radio button label and tooltip."""
+        btn = self.query_one("#dest-global", RadioButton)
+        btn.label = self._global_label(path)
+        btn.tooltip = path
+
     def _on_global_browse_result(self, path: str):
         """Handle result from PathInputScreen."""
         if not path:
@@ -652,7 +670,7 @@ class JLCImportTUI(App):
         save_config(config)
         self._global_lib_dir = path
         self._global_lib_dir_override = ""
-        self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
+        self._update_global_button(self._global_lib_dir)
 
     def _reset_global_dir(self):
         """Clear the custom global library directory and revert to default."""
@@ -661,7 +679,7 @@ class JLCImportTUI(App):
         save_config(config)
         self._global_lib_dir_override = ""
         self._global_lib_dir = get_global_lib_dir(self._get_kicad_version())
-        self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
+        self._update_global_button(self._global_lib_dir)
 
     def on_button_pressed(self, event: Button.Pressed):
         """Handle button clicks."""
@@ -698,6 +716,11 @@ class JLCImportTUI(App):
                 event.radio_button.value = True
         finally:
             self._toggling_dest = False
+        if event.value:
+            self._persist_destination(event.radio_button.id == "dest-global")
+            if self._search_results:
+                self._refresh_imported_ids()
+                self._repopulate_results()
 
     def action_focus_search(self):
         """Focus the search input."""
@@ -872,7 +895,7 @@ class JLCImportTUI(App):
             if not config.get("global_lib_dir", "") and not self._global_lib_dir_override:
                 version = self._get_kicad_version()
                 self._global_lib_dir = get_global_lib_dir(version)
-                self.query_one("#dest-global", RadioButton).label = f"Global [b]{self._global_lib_dir}[/b]"
+                self._update_global_button(self._global_lib_dir)
 
     def on_radio_set_changed(self, event: RadioSet.Changed):
         """Re-filter when type filter changes."""
@@ -882,24 +905,26 @@ class JLCImportTUI(App):
                 self._repopulate_results()
 
     def _refresh_imported_ids(self):
-        """Scan symbol libraries for already-imported LCSC IDs."""
+        """Scan the symbol library for the currently selected destination."""
         import re as _re
 
         self._imported_ids = set()
         lib_name = self._lib_name
-        paths = []
-        if self._project_dir:
-            paths.append(os.path.join(self._project_dir, f"{lib_name}.kicad_sym"))
-        if self._global_lib_dir:
-            paths.append(os.path.join(self._global_lib_dir, f"{lib_name}.kicad_sym"))
-        for p in paths:
-            try:
-                if os.path.exists(p):
-                    with open(p, encoding="utf-8") as f:
-                        for match in _re.finditer(r'\(property "LCSC" "(C\d+)"', f.read()):
-                            self._imported_ids.add(match.group(1))
-            except (PermissionError, OSError):
-                pass
+        use_global = self.query_one("#dest-global", RadioButton).value
+        if use_global:
+            lib_dir = self._global_lib_dir
+        else:
+            lib_dir = self._project_dir
+        if not lib_dir:
+            return
+        p = os.path.join(lib_dir, f"{lib_name}.kicad_sym")
+        try:
+            if os.path.exists(p):
+                with open(p, encoding="utf-8") as f:
+                    for match in _re.finditer(r'\(property "LCSC" "(C\d+)"', f.read()):
+                        self._imported_ids.add(match.group(1))
+        except (PermissionError, OSError):
+            pass
 
     def _repopulate_results(self):
         """Repopulate the DataTable from search results."""
@@ -1124,6 +1149,6 @@ class JLCImportTUI(App):
         title = result["title"]
         name = result["name"]
         log(f"\n[green bold]Done! '{title}' imported as {lib_name}:{name}[/green bold]")
-        self._persist_destination(use_global)
+        self.app.call_from_thread(self._persist_destination, use_global)
         self.app.call_from_thread(self._refresh_imported_ids)
         self.app.call_from_thread(self._repopulate_results)

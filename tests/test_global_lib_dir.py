@@ -137,6 +137,7 @@ def test_dialog_version_change_updates_without_override(monkeypatch):
         _global_lib_dir_override="",
         _global_lib_dir="/old/path",
         _global_path_label=MagicMock(),
+        _set_global_path=MagicMock(),
         version_choice=MagicMock(),
         _version_labels=["8", "9"],
         _get_kicad_version=lambda: 8,
@@ -150,7 +151,7 @@ def test_dialog_version_change_updates_without_override(monkeypatch):
     JLCImportDialog._on_version_change(dlg, FakeEvent())
 
     assert dlg._global_lib_dir == "/new/default/path"
-    dlg._global_path_label.SetLabel.assert_called_once_with("/new/default/path")
+    dlg._set_global_path.assert_called_once_with("/new/default/path")
 
 
 def test_dialog_browse_clears_override(monkeypatch):
@@ -177,12 +178,14 @@ def test_dialog_browse_clears_override(monkeypatch):
         _global_lib_dir_override="/cli/override",
         _global_lib_dir="/cli/override",
         _global_path_label=MagicMock(),
+        _set_global_path=MagicMock(),
     )
 
     JLCImportDialog._on_global_browse(dlg, None)
 
     assert dlg._global_lib_dir == "/new/path"
     assert dlg._global_lib_dir_override == ""
+    dlg._set_global_path.assert_called_once_with("/new/path")
 
 
 def test_dialog_reset_clears_override(monkeypatch):
@@ -205,6 +208,7 @@ def test_dialog_reset_clears_override(monkeypatch):
         _global_lib_dir_override="/cli/override",
         _global_lib_dir="/cli/override",
         _global_path_label=MagicMock(),
+        _set_global_path=MagicMock(),
         version_choice=MagicMock(),
         _version_labels=["8", "9"],
         _get_kicad_version=lambda: 9,
@@ -215,3 +219,4 @@ def test_dialog_reset_clears_override(monkeypatch):
 
     assert dlg._global_lib_dir == "/default/path"
     assert dlg._global_lib_dir_override == ""
+    dlg._set_global_path.assert_called_once_with("/default/path")

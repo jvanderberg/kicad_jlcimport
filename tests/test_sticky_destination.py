@@ -144,6 +144,42 @@ class TestDialogStickyDestination:
 
         assert saved["use_global"] is False
 
+    def test_dialog_does_not_persist_on_import_failure(self, monkeypatch):
+        """A failed import should not persist the destination preference."""
+        saved = {}
+        monkeypatch.setattr(
+            "kicad_jlcimport.dialog.load_config",
+            lambda: {"lib_name": "JLCImport", "global_lib_dir": "", "use_global": False},
+        )
+        monkeypatch.setattr("kicad_jlcimport.dialog.save_config", lambda c: saved.update(c))
+        monkeypatch.setattr("kicad_jlcimport.dialog.validate_lcsc_id", lambda x: x)
+        from kicad_jlcimport.dialog import JLCImportDialog
+
+        dlg = SimpleNamespace(
+            part_input=MagicMock(),
+            dest_global=MagicMock(),
+            _global_lib_dir="/some/dir",
+            overwrite_cb=MagicMock(),
+            import_btn=MagicMock(),
+            status_text=MagicMock(),
+            _lib_name="JLCImport",
+            _get_project_dir=lambda: "/project",
+            _get_kicad_version=lambda: 9,
+            _ssl_warning_shown=False,
+            _imported_ids=set(),
+            _search_results=[],
+            _do_import=MagicMock(side_effect=Exception("import failed")),
+            _log=MagicMock(),
+            _persist_destination=MagicMock(),
+        )
+        dlg.part_input.GetValue.return_value = "C427602"
+        dlg.dest_global.GetValue.return_value = True
+        dlg.overwrite_cb.GetValue.return_value = False
+
+        JLCImportDialog._on_import(dlg, None)
+
+        dlg._persist_destination.assert_not_called()
+
 
 class TestTUIStickyDestination:
     """Textual TUI respects and saves use_global preference."""
@@ -233,3 +269,34 @@ class TestTUIStickyDestination:
         JLCImportTUI._persist_destination(app, use_global=True)
 
         assert saved["use_global"] is True
+
+    def test_tui_does_not_persist_on_import_failure(self, tmp_path, monkeypatch):
+        """A failed import should not persist the destination preference."""
+        saved = {}
+        monkeypatch.setattr(
+            "kicad_jlcimport.tui.app.load_config",
+            lambda: {"lib_name": "JLCImport", "use_global": False},
+        )
+        monkeypatch.setattr(
+            "kicad_jlcimport.tui.app.save_config",
+            lambda c: saved.update(c),
+        )
+        monkeypatch.setattr(
+            "kicad_jlcimport.tui.app.get_global_lib_dir",
+            lambda _v: str(tmp_path),
+        )
+        monkeypatch.setattr(
+            "kicad_jlcimport.tui.app.import_component",
+            MagicMock(side_effect=Exception("import failed")),
+        )
+        from kicad_jlcimport.tui.app import JLCImportTUI
+
+        app = JLCImportTUI()
+
+        # _do_import should raise, so _persist_destination should not be reached
+        try:
+            JLCImportTUI._do_import(app, "C427602", str(tmp_path), False, True, 9)
+        except Exception:
+            pass
+
+        assert "use_global" not in saved

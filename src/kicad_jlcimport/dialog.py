@@ -288,10 +288,8 @@ class JLCImportDialog(wx.Dialog):
         vbox.Add(self._detail_box, 0, wx.EXPAND | wx.ALL, 5)
 
         # --- Import section ---
-        import_box = wx.StaticBoxSizer(wx.HORIZONTAL, panel, "Import")
+        import_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Import")
 
-        # Left side: destination + library name
-        dest_sizer = wx.BoxSizer(wx.VERTICAL)
         project_dir = self._get_project_dir()
         if self._global_lib_dir_override:
             global_dir = self._global_lib_dir_override
@@ -307,37 +305,54 @@ class JLCImportDialog(wx.Dialog):
         self._global_lib_dir = global_dir
         bold_font = panel.GetFont().Bold()
 
+        # Row 1: Project destination | Part # input | Overwrite
         proj_row = wx.BoxSizer(wx.HORIZONTAL)
         self.dest_project = wx.RadioButton(panel, label="Project", style=wx.RB_GROUP)
+        self.dest_project.Bind(wx.EVT_RADIOBUTTON, self._on_dest_change)
         proj_row.Add(self.dest_project, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         proj_path_label = wx.StaticText(panel, label=project_dir or "(no board open)")
         proj_path_label.SetFont(bold_font)
         proj_row.Add(proj_path_label, 0, wx.ALIGN_CENTER_VERTICAL)
+        proj_row.AddStretchSpacer()
+        proj_row.Add(wx.StaticText(panel, label="Part #"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.part_input = wx.TextCtrl(panel, size=(100, -1))
+        self.part_input.SetHint("C427602")
+        proj_row.Add(self.part_input, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        self.overwrite_cb = wx.CheckBox(panel, label="Overwrite")
+        proj_row.Add(self.overwrite_cb, 0, wx.ALIGN_CENTER_VERTICAL)
+        import_box.Add(proj_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5)
 
+        # Row 2: Global destination | Browse | Reset | Import button
         global_row = wx.BoxSizer(wx.HORIZONTAL)
         self.dest_global = wx.RadioButton(panel, label="Global")
+        self.dest_global.Bind(wx.EVT_RADIOBUTTON, self._on_dest_change)
         global_row.Add(self.dest_global, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self._global_path_label = wx.StaticText(panel, label=global_dir)
+        self._global_path_label = wx.StaticText(panel, label=self._truncate_path(global_dir))
         self._global_path_label.SetFont(bold_font)
-        global_row.Add(self._global_path_label, 1, wx.ALIGN_CENTER_VERTICAL)
+        self._global_path_label.SetToolTip(global_dir)
+        global_row.Add(self._global_path_label, 0, wx.ALIGN_CENTER_VERTICAL)
         self._global_browse_btn = wx.Button(panel, label="...", size=(30, -1))
         self._global_browse_btn.Bind(wx.EVT_BUTTON, self._on_global_browse)
         global_row.Add(self._global_browse_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 5)
-        self._global_reset_btn = wx.Button(panel, label="X", size=(30, -1))
+        self._global_reset_btn = wx.Button(panel, label="\u2715", size=(30, -1))
         self._global_reset_btn.Bind(wx.EVT_BUTTON, self._on_global_reset)
         global_row.Add(self._global_reset_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 2)
+        global_row.AddStretchSpacer()
+        self.import_btn = wx.Button(panel, label="Import")
+        self.import_btn.Bind(wx.EVT_BUTTON, self._on_import)
+        global_row.Add(self.import_btn, 0, wx.ALIGN_CENTER_VERTICAL)
+        import_box.Add(global_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5)
 
-        self._apply_saved_destination(project_dir)
-        dest_sizer.Add(proj_row, 0, wx.BOTTOM, 2)
-        dest_sizer.Add(global_row, 0, wx.BOTTOM, 2)
+        _config = load_config()
+        self._apply_saved_destination(project_dir, _config)
 
+        # Row 3: Library name | KiCad version
         lib_name_sizer = wx.BoxSizer(wx.HORIZONTAL)
         lib_name_sizer.Add(wx.StaticText(panel, label="Library"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self._lib_name = load_config().get("lib_name", "JLCImport")
+        self._lib_name = _config.get("lib_name", "JLCImport")
         self.lib_name_input = wx.TextCtrl(panel, size=(120, -1), value=self._lib_name)
         self.lib_name_input.Bind(wx.EVT_KILL_FOCUS, self._on_lib_name_change)
         lib_name_sizer.Add(self.lib_name_input, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 15)
-
         lib_name_sizer.Add(wx.StaticText(panel, label="KiCad"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         self._version_labels = [str(v) for v in sorted(SUPPORTED_VERSIONS)]
         self.version_choice = wx.Choice(panel, choices=self._version_labels)
@@ -345,25 +360,7 @@ class JLCImportDialog(wx.Dialog):
         self.version_choice.SetSelection(default_idx)
         self.version_choice.Bind(wx.EVT_CHOICE, self._on_version_change)
         lib_name_sizer.Add(self.version_choice, 0, wx.ALIGN_CENTER_VERTICAL)
-
-        dest_sizer.Add(lib_name_sizer, 0, wx.TOP, 2)
-
-        import_box.Add(dest_sizer, 1, wx.ALL, 5)
-
-        # Right side: options and button
-        right_sizer = wx.BoxSizer(wx.VERTICAL)
-        opts_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        opts_sizer.Add(wx.StaticText(panel, label="Part #"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.part_input = wx.TextCtrl(panel, size=(100, -1))
-        self.part_input.SetHint("C427602")
-        opts_sizer.Add(self.part_input, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
-        self.overwrite_cb = wx.CheckBox(panel, label="Overwrite")
-        opts_sizer.Add(self.overwrite_cb, 0, wx.ALIGN_CENTER_VERTICAL)
-        right_sizer.Add(opts_sizer, 0, wx.BOTTOM, 5)
-        self.import_btn = wx.Button(panel, label="Import")
-        self.import_btn.Bind(wx.EVT_BUTTON, self._on_import)
-        right_sizer.Add(self.import_btn, 0, wx.ALIGN_RIGHT)
-        import_box.Add(right_sizer, 0, wx.ALL, 5)
+        import_box.Add(lib_name_sizer, 0, wx.ALL, 5)
 
         vbox.Add(import_box, 0, wx.EXPAND | wx.ALL, 5)
 
@@ -435,9 +432,10 @@ class JLCImportDialog(wx.Dialog):
             return self._project_dir
         return ""
 
-    def _apply_saved_destination(self, project_dir: str):
+    def _apply_saved_destination(self, project_dir: str, config: dict | None = None):
         """Set the destination radio buttons from the saved config preference."""
-        config = load_config()
+        if config is None:
+            config = load_config()
         saved_use_global = config.get("use_global", False)
         if not project_dir:
             self.dest_project.Disable()
@@ -446,6 +444,22 @@ class JLCImportDialog(wx.Dialog):
             self.dest_global.SetValue(True)
         else:
             self.dest_project.SetValue(True)
+
+    @staticmethod
+    def _truncate_path(path: str, max_len: int = 50) -> str:
+        """Truncate a path with a middle ellipsis if it exceeds *max_len*."""
+        if len(path) <= max_len:
+            return path
+        keep = max_len - 3
+        left = keep // 2
+        right = keep - left
+        return path[:left] + "\u2026" + path[-right:]
+
+    def _set_global_path(self, path: str) -> None:
+        """Update the global path label and tooltip."""
+        self._global_path_label.SetLabel(self._truncate_path(path))
+        self._global_path_label.SetToolTip(path)
+        self._global_path_label.GetParent().Layout()
 
     def _persist_destination(self):
         """Save the current destination choice to config."""
@@ -472,8 +486,7 @@ class JLCImportDialog(wx.Dialog):
         if not config.get("global_lib_dir", "") and not self._global_lib_dir_override:
             new_dir = get_global_lib_dir(self._get_kicad_version())
             self._global_lib_dir = new_dir
-            self._global_path_label.SetLabel(new_dir)
-            self._global_path_label.GetParent().Layout()
+            self._set_global_path(new_dir)
         event.Skip()
 
     def _on_global_browse(self, event):
@@ -486,8 +499,7 @@ class JLCImportDialog(wx.Dialog):
             save_config(config)
             self._global_lib_dir = path
             self._global_lib_dir_override = ""
-            self._global_path_label.SetLabel(path)
-            self._global_path_label.GetParent().Layout()
+            self._set_global_path(path)
         dlg.Destroy()
 
     def _on_global_reset(self, event):
@@ -498,8 +510,7 @@ class JLCImportDialog(wx.Dialog):
         self._global_lib_dir_override = ""
         default_dir = get_global_lib_dir(self._get_kicad_version())
         self._global_lib_dir = default_dir
-        self._global_path_label.SetLabel(default_dir)
-        self._global_path_label.GetParent().Layout()
+        self._set_global_path(default_dir)
 
     def _log(self, msg: str):
         self.status_text.AppendText(msg + "\n")
@@ -688,25 +699,25 @@ class JLCImportDialog(wx.Dialog):
             self.results_list.SetColumn(i, col)
 
     def _refresh_imported_ids(self):
-        """Scan symbol libraries for already-imported LCSC IDs."""
+        """Scan the symbol library for the currently selected destination."""
         import re
 
         self._imported_ids = set()
-        paths = []
         lib_name = self._lib_name
-        project_dir = self._get_project_dir()
-        if project_dir:
-            paths.append(os.path.join(project_dir, f"{lib_name}.kicad_sym"))
-        if self._global_lib_dir:
-            paths.append(os.path.join(self._global_lib_dir, f"{lib_name}.kicad_sym"))
-        for p in paths:
-            if os.path.exists(p):
-                try:
-                    with open(p, encoding="utf-8") as f:
-                        for match in re.finditer(r'\(property "LCSC" "(C\d+)"', f.read()):
-                            self._imported_ids.add(match.group(1))
-                except Exception:
-                    pass
+        if self.dest_global.GetValue():
+            lib_dir = self._global_lib_dir
+        else:
+            lib_dir = self._get_project_dir()
+        if not lib_dir:
+            return
+        p = os.path.join(lib_dir, f"{lib_name}.kicad_sym")
+        if os.path.exists(p):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    for match in re.finditer(r'\(property "LCSC" "(C\d+)"', f.read()):
+                        self._imported_ids.add(match.group(1))
+            except Exception:
+                pass
 
     def _get_min_stock(self) -> int:
         """Return the minimum stock threshold from the dropdown."""
@@ -754,6 +765,14 @@ class JLCImportDialog(wx.Dialog):
 
     _on_min_stock_change = _on_filter_change
     _on_type_change = _on_filter_change
+
+    def _on_dest_change(self, event):
+        """Persist destination choice and refresh checkmarks."""
+        self._persist_destination()
+        if self._search_results:
+            self._refresh_imported_ids()
+            self._repopulate_results()
+        event.Skip()
 
     def _repopulate_results(self):
         """Repopulate the list control from _search_results."""
