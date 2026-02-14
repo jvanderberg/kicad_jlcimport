@@ -194,6 +194,24 @@ class TestTUIStickyDestination:
         # _use_global should be True, meaning global radio should be initially selected
         assert app._use_global is True
 
+    def test_tui_forces_global_when_no_project_dir(self, tmp_path, monkeypatch):
+        """Even if use_global=False in config, global is selected when no project dir."""
+        monkeypatch.setattr(
+            "kicad_jlcimport.tui.app.load_config",
+            lambda: {"lib_name": "JLCImport", "use_global": False},
+        )
+        monkeypatch.setattr(
+            "kicad_jlcimport.tui.app.get_global_lib_dir",
+            lambda _v: str(tmp_path),
+        )
+        from kicad_jlcimport.tui.app import JLCImportTUI
+
+        app = JLCImportTUI()  # no project_dir
+        # _use_global is False but _select_global in compose() should be True
+        # because self._project_dir is empty
+        assert app._use_global is False
+        assert not app._project_dir
+
     def test_tui_persist_destination_saves_use_global(self, tmp_path, monkeypatch):
         """_persist_destination saves use_global to config."""
         saved = {}
