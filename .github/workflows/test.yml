@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.9", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,7 +31,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libnotify-dev libsdl2-dev
       - run: pip install setuptools==80.10.2 wheel
       - run: pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython==4.2.4
-      - run: pip install -e '.[dev,tui,gui]'
+      - name: Install all extras
+        if: matrix.python-version != '3.9'
+        run: pip install -e '.[dev,tui,gui]'
+      - name: Install without textual (3.9)
+        if: matrix.python-version == '3.9'
+        run: pip install -e '.[dev,gui]'
       - run: pytest tests/ -v --cov=kicad_jlcimport --cov-report=term-missing --cov-report=xml
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12'
