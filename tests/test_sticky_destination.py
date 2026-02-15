@@ -21,6 +21,13 @@ if not _has_wx:
     except ImportError:
         pass
 
+try:
+    import textual  # noqa: F401
+
+    _has_textual = True
+except ImportError:
+    _has_textual = False
+
 
 class TestConfigUseGlobal:
     """Config layer: use_global key exists and round-trips through load/save."""
@@ -181,6 +188,7 @@ class TestDialogStickyDestination:
         dlg._persist_destination.assert_not_called()
 
 
+@pytest.mark.skipif(not _has_textual, reason="textual not installed")
 class TestTUIStickyDestination:
     """Textual TUI respects and saves use_global preference."""
 
