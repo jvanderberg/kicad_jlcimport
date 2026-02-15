@@ -28,15 +28,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libnotify-dev libsdl2-dev
-      - run: pip install setuptools==80.10.2 wheel
-      - run: pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython==4.2.4
-      - name: Install all extras
-        if: matrix.python-version != '3.9'
-        run: pip install -e '.[dev,tui,gui]'
-      - name: Install without textual (3.9)
-        if: matrix.python-version == '3.9'
-        run: pip install -e '.[dev,gui]'
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libnotify-dev libsdl2-dev
+          pip install setuptools==80.10.2 wheel
+          pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython==4.2.4
+          if python -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)"; then
+            pip install -e '.[dev,tui,gui]'
+          else
+            pip install -e '.[dev,gui]'
+          fi
       - run: pytest tests/ -v --cov=kicad_jlcimport --cov-report=term-missing --cov-report=xml
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12'
