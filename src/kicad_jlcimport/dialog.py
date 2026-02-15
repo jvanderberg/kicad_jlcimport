@@ -432,7 +432,7 @@ class JLCImportDialog(wx.Dialog):
             return self._project_dir
         return ""
 
-    def _apply_saved_destination(self, project_dir: str, config: dict | None = None):
+    def _apply_saved_destination(self, project_dir: str, config=None):
         """Set the destination radio buttons from the saved config preference."""
         if config is None:
             config = load_config()
