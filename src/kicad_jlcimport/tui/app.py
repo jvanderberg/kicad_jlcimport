@@ -183,6 +183,84 @@ class PathInputScreen(Screen):
         self.dismiss(path)
 
 
+class MetadataEditScreen(Screen):
+    """Modal screen for editing component metadata before import."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Cancel"),
+    ]
+
+    CSS = """
+    MetadataEditScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.85);
+    }
+    #meta-dialog {
+        width: 70;
+        height: auto;
+        max-height: 20;
+        background: #1a1a1a;
+        border: solid #333333;
+        padding: 1 2;
+    }
+    #meta-title {
+        text-style: bold;
+        color: #33ff33;
+        width: 100%;
+    }
+    .meta-label {
+        margin-top: 1;
+        color: #aaaaaa;
+    }
+    #meta-desc, #meta-keywords, #meta-manufacturer {
+        margin: 0;
+    }
+    #meta-buttons {
+        height: 1;
+        margin-top: 1;
+    }
+    #meta-buttons Button { margin-right: 1; }
+    """
+
+    def __init__(self, metadata: dict):
+        super().__init__()
+        self._metadata = metadata
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="meta-dialog"):
+            yield Static("Edit Metadata", id="meta-title")
+            yield Static("Description", classes="meta-label")
+            yield Input(value=self._metadata.get("description", ""), id="meta-desc")
+            yield Static("Keywords", classes="meta-label")
+            yield Input(value=self._metadata.get("keywords", ""), id="meta-keywords")
+            yield Static("Manufacturer", classes="meta-label")
+            yield Input(value=self._metadata.get("manufacturer", ""), id="meta-manufacturer")
+            with Horizontal(id="meta-buttons"):
+                yield Button("OK", id="meta-ok", variant="success")
+                yield Button("Cancel", id="meta-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "meta-ok":
+            self._accept()
+        elif event.button.id == "meta-cancel":
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._accept()
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
+
+    def _accept(self):
+        self.dismiss(
+            {
+                "description": self.query_one("#meta-desc", Input).value,
+                "keywords": self.query_one("#meta-keywords", Input).value,
+                "manufacturer": self.query_one("#meta-manufacturer", Input).value,
+            }
+        )
+
+
 class JLCImportTUI(App):
     """TUI application for JLCImport - search and import JLCPCB components."""
 
@@ -1073,6 +1151,23 @@ class JLCImportTUI(App):
 
     # --- Import ---
 
+    def _confirm_metadata(self, metadata: dict) -> dict | None:
+        """Show the metadata edit screen and block until dismissed.
+
+        Called from a worker thread; uses call_from_thread + threading.Event
+        to push a modal screen and wait for the result.
+        """
+        event = threading.Event()
+        result_holder: list = []
+
+        def _on_dismiss(result):
+            result_holder.append(result)
+            event.set()
+
+        self.app.call_from_thread(self.push_screen, MetadataEditScreen(metadata), _on_dismiss)
+        event.wait()
+        return result_holder[0] if result_holder else None
+
     def _do_import_action(self):
         """Start the import process."""
         self._persist_lib_name()
@@ -1101,9 +1196,11 @@ class JLCImportTUI(App):
 
         overwrite = self.query_one("#overwrite-cb", Checkbox).value
 
+        search_result = next((r for r in self._search_results if r["lcsc"] == lcsc_id), None)
+
         self.query_one("#import-btn", Button).disabled = True
         self.query_one("#detail-import-btn", Button).disabled = True
-        self._run_import(lcsc_id, lib_dir, overwrite, use_global, kicad_version)
+        self._run_import(lcsc_id, lib_dir, overwrite, use_global, kicad_version, search_result)
 
     def _get_kicad_version(self) -> int:
         """Return the selected KiCad version from the dropdown."""
@@ -1112,14 +1209,16 @@ class JLCImportTUI(App):
         return val if isinstance(val, int) else DEFAULT_KICAD_VERSION
 
     @work(thread=True)
-    def _run_import(self, lcsc_id: str, lib_dir: str, overwrite: bool, use_global: bool, kicad_version: int):
+    def _run_import(
+        self, lcsc_id: str, lib_dir: str, overwrite: bool, use_global: bool, kicad_version: int, search_result=None
+    ):
         """Run the import in a background thread."""
         try:
             try:
-                self._do_import(lcsc_id, lib_dir, overwrite, use_global, kicad_version)
+                self._do_import(lcsc_id, lib_dir, overwrite, use_global, kicad_version, search_result)
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                self._do_import(lcsc_id, lib_dir, overwrite, use_global, kicad_version)
+                self._do_import(lcsc_id, lib_dir, overwrite, use_global, kicad_version, search_result)
         except APIError as e:
             self.app.call_from_thread(self._log, f"[red]API Error: {e}[/red]")
         except Exception as e:
@@ -1129,7 +1228,9 @@ class JLCImportTUI(App):
             self.app.call_from_thread(self.query_one("#import-btn", Button).__setattr__, "disabled", False)
             self.app.call_from_thread(self.query_one("#detail-import-btn", Button).__setattr__, "disabled", False)
 
-    def _do_import(self, lcsc_id: str, lib_dir: str, overwrite: bool, use_global: bool, kicad_version: int):
+    def _do_import(
+        self, lcsc_id: str, lib_dir: str, overwrite: bool, use_global: bool, kicad_version: int, search_result=None
+    ):
         """Execute the import process."""
         lib_name = self._lib_name
 
@@ -1144,7 +1245,13 @@ class JLCImportTUI(App):
             use_global=use_global,
             log=log,
             kicad_version=kicad_version,
+            search_result=search_result,
+            confirm_metadata=self._confirm_metadata,
         )
+
+        if result is None:
+            log("Import cancelled.")
+            return
 
         title = result["title"]
         name = result["name"]

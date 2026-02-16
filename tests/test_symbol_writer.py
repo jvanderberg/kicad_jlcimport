@@ -91,6 +91,22 @@ class TestWriteSymbol:
                     assert "hide" in effects_line, f'Property "{prop_name}" must be hidden'
                     break
 
+    def test_ki_keywords_property(self):
+        sym = _make_symbol()
+        result = write_symbol(sym, "Test", keywords="C123 MPN SOT-23")
+        assert '(property "ki_keywords" "C123 MPN SOT-23"' in result
+        # ki_keywords must be hidden
+        lines = result.split("\n")
+        for i, line in enumerate(lines):
+            if '"ki_keywords"' in line:
+                assert "hide" in lines[i + 1]
+                break
+
+    def test_ki_keywords_omitted_when_empty(self):
+        sym = _make_symbol()
+        result = write_symbol(sym, "Test")
+        assert "ki_keywords" not in result
+
     def test_lcsc_property(self):
         sym = _make_symbol()
         result = write_symbol(sym, "Test", lcsc_id="C123456")

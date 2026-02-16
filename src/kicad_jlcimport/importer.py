@@ -19,6 +19,36 @@ from .kicad.symbol_writer import write_symbol
 from .kicad.version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version
 
 
+def _build_description(comp: dict) -> str:
+    """Build a description from component metadata.
+
+    If the EasyEDA description is empty or just repeats the title,
+    synthesize one from manufacturer_part, package, and manufacturer.
+    """
+    desc = comp.get("description", "")
+    title = comp.get("title", "")
+    if not desc or desc == title:
+        parts = []
+        if comp.get("manufacturer_part"):
+            parts.append(comp["manufacturer_part"])
+        if comp.get("package"):
+            parts.append(comp["package"])
+        if comp.get("manufacturer"):
+            parts.append(comp["manufacturer"])
+        desc = "; ".join(parts)
+    return desc
+
+
+def _build_keywords(comp: dict) -> str:
+    """Build ki_keywords from component metadata for KiCad search."""
+    terms = set()
+    for key in ("lcsc_id", "manufacturer_part", "manufacturer", "package"):
+        val = comp.get(key, "")
+        if val:
+            terms.add(val)
+    return " ".join(sorted(terms))
+
+
 def import_component(
     lcsc_id: str,
     lib_dir: str,
@@ -28,7 +58,9 @@ def import_component(
     export_only: bool = False,
     log: Callable[[str], None] = print,
     kicad_version: int = DEFAULT_KICAD_VERSION,
-) -> dict:
+    search_result: dict | None = None,
+    confirm_metadata: Callable[[dict], dict | None] | None = None,
+) -> dict | None:
     """Import an LCSC component into a KiCad library or export raw files.
 
     Args:
@@ -40,13 +72,36 @@ def import_component(
         export_only: If True, write raw .kicad_mod/.kicad_sym/3D files to a flat directory.
         log: Callback for status messages.
         kicad_version: Target KiCad major version (8 or 9).
+        search_result: Optional search result dict with ``brand`` and ``description``
+            fields from the JLCPCB search API.
+        confirm_metadata: Optional callback that receives a dict with ``description``,
+            ``keywords``, and ``manufacturer`` keys.  Returns the (possibly edited)
+            dict to use, or ``None`` to cancel the import.
 
     Returns:
-        dict with keys: title, name, fp_content, sym_content
+        dict with keys: title, name, fp_content, sym_content; or None if cancelled.
     """
     log(f"Fetching component {lcsc_id}...")
 
     comp = fetch_full_component(lcsc_id)
+
+    # Merge richer metadata from search result when available
+    if search_result:
+        if search_result.get("brand"):
+            comp["manufacturer"] = search_result["brand"]
+        if search_result.get("description"):
+            comp["description"] = search_result["description"]
+    # Compute metadata that will be written to KiCad files
+    metadata = {
+        "description": _build_description(comp),
+        "keywords": _build_keywords(comp),
+        "manufacturer": comp.get("manufacturer", ""),
+    }
+    if confirm_metadata:
+        metadata = confirm_metadata(metadata)
+        if metadata is None:
+            return None
+
     title = comp["title"]
     name = sanitize_name(title)
     log(f"Component: {title}")
@@ -91,8 +146,9 @@ def import_component(
             footprint_ref=footprint_ref,
             lcsc_id=lcsc_id,
             datasheet=comp.get("datasheet", ""),
-            description=comp.get("description", ""),
-            manufacturer=comp.get("manufacturer", ""),
+            description=metadata["description"],
+            keywords=metadata["keywords"],
+            manufacturer=metadata["manufacturer"],
             manufacturer_part=comp.get("manufacturer_part", ""),
         )
     else:
@@ -114,6 +170,7 @@ def import_component(
             log,
             kicad_version,
             wrl_source,
+            metadata,
         )
 
     return _import_to_library(
@@ -133,6 +190,7 @@ def import_component(
         log,
         kicad_version,
         wrl_source,
+        metadata,
     )
 
 
@@ -151,6 +209,7 @@ def _export_only(
     log,
     kicad_version,
     wrl_source=None,
+    metadata=None,
 ):
     """Write raw .kicad_mod, .kicad_sym, and 3D models to a flat directory."""
     os.makedirs(out_dir, exist_ok=True)
@@ -163,7 +222,8 @@ def _export_only(
         footprint,
         name,
         lcsc_id=lcsc_id,
-        description=comp.get("description", ""),
+        description=metadata["description"],
+        keywords=metadata["keywords"],
         datasheet=comp.get("datasheet", ""),
         model_path=model_path,
         model_offset=model_offset,
@@ -219,6 +279,7 @@ def _import_to_library(
     log,
     kicad_version,
     wrl_source=None,
+    metadata=None,
 ):
     """Import into KiCad library structure with lib-table updates."""
     log(f"Destination: {lib_dir}")
@@ -263,7 +324,8 @@ def _import_to_library(
         footprint,
         name,
         lcsc_id=lcsc_id,
-        description=comp.get("description", ""),
+        description=metadata["description"],
+        keywords=metadata["keywords"],
         datasheet=comp.get("datasheet", ""),
         model_path=model_path,
         model_offset=model_offset,

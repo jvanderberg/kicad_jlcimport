@@ -15,6 +15,7 @@ def write_footprint(
     name: str,
     lcsc_id: str = "",
     description: str = "",
+    keywords: str = "",
     datasheet: str = "",
     model_path: str = "",
     model_offset: Tuple[float, float, float] = (0, 0, 0),
@@ -46,6 +47,10 @@ def write_footprint(
     if has_generator_version(kicad_version):
         lines.append('  (generator_version "1.0")')
     lines.append('  (layer "F.Cu")')
+    if description:
+        lines.append(f'  (descr "{_escape(description)}")')
+    if keywords:
+        lines.append(f'  (tags "{_escape(keywords)}")')
 
     # Properties
     lines.append(f'  (property "Reference" "REF**" (at 0 {_fmt(ref_y)} 0) (layer "F.SilkS") (uuid "{_uuid()}")')

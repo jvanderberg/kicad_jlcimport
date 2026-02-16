@@ -60,6 +60,7 @@ def write_symbol(
     lcsc_id: str = "",
     datasheet: str = "",
     description: str = "",
+    keywords: str = "",
     manufacturer: str = "",
     manufacturer_part: str = "",
     unit_index: int = 0,
@@ -105,6 +106,10 @@ def write_symbol(
             lines.append("    )")
         if description:
             lines.append(f'    (property "Description" "{_escape(description)}" (at 0 0 0)')
+            lines.append("      (effects (font (size 1.27 1.27)) hide)")
+            lines.append("    )")
+        if keywords:
+            lines.append(f'    (property "ki_keywords" "{_escape(keywords)}" (at 0 0 0)')
             lines.append("      (effects (font (size 1.27 1.27)) hide)")
             lines.append("    )")
         if lcsc_id:

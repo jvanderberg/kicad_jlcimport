@@ -464,6 +464,11 @@ def download_wrl_source(uuid_3d: str) -> Optional[str]:
         return None
 
 
+def _strip_cjk_parens(text: str) -> str:
+    """Strip parenthesized CJK text from strings like 'UMW(友台半导体)'."""
+    return re.sub(r"\([^\x00-\x7F]+\)", "", text).strip()
+
+
 def fetch_full_component(lcsc_id: str) -> Dict[str, Any]:
     """High-level: fetch all data needed for a component.
 
@@ -517,7 +522,8 @@ def fetch_full_component(lcsc_id: str) -> Dict[str, Any]:
         "lcsc_id": lcsc_id,
         "datasheet": datasheet,
         "description": primary.get("description", ""),
-        "manufacturer": c_para.get("Manufacturer", ""),
+        "package": c_para.get("package", fp_c_para.get("package", "")),
+        "manufacturer": _strip_cjk_parens(c_para.get("Manufacturer", "")),
         "manufacturer_part": c_para.get("Manufacturer Part", ""),
         "symbol_uuids": symbol_uuids,
         "footprint_uuid": footprint_uuid,

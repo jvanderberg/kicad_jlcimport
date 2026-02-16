@@ -123,6 +123,48 @@ class _CategoryPopup(wx.PopupWindow):
                 self._on_select()
 
 
+class MetadataEditDialog(wx.Dialog):
+    """Modal dialog for editing component metadata before import."""
+
+    def __init__(self, parent, metadata: dict):
+        super().__init__(parent, title="Edit Metadata", size=(450, 280), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self._build_ui(metadata)
+        self.Centre()
+
+    def _build_ui(self, metadata: dict):
+        vbox = wx.BoxSizer(wx.VERTICAL)
+
+        grid = wx.FlexGridSizer(cols=2, hgap=8, vgap=8)
+        grid.AddGrowableCol(1)
+
+        grid.Add(wx.StaticText(self, label="Description"), 0, wx.ALIGN_TOP)
+        self._desc = wx.TextCtrl(self, value=metadata.get("description", ""), style=wx.TE_MULTILINE, size=(-1, 60))
+        grid.Add(self._desc, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self, label="Keywords"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._keywords = wx.TextCtrl(self, value=metadata.get("keywords", ""))
+        grid.Add(self._keywords, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self, label="Manufacturer"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._manufacturer = wx.TextCtrl(self, value=metadata.get("manufacturer", ""))
+        grid.Add(self._manufacturer, 1, wx.EXPAND)
+
+        vbox.Add(grid, 1, wx.EXPAND | wx.ALL, 10)
+
+        btn_sizer = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
+        vbox.Add(btn_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.SetSizer(vbox)
+
+    def get_metadata(self) -> dict:
+        """Return the edited metadata values."""
+        return {
+            "description": self._desc.GetValue(),
+            "keywords": self._keywords.GetValue(),
+            "manufacturer": self._manufacturer.GetValue(),
+        }
+
+
 class JLCImportDialog(wx.Dialog):
     def __init__(self, parent, board, project_dir=None, kicad_version=None, global_lib_dir=""):
         super().__init__(parent, title="JLCImport", size=(700, 600), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
@@ -1196,12 +1238,14 @@ class JLCImportDialog(wx.Dialog):
         self.import_btn.Disable()
         self.status_text.Clear()
 
+        search_result = next((r for r in self._search_results if r["lcsc"] == lcsc_id), None)
+
         try:
             try:
-                self._do_import(lcsc_id, lib_dir, overwrite, use_global)
+                self._do_import(lcsc_id, lib_dir, overwrite, use_global, search_result)
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                self._do_import(lcsc_id, lib_dir, overwrite, use_global)
+                self._do_import(lcsc_id, lib_dir, overwrite, use_global, search_result)
             self._persist_destination()
         except APIError as e:
             self._log(f"API Error: {e}")
@@ -1216,7 +1260,17 @@ class JLCImportDialog(wx.Dialog):
         idx = self.version_choice.GetSelection()
         return int(self._version_labels[idx])
 
-    def _do_import(self, lcsc_id: str, lib_dir: str, overwrite: bool, use_global: bool):
+    def _confirm_metadata(self, metadata: dict) -> dict | None:
+        """Show the metadata edit dialog and return edited values, or None to cancel."""
+        dlg = MetadataEditDialog(self, metadata)
+        try:
+            if dlg.ShowModal() == wx.ID_OK:
+                return dlg.get_metadata()
+            return None
+        finally:
+            dlg.Destroy()
+
+    def _do_import(self, lcsc_id: str, lib_dir: str, overwrite: bool, use_global: bool, search_result=None):
         lib_name = self._lib_name
 
         result = import_component(
@@ -1227,7 +1281,13 @@ class JLCImportDialog(wx.Dialog):
             use_global=use_global,
             log=self._log,
             kicad_version=self._get_kicad_version(),
+            search_result=search_result,
+            confirm_metadata=self._confirm_metadata,
         )
+
+        if result is None:
+            self._log("Import cancelled.")
+            return
 
         title = result["title"]
         name = result["name"]
