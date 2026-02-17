@@ -130,7 +130,7 @@ def test_dialog_version_change_preserves_override(monkeypatch):
         _global_lib_dir="/cli/override",
         _global_path_label=MagicMock(),
         version_choice=MagicMock(),
-        _version_labels=["8", "9"],
+        _version_labels=["10", "9", "8"],
     )
     dlg.version_choice.GetSelection.return_value = 0
 
@@ -163,7 +163,7 @@ def test_dialog_version_change_updates_without_override(monkeypatch):
         _global_path_label=MagicMock(),
         _set_global_path=MagicMock(),
         version_choice=MagicMock(),
-        _version_labels=["8", "9"],
+        _version_labels=["10", "9", "8"],
         _get_kicad_version=lambda: 8,
     )
     dlg.version_choice.GetSelection.return_value = 0
@@ -204,6 +204,7 @@ def test_dialog_browse_clears_override(monkeypatch):
         _global_lib_dir="/cli/override",
         _global_path_label=MagicMock(),
         _set_global_path=MagicMock(),
+        _update_version_visibility=MagicMock(),
     )
 
     JLCImportDialog._on_global_browse(dlg, None)
@@ -235,8 +236,9 @@ def test_dialog_reset_clears_override(monkeypatch):
         _global_lib_dir="/cli/override",
         _global_path_label=MagicMock(),
         _set_global_path=MagicMock(),
+        _update_version_visibility=MagicMock(),
         version_choice=MagicMock(),
-        _version_labels=["8", "9"],
+        _version_labels=["10", "9", "8"],
         _get_kicad_version=lambda: 9,
     )
     dlg.version_choice.GetSelection.return_value = 1

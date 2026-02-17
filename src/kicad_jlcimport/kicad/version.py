@@ -7,18 +7,21 @@ writers and library management code can target either version cleanly.
 # Supported major versions
 KICAD_V8 = 8
 KICAD_V9 = 9
+KICAD_V10 = 10
 DEFAULT_KICAD_VERSION = KICAD_V9
-SUPPORTED_VERSIONS = (KICAD_V8, KICAD_V9)
+SUPPORTED_VERSIONS = (KICAD_V8, KICAD_V9, KICAD_V10)
 
 # S-expression version stamps per major KiCad version
 _SYMBOL_FORMAT_VERSIONS = {
     KICAD_V8: "20231120",
     KICAD_V9: "20241209",
+    KICAD_V10: "20241209",
 }
 
 _FOOTPRINT_FORMAT_VERSIONS = {
     KICAD_V8: "20240108",
     KICAD_V9: "20241229",
+    KICAD_V10: "20241229",
 }
 
 
@@ -56,6 +59,7 @@ def has_embedded_fonts(kicad_version: int = DEFAULT_KICAD_VERSION) -> bool:
 _DIR_VERSION_NAMES = {
     KICAD_V8: "8.0",
     KICAD_V9: "9.0",
+    KICAD_V10: "10.0",
 }
 
 

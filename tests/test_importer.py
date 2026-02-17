@@ -828,3 +828,139 @@ class TestConfirmMetadata:
         assert result is not None
         assert sym_kwargs["description"] == "Test description"
         assert sym_kwargs["manufacturer"] == "ACME"
+
+
+class TestConfirmOverwrite:
+    """Tests for confirm_overwrite callback in import_component."""
+
+    def _make_fake_comp(self):
+        return {
+            "title": "TestPart",
+            "prefix": "U",
+            "description": "Test description",
+            "datasheet": "https://example.com/ds.pdf",
+            "manufacturer": "ACME",
+            "manufacturer_part": "MPN123",
+            "lcsc_id": "C123",
+            "package": "SOT-23",
+            "footprint_data": {"dataStr": {"shape": []}},
+            "fp_origin_x": 0,
+            "fp_origin_y": 0,
+            "symbol_data_list": [{"dataStr": {"shape": []}}],
+            "sym_origin_x": 0,
+            "sym_origin_y": 0,
+        }
+
+    def _make_fake_footprint(self):
+        fp = EEFootprint()
+        pad = EEPad(shape="RECT", x=0, y=0, width=1, height=1, layer="1", number="1", drill=0, rotation=0)
+        fp.pads.append(pad)
+        return fp
+
+    def _make_fake_symbol(self):
+        sym = EESymbol()
+        sym.pins.append(EEPin(number="1", name="VCC", x=0, y=0, rotation=0, length=2.54, electrical_type="power_in"))
+        return sym
+
+    def _patch_importer(self, monkeypatch, fake_comp, fake_fp, fake_sym):
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: fake_sym)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: '  (symbol "TestPart")\n')
+
+    def test_callback_called_when_files_exist_returns_true(self, tmp_path, monkeypatch):
+        """confirm_overwrite returning True should proceed with overwrite."""
+        fake_comp = self._make_fake_comp()
+        self._patch_importer(monkeypatch, fake_comp, self._make_fake_footprint(), self._make_fake_symbol())
+
+        # Pre-create the footprint so it already exists
+        fp_dir = tmp_path / "TestLib.pretty"
+        fp_dir.mkdir(parents=True)
+        (fp_dir / "TestPart.kicad_mod").write_text("existing")
+
+        callback_args = []
+
+        def confirm(name, existing):
+            callback_args.append((name, existing))
+            return True
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            overwrite=False,
+            log=lambda msg: None,
+            confirm_overwrite=confirm,
+        )
+
+        assert result is not None
+        assert len(callback_args) == 1
+        assert callback_args[0][0] == "TestPart"
+        assert "footprint" in callback_args[0][1]
+
+    def test_callback_returns_false_cancels_import(self, tmp_path, monkeypatch):
+        """confirm_overwrite returning False should cancel the import."""
+        fake_comp = self._make_fake_comp()
+        self._patch_importer(monkeypatch, fake_comp, self._make_fake_footprint(), self._make_fake_symbol())
+
+        # Pre-create the footprint
+        fp_dir = tmp_path / "TestLib.pretty"
+        fp_dir.mkdir(parents=True)
+        (fp_dir / "TestPart.kicad_mod").write_text("existing")
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            overwrite=False,
+            log=lambda msg: None,
+            confirm_overwrite=lambda name, existing: False,
+        )
+
+        assert result is None
+
+    def test_no_callback_preserves_existing_behavior(self, tmp_path, monkeypatch):
+        """Without confirm_overwrite, overwrite=False should skip silently."""
+        fake_comp = self._make_fake_comp()
+        self._patch_importer(monkeypatch, fake_comp, self._make_fake_footprint(), self._make_fake_symbol())
+        log_messages = []
+
+        # Pre-create the footprint
+        fp_dir = tmp_path / "TestLib.pretty"
+        fp_dir.mkdir(parents=True)
+        (fp_dir / "TestPart.kicad_mod").write_text("existing")
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            overwrite=False,
+            log=lambda msg: log_messages.append(msg),
+        )
+
+        assert result is not None
+        assert "Skipped:" in " ".join(log_messages)
+
+    def test_callback_not_called_when_no_existing_files(self, tmp_path, monkeypatch):
+        """confirm_overwrite should not be called when nothing exists."""
+        fake_comp = self._make_fake_comp()
+        self._patch_importer(monkeypatch, fake_comp, self._make_fake_footprint(), self._make_fake_symbol())
+
+        callback_called = []
+
+        def confirm(name, existing):
+            callback_called.append(True)
+            return True
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            overwrite=False,
+            log=lambda msg: None,
+            confirm_overwrite=confirm,
+        )
+
+        assert result is not None
+        assert len(callback_called) == 0

@@ -159,15 +159,13 @@ class TestDialogStickyDestination:
             lambda: {"lib_name": "JLCImport", "global_lib_dir": "", "use_global": False},
         )
         monkeypatch.setattr("kicad_jlcimport.dialog.save_config", lambda c: saved.update(c))
-        monkeypatch.setattr("kicad_jlcimport.dialog.validate_lcsc_id", lambda x: x)
         from kicad_jlcimport.dialog import JLCImportDialog
 
         dlg = SimpleNamespace(
-            part_input=MagicMock(),
+            _selected_result={"lcsc": "C427602"},
             dest_global=MagicMock(),
             _global_lib_dir="/some/dir",
-            overwrite_cb=MagicMock(),
-            import_btn=MagicMock(),
+            detail_import_btn=MagicMock(),
             status_text=MagicMock(),
             _lib_name="JLCImport",
             _get_project_dir=lambda: "/project",
@@ -179,9 +177,7 @@ class TestDialogStickyDestination:
             _log=MagicMock(),
             _persist_destination=MagicMock(),
         )
-        dlg.part_input.GetValue.return_value = "C427602"
         dlg.dest_global.GetValue.return_value = True
-        dlg.overwrite_cb.GetValue.return_value = False
 
         JLCImportDialog._on_import(dlg, None)
 
@@ -303,7 +299,7 @@ class TestTUIStickyDestination:
 
         # _do_import should raise, so _persist_destination should not be reached
         try:
-            JLCImportTUI._do_import(app, "C427602", str(tmp_path), False, True, 9)
+            JLCImportTUI._do_import(app, "C427602", str(tmp_path), True, 9)
         except Exception:
             pass
 

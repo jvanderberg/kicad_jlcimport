@@ -1,5 +1,7 @@
 """Shared import logic for CLI, TUI, and plugin."""
 
+from __future__ import annotations
+
 import os
 from typing import Callable
 
@@ -36,7 +38,7 @@ def _build_description(comp: dict) -> str:
         if comp.get("manufacturer"):
             parts.append(comp["manufacturer"])
         desc = "; ".join(parts)
-    return desc
+    return desc.strip()
 
 
 def _build_keywords(comp: dict) -> str:
@@ -47,6 +49,28 @@ def _build_keywords(comp: dict) -> str:
         if val:
             terms.add(val)
     return " ".join(sorted(terms))
+
+
+def _check_existing_files(lib_dir: str, lib_name: str, name: str) -> list[str]:
+    """Return a list of existing file types (e.g. ["footprint", "symbol", "3D model"])."""
+    existing: list[str] = []
+    fp_path = os.path.join(lib_dir, f"{lib_name}.pretty", f"{name}.kicad_mod")
+    if os.path.exists(fp_path):
+        existing.append("footprint")
+    sym_path = os.path.join(lib_dir, f"{lib_name}.kicad_sym")
+    if os.path.exists(sym_path):
+        try:
+            with open(sym_path, encoding="utf-8") as f:
+                if f'(symbol "{name}"' in f.read():
+                    existing.append("symbol")
+        except (PermissionError, OSError):
+            pass
+    models_dir = os.path.join(lib_dir, f"{lib_name}.3dshapes")
+    step_path = os.path.join(models_dir, f"{name}.step")
+    wrl_path = os.path.join(models_dir, f"{name}.wrl")
+    if os.path.exists(step_path) or os.path.exists(wrl_path):
+        existing.append("3D model")
+    return existing
 
 
 def import_component(
@@ -60,6 +84,7 @@ def import_component(
     kicad_version: int = DEFAULT_KICAD_VERSION,
     search_result: dict | None = None,
     confirm_metadata: Callable[[dict], dict | None] | None = None,
+    confirm_overwrite: Callable[[str, list[str]], bool] | None = None,
 ) -> dict | None:
     """Import an LCSC component into a KiCad library or export raw files.
 
@@ -77,6 +102,11 @@ def import_component(
         confirm_metadata: Optional callback that receives a dict with ``description``,
             ``keywords``, and ``manufacturer`` keys.  Returns the (possibly edited)
             dict to use, or ``None`` to cancel the import.
+        confirm_overwrite: Optional callback called when existing files are detected.
+            Receives ``(name, existing_items)`` where *existing_items* lists what
+            already exists (e.g. ``["footprint", "symbol"]``).  Returns ``True`` to
+            overwrite or ``False`` to cancel.  When ``None``, the ``overwrite`` bool
+            governs behavior.
 
     Returns:
         dict with keys: title, name, fp_content, sym_content; or None if cancelled.
@@ -91,6 +121,18 @@ def import_component(
             comp["manufacturer"] = search_result["brand"]
         if search_result.get("description"):
             comp["description"] = search_result["description"]
+
+    title = comp["title"]
+    name = sanitize_name(title)
+
+    # Check for existing files and ask user to confirm overwrite
+    if not export_only and confirm_overwrite:
+        existing = _check_existing_files(lib_dir, lib_name, name)
+        if existing:
+            if not confirm_overwrite(name, existing):
+                return None
+            overwrite = True
+
     # Compute metadata that will be written to KiCad files
     metadata = {
         "description": _build_description(comp),
@@ -101,9 +143,6 @@ def import_component(
         metadata = confirm_metadata(metadata)
         if metadata is None:
             return None
-
-    title = comp["title"]
-    name = sanitize_name(title)
     log(f"Component: {title}")
     log(f"Prefix: {comp['prefix']}, Name: {name}")
 

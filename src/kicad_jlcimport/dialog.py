@@ -1,5 +1,7 @@
 """wxPython dialog for JLCImport plugin."""
 
+from __future__ import annotations
+
 import io
 import os
 import re
@@ -14,12 +16,13 @@ from .easyeda import api as _api_module
 from .easyeda.api import (
     APIError,
     SSLCertError,
+    fetch_component_uuids,
     fetch_product_image,
     filter_by_min_stock,
     filter_by_type,
     search_components,
-    validate_lcsc_id,
 )
+from .gui.symbol_renderer import render_svg_bitmap
 from .importer import import_component
 from .kicad.library import get_global_lib_dir, load_config, save_config
 from .kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
@@ -123,11 +126,70 @@ class _CategoryPopup(wx.PopupWindow):
                 self._on_select()
 
 
+class _PageIndicator(wx.Control):
+    """Owner-drawn two-dot page indicator for switching between photo and symbol views."""
+
+    DOT_RADIUS = 4
+    DOT_GAP = 12
+
+    def __init__(self, parent, on_page_change=None):
+        super().__init__(parent, size=(2 * self.DOT_GAP + 2 * self.DOT_RADIUS, 2 * self.DOT_RADIUS + 4))
+        self._page = 0
+        self._num_pages = 2
+        self._on_page_change = on_page_change
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_LEFT_DOWN, self._on_click)
+
+    def set_page(self, page: int):
+        if page != self._page and 0 <= page < self._num_pages:
+            self._page = page
+            self.Refresh()
+
+    def _dot_positions(self):
+        w, h = self.GetClientSize()
+        total = (self._num_pages - 1) * self.DOT_GAP
+        start_x = (w - total) // 2
+        cy = h // 2
+        return [(start_x + i * self.DOT_GAP, cy) for i in range(self._num_pages)]
+
+    def _on_paint(self, event):
+        dc = wx.AutoBufferedPaintDC(self)
+        bg = self.GetParent().GetBackgroundColour()
+        dc.SetBackground(wx.Brush(bg))
+        dc.Clear()
+        dc.SetPen(wx.TRANSPARENT_PEN)
+        for i, (cx, cy) in enumerate(self._dot_positions()):
+            if i == self._page:
+                dc.SetBrush(wx.Brush(wx.Colour(80, 80, 80)))
+            else:
+                dc.SetBrush(wx.Brush(wx.Colour(200, 200, 200)))
+            dc.DrawCircle(cx, cy, self.DOT_RADIUS)
+
+    def _on_click(self, event):
+        x = event.GetX()
+        positions = self._dot_positions()
+        best = -1
+        best_dist = float("inf")
+        for i, (cx, _cy) in enumerate(positions):
+            dist = abs(x - cx)
+            if dist < best_dist:
+                best_dist = dist
+                best = i
+        if best >= 0 and best != self._page:
+            self._page = best
+            self.Refresh()
+            if self._on_page_change:
+                self._on_page_change(best)
+
+
 class MetadataEditDialog(wx.Dialog):
     """Modal dialog for editing component metadata before import."""
 
     def __init__(self, parent, metadata: dict):
-        super().__init__(parent, title="Edit Metadata", size=(450, 280), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        super().__init__(
+            parent, title="Edit Metadata", size=(450, 280), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
+        )
         self._build_ui(metadata)
         self.Centre()
 
@@ -178,6 +240,11 @@ class JLCImportDialog(wx.Dialog):
         self._image_request_id = 0
         self._gallery_request_id = 0
         self._ssl_warning_shown = False
+        self._selected_result = None
+        self._photo_bitmap = None
+        self._symbol_bitmap = None
+        self._detail_page = 0  # 0=photo, 1=symbol
+        self._symbol_request_id = 0
         self._init_ui()
         self.Centre()
 
@@ -255,13 +322,17 @@ class JLCImportDialog(wx.Dialog):
         # --- Detail panel (shown on selection) ---
         self._detail_box = wx.BoxSizer(wx.HORIZONTAL)
 
-        # Image on left (click to zoom)
-        self.detail_image = wx.StaticBitmap(panel, size=(100, 100))
-        self.detail_image.SetMinSize((100, 100))
+        # Image on left (click to zoom) with page indicator below
+        image_col = wx.BoxSizer(wx.VERTICAL)
+        self.detail_image = wx.StaticBitmap(panel, size=(160, 160))
+        self.detail_image.SetMinSize((160, 160))
         self.detail_image.SetCursor(wx.Cursor(wx.CURSOR_MAGNIFIER))
         self.detail_image.Bind(wx.EVT_LEFT_DOWN, self._on_image_click)
         self._full_image_data = None
-        self._detail_box.Add(self.detail_image, 0, wx.ALL, 5)
+        image_col.Add(self.detail_image, 0)
+        self._page_indicator = _PageIndicator(panel, on_page_change=self._on_page_change)
+        image_col.Add(self._page_indicator, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP, 2)
+        self._detail_box.Add(image_col, 0, wx.ALL, 5)
 
         # Info on right
         info_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -305,7 +376,7 @@ class JLCImportDialog(wx.Dialog):
         self.detail_desc = wx.TextCtrl(
             panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_NO_VSCROLL | wx.BORDER_NONE
         )
-        self.detail_desc.SetMinSize((-1, 40))
+        self.detail_desc.SetMinSize((-1, 48))
         info_sizer.Add(self.detail_desc, 1, wx.EXPAND | wx.BOTTOM, 4)
 
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -330,7 +401,7 @@ class JLCImportDialog(wx.Dialog):
         vbox.Add(self._detail_box, 0, wx.EXPAND | wx.ALL, 5)
 
         # --- Import section ---
-        import_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Import")
+        import_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Destination")
 
         project_dir = self._get_project_dir()
         if self._global_lib_dir_override:
@@ -347,7 +418,7 @@ class JLCImportDialog(wx.Dialog):
         self._global_lib_dir = global_dir
         bold_font = panel.GetFont().Bold()
 
-        # Row 1: Project destination | Part # input | Overwrite
+        # Row 1: Project destination
         proj_row = wx.BoxSizer(wx.HORIZONTAL)
         self.dest_project = wx.RadioButton(panel, label="Project", style=wx.RB_GROUP)
         self.dest_project.Bind(wx.EVT_RADIOBUTTON, self._on_dest_change)
@@ -355,16 +426,9 @@ class JLCImportDialog(wx.Dialog):
         proj_path_label = wx.StaticText(panel, label=project_dir or "(no board open)")
         proj_path_label.SetFont(bold_font)
         proj_row.Add(proj_path_label, 0, wx.ALIGN_CENTER_VERTICAL)
-        proj_row.AddStretchSpacer()
-        proj_row.Add(wx.StaticText(panel, label="Part #"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.part_input = wx.TextCtrl(panel, size=(100, -1))
-        self.part_input.SetHint("C427602")
-        proj_row.Add(self.part_input, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
-        self.overwrite_cb = wx.CheckBox(panel, label="Overwrite")
-        proj_row.Add(self.overwrite_cb, 0, wx.ALIGN_CENTER_VERTICAL)
         import_box.Add(proj_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5)
 
-        # Row 2: Global destination | Browse | Reset | Import button
+        # Row 2: Global destination | Browse | Reset
         global_row = wx.BoxSizer(wx.HORIZONTAL)
         self.dest_global = wx.RadioButton(panel, label="Global")
         self.dest_global.Bind(wx.EVT_RADIOBUTTON, self._on_dest_change)
@@ -379,10 +443,6 @@ class JLCImportDialog(wx.Dialog):
         self._global_reset_btn = wx.Button(panel, label="\u2715", size=(30, -1))
         self._global_reset_btn.Bind(wx.EVT_BUTTON, self._on_global_reset)
         global_row.Add(self._global_reset_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 2)
-        global_row.AddStretchSpacer()
-        self.import_btn = wx.Button(panel, label="Import")
-        self.import_btn.Bind(wx.EVT_BUTTON, self._on_import)
-        global_row.Add(self.import_btn, 0, wx.ALIGN_CENTER_VERTICAL)
         import_box.Add(global_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5)
 
         _config = load_config()
@@ -395,14 +455,16 @@ class JLCImportDialog(wx.Dialog):
         self.lib_name_input = wx.TextCtrl(panel, size=(120, -1), value=self._lib_name)
         self.lib_name_input.Bind(wx.EVT_KILL_FOCUS, self._on_lib_name_change)
         lib_name_sizer.Add(self.lib_name_input, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 15)
-        lib_name_sizer.Add(wx.StaticText(panel, label="KiCad"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self._version_labels = [str(v) for v in sorted(SUPPORTED_VERSIONS)]
+        self._version_label = wx.StaticText(panel, label="KiCad")
+        lib_name_sizer.Add(self._version_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self._version_labels = [str(v) for v in sorted(SUPPORTED_VERSIONS, reverse=True)]
         self.version_choice = wx.Choice(panel, choices=self._version_labels)
         default_idx = self._version_labels.index(str(self._kicad_version))
         self.version_choice.SetSelection(default_idx)
         self.version_choice.Bind(wx.EVT_CHOICE, self._on_version_change)
         lib_name_sizer.Add(self.version_choice, 0, wx.ALIGN_CENTER_VERTICAL)
         import_box.Add(lib_name_sizer, 0, wx.ALL, 5)
+        self._update_version_visibility()
 
         vbox.Add(import_box, 0, wx.EXPAND | wx.ALL, 5)
 
@@ -522,6 +584,15 @@ class JLCImportDialog(wx.Dialog):
             self.lib_name_input.SetValue(self._lib_name)
         event.Skip()
 
+    def _update_version_visibility(self):
+        """Show KiCad version dropdown only when using the default 3rd-party directory."""
+        config = load_config()
+        custom = config.get("global_lib_dir", "") or self._global_lib_dir_override
+        show = not custom
+        self._version_label.Show(show)
+        self.version_choice.Show(show)
+        self._version_label.GetParent().Layout()
+
     def _on_version_change(self, event):
         """Update global path label when KiCad version changes."""
         config = load_config()
@@ -542,6 +613,7 @@ class JLCImportDialog(wx.Dialog):
             self._global_lib_dir = path
             self._global_lib_dir_override = ""
             self._set_global_path(path)
+            self._update_version_visibility()
         dlg.Destroy()
 
     def _on_global_reset(self, event):
@@ -553,6 +625,7 @@ class JLCImportDialog(wx.Dialog):
         default_dir = get_global_lib_dir(self._get_kicad_version())
         self._global_lib_dir = default_dir
         self._set_global_path(default_dir)
+        self._update_version_visibility()
 
     def _log(self, msg: str):
         self.status_text.AppendText(msg + "\n")
@@ -620,6 +693,7 @@ class JLCImportDialog(wx.Dialog):
             return
 
         self.search_btn.Disable()
+        self._clear_detail()
         self.results_list.DeleteAllItems()
         self._search_results = []
         self._raw_search_results = []
@@ -819,8 +893,11 @@ class JLCImportDialog(wx.Dialog):
     def _repopulate_results(self):
         """Repopulate the list control from _search_results."""
         self.results_list.DeleteAllItems()
+        reselect_idx = -1
         for i, r in enumerate(self._search_results):
             lcsc = r["lcsc"]
+            if self._selected_result and lcsc == self._selected_result["lcsc"]:
+                reselect_idx = i
             prefix = "\u2713 " if lcsc in self._imported_ids else ""
             self.results_list.InsertItem(i, prefix + lcsc)
             self.results_list.SetItem(i, 1, r["type"])
@@ -832,6 +909,12 @@ class JLCImportDialog(wx.Dialog):
             self.results_list.SetItem(i, 5, r.get("package", ""))
             self.results_list.SetItem(i, 6, r.get("description", ""))
         self._update_results_count()
+        if reselect_idx >= 0:
+            self.results_list.Select(reselect_idx)
+        elif len(self._search_results) == 1:
+            self.results_list.Select(0)
+        elif self._selected_result:
+            self._clear_detail()
 
     def _update_results_count(self):
         """Update the results count label."""
@@ -844,13 +927,43 @@ class JLCImportDialog(wx.Dialog):
         else:
             self.results_count_label.SetLabel(f"{shown} of {total}")
 
+    def _clear_detail(self):
+        """Clear the detail panel when nothing is selected."""
+        self._selected_result = None
+        self._stop_skeleton()
+        self._image_request_id += 1  # cancel any in-flight image fetch
+        self._symbol_request_id += 1  # cancel any in-flight symbol fetch
+        self._photo_bitmap = None
+        self._symbol_bitmap = None
+        self._detail_page = 0
+        self._page_indicator.set_page(0)
+        self.detail_lcsc.SetLabel("")
+        self.detail_part.SetLabel("")
+        self.detail_brand.SetLabel("")
+        self.detail_package.SetLabel("")
+        self.detail_price.SetLabel("")
+        self.detail_stock.SetLabel("")
+        self.detail_desc.SetValue("")
+        self._show_no_image()
+        self._datasheet_url = ""
+        self._lcsc_page_url = ""
+        self.detail_import_btn.Disable()
+        self.detail_datasheet_btn.Disable()
+        self.detail_lcsc_btn.Disable()
+
     def _on_result_select(self, event):
-        """Select a search result to populate the part number and show details."""
+        """Select a search result and show details."""
         idx = event.GetIndex()
         if idx < 0 or idx >= len(self._search_results):
             return
         r = self._search_results[idx]
-        self.part_input.SetValue(r["lcsc"])
+        if self._selected_result and r["lcsc"] == self._selected_result["lcsc"]:
+            return  # same item already displayed
+        self._selected_result = r
+
+        # Clear cached bitmaps but keep current page selection
+        self._photo_bitmap = None
+        self._symbol_bitmap = None
 
         # Populate detail fields
         self.detail_lcsc.SetLabel(f"{r['lcsc']}  ({r['type']})")
@@ -876,11 +989,25 @@ class JLCImportDialog(wx.Dialog):
         self._image_request_id += 1
         request_id = self._image_request_id
         if lcsc_url:
-            self._show_skeleton()
+            if self._detail_page == 0:
+                self._show_skeleton()
             threading.Thread(target=self._fetch_image, args=(lcsc_url, request_id), daemon=True).start()
         else:
             self._stop_skeleton()
-            self._show_no_image()
+            if self._detail_page == 0:
+                self._show_no_image()
+
+        # Fetch symbol data in background
+        lcsc_id = r["lcsc"]
+        self._symbol_request_id += 1
+        sym_request_id = self._symbol_request_id
+        if self._detail_page == 1:
+            self._show_no_footprint()
+        threading.Thread(
+            target=self._fetch_footprint_svg,
+            args=(lcsc_id, sym_request_id),
+            daemon=True,
+        ).start()
 
         self.Layout()
 
@@ -900,26 +1027,29 @@ class JLCImportDialog(wx.Dialog):
 
     def _show_no_image(self):
         """Show a subtle 'no image' placeholder."""
-        bmp = wx.Bitmap(100, 100)
+        self._photo_bitmap = None
+        bmp = wx.Bitmap(160, 160)
         dc = wx.MemoryDC(bmp)
         dc.SetBackground(wx.Brush(wx.Colour(245, 245, 245)))
         dc.Clear()
         # Draw a subtle image icon (rectangle with mountain/sun)
         dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), 1))
         dc.SetBrush(wx.TRANSPARENT_BRUSH)
-        dc.DrawRoundedRectangle(25, 30, 50, 40, 4)
+        dc.DrawRoundedRectangle(55, 60, 50, 40, 4)
         # Mountain shape
         dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), 1))
-        dc.DrawLine(32, 62, 50, 48)
-        dc.DrawLine(50, 48, 58, 55)
-        dc.DrawLine(58, 55, 68, 45)
+        dc.DrawLine(62, 92, 80, 78)
+        dc.DrawLine(80, 78, 88, 85)
+        dc.DrawLine(88, 85, 98, 75)
         # Sun circle
-        dc.DrawCircle(60, 40, 5)
+        dc.DrawCircle(90, 70, 5)
         dc.SelectObject(wx.NullBitmap)
         self.detail_image.SetBitmap(bmp)
 
     def _on_skeleton_tick(self, event):
         """Advance skeleton animation."""
+        if self._detail_page != 0:
+            return
         self._skeleton_phase = (self._skeleton_phase + 3) % 200
         self._draw_skeleton_frame()
 
@@ -927,7 +1057,7 @@ class JLCImportDialog(wx.Dialog):
         """Draw one frame of the skeleton shimmer over a rounded rect."""
         import math
 
-        bmp = wx.Bitmap(100, 100)
+        bmp = wx.Bitmap(160, 160)
         dc = wx.MemoryDC(bmp)
         dc.SetBackground(wx.Brush(wx.Colour(240, 240, 240)))
         dc.Clear()
@@ -935,14 +1065,14 @@ class JLCImportDialog(wx.Dialog):
         # Draw the base rounded rectangle
         dc.SetPen(wx.TRANSPARENT_PEN)
         dc.SetBrush(wx.Brush(wx.Colour(225, 225, 225)))
-        dc.DrawRoundedRectangle(4, 4, 92, 92, 6)
+        dc.DrawRoundedRectangle(4, 4, 152, 152, 6)
 
         # Shimmer: a soft gradient band sweeping left to right
         phase = self._skeleton_phase
         band_center = phase - 50  # range: -50 to 150
         band_width = 60
 
-        for x in range(4, 96):
+        for x in range(4, 156):
             dist = abs(x - band_center)
             if dist < band_width // 2:
                 # Smooth falloff using cosine
@@ -951,7 +1081,7 @@ class JLCImportDialog(wx.Dialog):
                 if alpha > 0:
                     c = min(255, 225 + alpha)
                     dc.SetPen(wx.Pen(wx.Colour(c, c, c), 1))
-                    dc.DrawLine(x, 4, x, 96)
+                    dc.DrawLine(x, 4, x, 156)
 
         dc.SelectObject(wx.NullBitmap)
         self.detail_image.SetBitmap(bmp)
@@ -1192,7 +1322,9 @@ class JLCImportDialog(wx.Dialog):
         self._stop_skeleton()
         if not img_data:
             self._full_image_data = None
-            self._show_no_image()
+            self._photo_bitmap = None
+            if self._detail_page == 0:
+                self._show_no_image()
             self.Layout()
             return
         try:
@@ -1202,28 +1334,87 @@ class JLCImportDialog(wx.Dialog):
                 img = wx.Image(io.BytesIO(img_data), type=wx.BITMAP_TYPE_PNG)
             if img.IsOk():
                 self._full_image_data = img_data
-                thumb = img.Scale(100, 100, wx.IMAGE_QUALITY_HIGH)
-                self.detail_image.SetBitmap(wx.Bitmap(thumb))
+                thumb = img.Scale(160, 160, wx.IMAGE_QUALITY_HIGH)
+                self._photo_bitmap = wx.Bitmap(thumb)
+                if self._detail_page == 0:
+                    self.detail_image.SetBitmap(self._photo_bitmap)
             else:
                 self._full_image_data = None
-                self._show_no_image()
+                self._photo_bitmap = None
+                if self._detail_page == 0:
+                    self._show_no_image()
             self.Layout()
         except Exception:
             self._full_image_data = None
-            self._show_no_image()
+            self._photo_bitmap = None
+            if self._detail_page == 0:
+                self._show_no_image()
             self.Layout()
 
+    def _fetch_footprint_svg(self, lcsc_id, request_id):
+        """Background thread: fetch footprint SVG from the API."""
+        try:
+            try:
+                uuids = fetch_component_uuids(lcsc_id)
+            except SSLCertError:
+                self._handle_ssl_cert_error()
+                uuids = fetch_component_uuids(lcsc_id)
+
+            # Last entry is the footprint
+            svg_string = uuids[-1].get("svg", "") if uuids else ""
+
+            if self._symbol_request_id == request_id and svg_string:
+                wx.CallAfter(self._set_footprint_svg, svg_string, request_id)
+        except Exception:
+            pass  # Footprint preview is best-effort
+
+    def _set_footprint_svg(self, svg_string, request_id):
+        """Main thread: render the footprint SVG and cache it."""
+        if self._symbol_request_id != request_id:
+            return
+        self._symbol_bitmap = render_svg_bitmap(svg_string)
+        if self._detail_page == 1:
+            if self._symbol_bitmap:
+                self.detail_image.SetBitmap(self._symbol_bitmap)
+            else:
+                self._show_no_footprint()
+
+    def _on_page_change(self, page):
+        """Handle page indicator click to switch between photo and symbol."""
+        self._detail_page = page
+        if page == 0:
+            if self._photo_bitmap:
+                self.detail_image.SetBitmap(self._photo_bitmap)
+            else:
+                self._show_no_image()
+        else:
+            if self._symbol_bitmap:
+                self.detail_image.SetBitmap(self._symbol_bitmap)
+            else:
+                self._show_no_footprint()
+
+    def _show_no_footprint(self):
+        """Show a placeholder with a simple footprint icon."""
+        bmp = wx.Bitmap(160, 160)
+        dc = wx.MemoryDC(bmp)
+        dc.SetBackground(wx.Brush(wx.Colour(248, 248, 248)))
+        dc.Clear()
+        # Draw simple pad outlines
+        dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), 1))
+        dc.SetBrush(wx.TRANSPARENT_BRUSH)
+        dc.DrawRoundedRectangle(55, 60, 20, 12, 3)
+        dc.DrawRoundedRectangle(55, 88, 20, 12, 3)
+        dc.DrawRoundedRectangle(85, 60, 20, 12, 3)
+        dc.DrawRoundedRectangle(85, 88, 20, 12, 3)
+        dc.SelectObject(wx.NullBitmap)
+        self.detail_image.SetBitmap(bmp)
+
     def _on_import(self, event):
-        raw_id = self.part_input.GetValue().strip()
-        if not raw_id:
-            self._log("Error: Enter an LCSC part number or double-click a search result")
+        if not self._selected_result:
+            self._log("Error: Select a search result first")
             return
 
-        try:
-            lcsc_id = validate_lcsc_id(raw_id)
-        except ValueError as e:
-            self._log(f"Error: {e}")
-            return
+        lcsc_id = self._selected_result["lcsc"]
 
         use_global = self.dest_global.GetValue()
         if use_global:
@@ -1234,18 +1425,17 @@ class JLCImportDialog(wx.Dialog):
                 self._log("Error: No board file open. Use Global destination or open a board.")
                 return
 
-        overwrite = self.overwrite_cb.GetValue()
-        self.import_btn.Disable()
+        self.detail_import_btn.Disable()
         self.status_text.Clear()
 
-        search_result = next((r for r in self._search_results if r["lcsc"] == lcsc_id), None)
+        search_result = self._selected_result
 
         try:
             try:
-                self._do_import(lcsc_id, lib_dir, overwrite, use_global, search_result)
+                self._do_import(lcsc_id, lib_dir, use_global, search_result)
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                self._do_import(lcsc_id, lib_dir, overwrite, use_global, search_result)
+                self._do_import(lcsc_id, lib_dir, use_global, search_result)
             self._persist_destination()
         except APIError as e:
             self._log(f"API Error: {e}")
@@ -1253,7 +1443,7 @@ class JLCImportDialog(wx.Dialog):
             self._log(f"Error: {e}")
             self._log(traceback.format_exc())
         finally:
-            self.import_btn.Enable()
+            self.detail_import_btn.Enable()
 
     def _get_kicad_version(self) -> int:
         """Return the selected KiCad version from the dropdown."""
@@ -1270,19 +1460,28 @@ class JLCImportDialog(wx.Dialog):
         finally:
             dlg.Destroy()
 
-    def _do_import(self, lcsc_id: str, lib_dir: str, overwrite: bool, use_global: bool, search_result=None):
+    def _confirm_overwrite(self, name, existing):
+        items = ", ".join(existing)
+        msg = f"'{name}' already exists ({items}). Overwrite?"
+        dlg = wx.MessageDialog(self, msg, "Confirm Overwrite", wx.YES_NO | wx.ICON_QUESTION)
+        result = dlg.ShowModal() == wx.ID_YES
+        dlg.Destroy()
+        return result
+
+    def _do_import(self, lcsc_id: str, lib_dir: str, use_global: bool, search_result=None):
         lib_name = self._lib_name
 
         result = import_component(
             lcsc_id,
             lib_dir,
             lib_name,
-            overwrite=overwrite,
+            overwrite=False,
             use_global=use_global,
             log=self._log,
             kicad_version=self._get_kicad_version(),
             search_result=search_result,
             confirm_metadata=self._confirm_metadata,
+            confirm_overwrite=self._confirm_overwrite,
         )
 
         if result is None:

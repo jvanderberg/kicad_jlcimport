@@ -6,6 +6,7 @@ from kicad_jlcimport.kicad.version import (
     DEFAULT_KICAD_VERSION,
     KICAD_V8,
     KICAD_V9,
+    KICAD_V10,
     SUPPORTED_VERSIONS,
     detect_kicad_version_from_pcbnew,
     footprint_format_version,
@@ -26,9 +27,13 @@ class TestConstants:
     def test_default_version(self):
         assert DEFAULT_KICAD_VERSION == KICAD_V9
 
+    def test_kicad_v10(self):
+        assert KICAD_V10 == 10
+
     def test_supported_versions(self):
         assert KICAD_V8 in SUPPORTED_VERSIONS
         assert KICAD_V9 in SUPPORTED_VERSIONS
+        assert KICAD_V10 in SUPPORTED_VERSIONS
 
 
 class TestValidateKicadVersion:
@@ -42,9 +47,12 @@ class TestValidateKicadVersion:
         with pytest.raises(ValueError, match="Unsupported KiCad version"):
             validate_kicad_version(7)
 
-    def test_invalid_version_10(self):
+    def test_valid_v10(self):
+        assert validate_kicad_version(10) == 10
+
+    def test_invalid_version_11(self):
         with pytest.raises(ValueError):
-            validate_kicad_version(10)
+            validate_kicad_version(11)
 
 
 class TestSymbolFormatVersion:
@@ -53,6 +61,9 @@ class TestSymbolFormatVersion:
 
     def test_v9(self):
         assert symbol_format_version(KICAD_V9) == "20241209"
+
+    def test_v10(self):
+        assert symbol_format_version(KICAD_V10) == "20241209"
 
     def test_default(self):
         assert symbol_format_version() == "20241209"
@@ -65,6 +76,9 @@ class TestFootprintFormatVersion:
     def test_v9(self):
         assert footprint_format_version(KICAD_V9) == "20241229"
 
+    def test_v10(self):
+        assert footprint_format_version(KICAD_V10) == "20241229"
+
     def test_default(self):
         assert footprint_format_version() == "20241229"
 
@@ -76,6 +90,9 @@ class TestHasGeneratorVersion:
     def test_v9(self):
         assert has_generator_version(KICAD_V9) is True
 
+    def test_v10(self):
+        assert has_generator_version(KICAD_V10) is True
+
 
 class TestHasEmbeddedFonts:
     def test_v8(self):
@@ -83,6 +100,9 @@ class TestHasEmbeddedFonts:
 
     def test_v9(self):
         assert has_embedded_fonts(KICAD_V9) is True
+
+    def test_v10(self):
+        assert has_embedded_fonts(KICAD_V10) is True
 
 
 class TestDetectKicadVersionFromPcbnew:
