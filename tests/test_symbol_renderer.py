@@ -13,7 +13,7 @@ class TestRenderSvgBitmap:
 
             if not wx.App.Get():
                 self._app = wx.App()
-        except Exception:
+        except (Exception, SystemExit):
             pytest.skip("wx not available")
 
     def test_valid_svg(self):
