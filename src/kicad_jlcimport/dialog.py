@@ -22,7 +22,7 @@ from .easyeda.api import (
     filter_by_type,
     search_components,
 )
-from .gui.symbol_renderer import render_svg_bitmap
+from .gui.symbol_renderer import has_svg_support, render_svg_bitmap
 from .importer import import_component
 from .kicad.library import get_global_lib_dir, load_config, save_config
 from .kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
@@ -126,6 +126,41 @@ class _CategoryPopup(wx.PopupWindow):
                 self._on_select()
 
 
+def _no_footprint_placeholder(size: int, svg_unsupported: bool) -> wx.Bitmap:
+    """Create a placeholder bitmap for the footprint preview.
+
+    When *svg_unsupported* is True, shows a message explaining the platform
+    limitation.  Otherwise draws simple pad outlines as a generic icon.
+    """
+    bmp = wx.Bitmap(size, size)
+    dc = wx.MemoryDC(bmp)
+    dc.SetBackground(wx.Brush(wx.Colour(248, 248, 248)))
+    dc.Clear()
+
+    if svg_unsupported:
+        dc.SetTextForeground(wx.Colour(140, 140, 140))
+        font = dc.GetFont()
+        font.SetPointSize(max(8, size // 18))
+        dc.SetFont(font)
+        msg = "Footprint preview\nnot supported\non this platform"
+        tw, th = dc.GetMultiLineTextExtent(msg)[:2]
+        dc.DrawText(msg, (size - tw) // 2, (size - th) // 2)
+    else:
+        # Simple pad-outline icon
+        dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), max(1, size // 80)))
+        dc.SetBrush(wx.TRANSPARENT_BRUSH)
+        cx, cy = size // 2, size // 2
+        pw, ph = max(20, size // 8), max(12, size // 14)
+        gap = max(16, size // 6)
+        dc.DrawRoundedRectangle(cx - gap // 2 - pw, cy - gap // 2 - ph, pw, ph, 3)
+        dc.DrawRoundedRectangle(cx - gap // 2 - pw, cy + gap // 2, pw, ph, 3)
+        dc.DrawRoundedRectangle(cx + gap // 2, cy - gap // 2 - ph, pw, ph, 3)
+        dc.DrawRoundedRectangle(cx + gap // 2, cy + gap // 2, pw, ph, 3)
+
+    dc.SelectObject(wx.NullBitmap)
+    return bmp
+
+
 class _PageIndicator(wx.Control):
     """Owner-drawn two-dot page indicator for switching between photo and symbol views."""
 
@@ -133,7 +168,11 @@ class _PageIndicator(wx.Control):
     DOT_GAP = 12
 
     def __init__(self, parent, on_page_change=None):
-        super().__init__(parent, size=(2 * self.DOT_GAP + 2 * self.DOT_RADIUS, 2 * self.DOT_RADIUS + 4))
+        super().__init__(
+            parent,
+            style=wx.BORDER_NONE,
+            size=(2 * self.DOT_GAP + 2 * self.DOT_RADIUS, 2 * self.DOT_RADIUS + 4),
+        )
         self._page = 0
         self._num_pages = 2
         self._on_page_change = on_page_change
@@ -308,7 +347,7 @@ class _SpinnerOverlay(wx.Window):
 
 class JLCImportDialog(wx.Dialog):
     def __init__(self, parent, board, project_dir=None, kicad_version=None, global_lib_dir=""):
-        super().__init__(parent, title="JLCImport", size=(700, 600), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        super().__init__(parent, title="JLCImport", size=(700, 640), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.board = board
         self._project_dir = project_dir  # Used when board is None (standalone mode)
         self._kicad_version = kicad_version or DEFAULT_KICAD_VERSION
@@ -555,6 +594,7 @@ class JLCImportDialog(wx.Dialog):
         # --- Status log ---
         self.status_text = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
         self.status_text.SetFont(wx.Font(9, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        self.status_text.SetMinSize((-1, 60))
         vbox.Add(self.status_text, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         panel.SetSizer(vbox)
@@ -1342,21 +1382,7 @@ class JLCImportDialog(wx.Dialog):
     def _show_gallery_no_footprint(self):
         """Show a footprint placeholder in gallery."""
         size = self._get_gallery_image_size()
-        bmp = wx.Bitmap(size, size)
-        dc = wx.MemoryDC(bmp)
-        dc.SetBackground(wx.Brush(wx.Colour(248, 248, 248)))
-        dc.Clear()
-        dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), 2))
-        dc.SetBrush(wx.TRANSPARENT_BRUSH)
-        cx, cy = size // 2, size // 2
-        pw, ph = max(20, size // 8), max(12, size // 14)
-        gap = max(16, size // 6)
-        dc.DrawRoundedRectangle(cx - gap // 2 - pw, cy - gap // 2 - ph, pw, ph, 3)
-        dc.DrawRoundedRectangle(cx - gap // 2 - pw, cy + gap // 2, pw, ph, 3)
-        dc.DrawRoundedRectangle(cx + gap // 2, cy - gap // 2 - ph, pw, ph, 3)
-        dc.DrawRoundedRectangle(cx + gap // 2, cy + gap // 2, pw, ph, 3)
-        dc.SelectObject(wx.NullBitmap)
-        self._gallery_image.SetBitmap(bmp)
+        self._gallery_image.SetBitmap(_no_footprint_placeholder(size, not has_svg_support()))
         self._gallery_panel.Layout()
 
     def _show_gallery_footprint(self):
@@ -1593,20 +1619,8 @@ class JLCImportDialog(wx.Dialog):
                 self._show_no_footprint()
 
     def _show_no_footprint(self):
-        """Show a placeholder with a simple footprint icon."""
-        bmp = wx.Bitmap(160, 160)
-        dc = wx.MemoryDC(bmp)
-        dc.SetBackground(wx.Brush(wx.Colour(248, 248, 248)))
-        dc.Clear()
-        # Draw simple pad outlines
-        dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), 1))
-        dc.SetBrush(wx.TRANSPARENT_BRUSH)
-        dc.DrawRoundedRectangle(55, 60, 20, 12, 3)
-        dc.DrawRoundedRectangle(55, 88, 20, 12, 3)
-        dc.DrawRoundedRectangle(85, 60, 20, 12, 3)
-        dc.DrawRoundedRectangle(85, 88, 20, 12, 3)
-        dc.SelectObject(wx.NullBitmap)
-        self.detail_image.SetBitmap(bmp)
+        """Show a placeholder when footprint preview is unavailable."""
+        self.detail_image.SetBitmap(_no_footprint_placeholder(160, not has_svg_support()))
 
     def _on_import(self, event):
         if not self._selected_result:

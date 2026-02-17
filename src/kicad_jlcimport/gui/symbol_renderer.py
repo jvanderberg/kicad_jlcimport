@@ -61,6 +61,11 @@ def _inline_layer_styles(svg: str) -> str:
     return re.sub(r"<[^/][^>]*layerid=[^>]*>", _add_style, svg)
 
 
+def has_svg_support() -> bool:
+    """Return True if the platform can render SVG via wx.svg."""
+    return _has_svg
+
+
 def render_svg_bitmap(svg_string: str, size: int = 160) -> wx.Bitmap | None:
     """Render an SVG string to a wx.Bitmap, scaled to fit *size* x *size*.
 
