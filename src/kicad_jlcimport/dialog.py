@@ -227,6 +227,85 @@ class MetadataEditDialog(wx.Dialog):
         }
 
 
+class _SpinnerOverlay(wx.Window):
+    """Transparent spinner overlay drawn on top of a parent widget.
+
+    Uses ``wx.TRANSPARENT_WINDOW`` so the parent content shows through
+    and only the spinning arc is visible.  Interaction is blocked by
+    disabling the parent widget separately.
+    """
+
+    _ARC_RADIUS = 18
+    _ARC_WIDTH = 3
+    _SEGMENTS = 30
+    _ARC_SWEEP = 300
+
+    def __init__(self, parent, target=None):
+        super().__init__(parent, style=wx.TRANSPARENT_WINDOW)
+        self._target = target
+        self._angle = 0
+        self._timer = wx.Timer(self)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_TIMER, self._on_tick, self._timer)
+        self.Hide()
+
+    def show(self):
+        """Show the spinner and start animation."""
+        self._sync_position()
+        self.Show()
+        self.Raise()
+        self._timer.Start(25)
+
+    def dismiss(self):
+        """Hide the spinner and stop animation."""
+        self._timer.Stop()
+        self.Hide()
+
+    def _sync_position(self):
+        if self._target:
+            rect = self._target.GetRect()
+            self.SetPosition(rect.GetPosition())
+            self.SetSize(rect.GetSize())
+        else:
+            self.SetPosition((0, 0))
+            self.SetSize(self.GetParent().GetClientSize())
+
+    def _on_tick(self, event):
+        self._angle = (self._angle + 8) % 360
+        self._sync_position()
+        self.Refresh()
+
+    def _on_paint(self, event):
+        import math
+
+        dc = wx.PaintDC(self)
+        w, h = self.GetClientSize()
+
+        # Derive spinner colours from the background luminance
+        bg = wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOW)
+        lum = (bg.Red() * 299 + bg.Green() * 587 + bg.Blue() * 114) // 1000
+        if lum < 128:
+            tail_grey, head_grey = 60, 200
+        else:
+            tail_grey, head_grey = 210, 80
+
+        cx, cy = w / 2.0, h / 2.0
+        r = self._ARC_RADIUS
+        for i in range(self._SEGMENTS):
+            frac = i / self._SEGMENTS
+            t1 = self._angle + frac * self._ARC_SWEEP
+            t2 = self._angle + (i + 1) / self._SEGMENTS * self._ARC_SWEEP
+            a1 = math.radians(t1)
+            a2 = math.radians(t2)
+            x1 = cx + r * math.cos(a1)
+            y1 = cy + r * math.sin(a1)
+            x2 = cx + r * math.cos(a2)
+            y2 = cy + r * math.sin(a2)
+            grey = int(tail_grey + (head_grey - tail_grey) * frac)
+            dc.SetPen(wx.Pen(wx.Colour(grey, grey, grey), self._ARC_WIDTH))
+            dc.DrawLine(int(x1), int(y1), int(x2), int(y2))
+
+
 class JLCImportDialog(wx.Dialog):
     def __init__(self, parent, board, project_dir=None, kicad_version=None, global_lib_dir=""):
         super().__init__(parent, title="JLCImport", size=(700, 600), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
@@ -239,10 +318,15 @@ class JLCImportDialog(wx.Dialog):
         self._search_request_id = 0
         self._image_request_id = 0
         self._gallery_request_id = 0
+        self._gallery_svg_request_id = 0
+        self._gallery_page = 0  # 0=photo, 1=footprint in gallery view
+        self._gallery_photo_bitmap = None
+        self._gallery_svg_string = None
         self._ssl_warning_shown = False
         self._selected_result = None
         self._photo_bitmap = None
         self._symbol_bitmap = None
+        self._symbol_svg_string = None  # raw SVG for re-rendering at gallery size
         self._detail_page = 0  # 0=photo, 1=symbol
         self._symbol_request_id = 0
         self._init_ui()
@@ -273,7 +357,7 @@ class JLCImportDialog(wx.Dialog):
 
         # Filter row
         hbox_filter = wx.BoxSizer(wx.HORIZONTAL)
-        hbox_filter.Add(wx.StaticText(panel, label="Type:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        hbox_filter.Add(wx.StaticText(panel, label="Type"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         self.type_both = wx.RadioButton(panel, label="Both", style=wx.RB_GROUP)
         self.type_basic = wx.RadioButton(panel, label="Basic")
         self.type_extended = wx.RadioButton(panel, label="Extended")
@@ -284,14 +368,14 @@ class JLCImportDialog(wx.Dialog):
         hbox_filter.Add(self.type_both, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         hbox_filter.Add(self.type_basic, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         hbox_filter.Add(self.type_extended, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 20)
-        hbox_filter.Add(wx.StaticText(panel, label="Min stock:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        hbox_filter.Add(wx.StaticText(panel, label="Min stock"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         self._min_stock_choices = [0, 1, 10, 100, 1000, 10000, 100000]
         self._min_stock_labels = ["Any", "1+", "10+", "100+", "1000+", "10000+", "100000+"]
         self.min_stock_choice = wx.Choice(panel, choices=self._min_stock_labels)
         self.min_stock_choice.SetSelection(1)  # Default to "1+" (in stock)
         self.min_stock_choice.Bind(wx.EVT_CHOICE, self._on_min_stock_change)
         hbox_filter.Add(self.min_stock_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 20)
-        hbox_filter.Add(wx.StaticText(panel, label="Package:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        hbox_filter.Add(wx.StaticText(panel, label="Package"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         self.package_choice = wx.Choice(panel, choices=["All"])
         self.package_choice.SetSelection(0)
         self.package_choice.Bind(wx.EVT_CHOICE, self._on_filter_change)
@@ -490,16 +574,21 @@ class JLCImportDialog(wx.Dialog):
         top_sizer.Add(self._gallery_back, 0)
         gbox.Add(top_sizer, 0, wx.LEFT | wx.TOP, 5)
 
-        # Navigation row: [<] image [>]
+        # Navigation row: [<] image+dots [>]
         nav_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._gallery_prev = wx.Button(self._gallery_panel, label="\u25c0", size=(40, -1))
         self._gallery_prev.Bind(wx.EVT_BUTTON, self._on_gallery_prev)
         nav_sizer.Add(self._gallery_prev, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
 
+        # Vertical stack: image bitmap + page dots (keeps dots tight to image)
+        img_stack = wx.BoxSizer(wx.VERTICAL)
         self._gallery_image = wx.StaticBitmap(self._gallery_panel)
         self._gallery_image.SetCursor(wx.Cursor(wx.CURSOR_HAND))
         self._gallery_image.Bind(wx.EVT_LEFT_DOWN, self._on_gallery_close)
-        nav_sizer.Add(self._gallery_image, 1, wx.EXPAND)
+        img_stack.Add(self._gallery_image, 0, wx.ALIGN_CENTER_HORIZONTAL)
+        self._gallery_page_indicator = _PageIndicator(self._gallery_panel, on_page_change=self._on_gallery_page_change)
+        img_stack.Add(self._gallery_page_indicator, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP, 2)
+        nav_sizer.Add(img_stack, 1, wx.ALIGN_CENTER_VERTICAL)
 
         self._gallery_next = wx.Button(self._gallery_panel, label="\u25b6", size=(40, -1))
         self._gallery_next.Bind(wx.EVT_BUTTON, self._on_gallery_next)
@@ -525,6 +614,10 @@ class JLCImportDialog(wx.Dialog):
 
         # Escape key to close gallery
         self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+
+        # Spinner overlays (children of the main panel, transparent background)
+        self._busy_overlay = _SpinnerOverlay(panel)
+        self._search_overlay = _SpinnerOverlay(panel, target=self.results_list)
 
     def _get_project_dir(self) -> str:
         if self.board:
@@ -706,6 +799,7 @@ class JLCImportDialog(wx.Dialog):
         self._search_request_id += 1
         request_id = self._search_request_id
         self._start_search_pulse()
+        self._search_overlay.show()
         threading.Thread(
             target=self._fetch_search_results,
             args=(keyword, request_id),
@@ -752,6 +846,7 @@ class JLCImportDialog(wx.Dialog):
         if request_id != self._search_request_id:
             return
         self._stop_search_pulse()
+        self._search_overlay.dismiss()
 
         results = result["results"]
         results.sort(key=lambda r: r["stock"] or 0, reverse=True)
@@ -771,6 +866,7 @@ class JLCImportDialog(wx.Dialog):
         if request_id != self._search_request_id:
             return
         self._stop_search_pulse()
+        self._search_overlay.dismiss()
         self._log(msg)
 
     def _on_col_click(self, event):
@@ -935,6 +1031,7 @@ class JLCImportDialog(wx.Dialog):
         self._symbol_request_id += 1  # cancel any in-flight symbol fetch
         self._photo_bitmap = None
         self._symbol_bitmap = None
+        self._symbol_svg_string = None
         self._detail_page = 0
         self._page_indicator.set_page(0)
         self.detail_lcsc.SetLabel("")
@@ -964,6 +1061,7 @@ class JLCImportDialog(wx.Dialog):
         # Clear cached bitmaps but keep current page selection
         self._photo_bitmap = None
         self._symbol_bitmap = None
+        self._symbol_svg_string = None
 
         # Populate detail fields
         self.detail_lcsc.SetLabel(f"{r['lcsc']}  ({r['type']})")
@@ -1095,6 +1193,9 @@ class JLCImportDialog(wx.Dialog):
         if sel < 0:
             sel = 0
         self._gallery_index = sel
+        # Transfer current page (photo/footprint) to gallery
+        self._gallery_page = self._detail_page
+        self._gallery_page_indicator.set_page(self._gallery_page)
         self._enter_gallery()
 
     def _enter_gallery(self):
@@ -1137,18 +1238,33 @@ class JLCImportDialog(wx.Dialog):
         self._gallery_prev.Enable(idx > 0)
         self._gallery_next.Enable(idx < len(self._search_results) - 1)
 
+        # Reset gallery caches
+        self._gallery_photo_bitmap = None
+        self._gallery_svg_string = None
+
         # Show skeleton while loading
         self._show_gallery_skeleton()
 
-        # Fetch image
+        # Fetch photo image
         lcsc_url = r.get("url", "")
         self._gallery_request_id += 1
         request_id = self._gallery_request_id
         if lcsc_url:
             threading.Thread(target=self._fetch_gallery_image, args=(lcsc_url, request_id), daemon=True).start()
         else:
-            self._stop_gallery_skeleton()
-            self._show_gallery_no_image()
+            if self._gallery_page == 0:
+                self._stop_gallery_skeleton()
+                self._show_gallery_no_image()
+
+        # Fetch footprint SVG
+        lcsc_id = r["lcsc"]
+        self._gallery_svg_request_id += 1
+        svg_request_id = self._gallery_svg_request_id
+        threading.Thread(
+            target=self._fetch_gallery_svg,
+            args=(lcsc_id, svg_request_id),
+            daemon=True,
+        ).start()
 
     def _show_gallery_skeleton(self):
         """Show an animated skeleton placeholder in gallery."""
@@ -1223,6 +1339,77 @@ class JLCImportDialog(wx.Dialog):
         self._gallery_image.SetBitmap(bmp)
         self._gallery_panel.Layout()
 
+    def _show_gallery_no_footprint(self):
+        """Show a footprint placeholder in gallery."""
+        size = self._get_gallery_image_size()
+        bmp = wx.Bitmap(size, size)
+        dc = wx.MemoryDC(bmp)
+        dc.SetBackground(wx.Brush(wx.Colour(248, 248, 248)))
+        dc.Clear()
+        dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), 2))
+        dc.SetBrush(wx.TRANSPARENT_BRUSH)
+        cx, cy = size // 2, size // 2
+        pw, ph = max(20, size // 8), max(12, size // 14)
+        gap = max(16, size // 6)
+        dc.DrawRoundedRectangle(cx - gap // 2 - pw, cy - gap // 2 - ph, pw, ph, 3)
+        dc.DrawRoundedRectangle(cx - gap // 2 - pw, cy + gap // 2, pw, ph, 3)
+        dc.DrawRoundedRectangle(cx + gap // 2, cy - gap // 2 - ph, pw, ph, 3)
+        dc.DrawRoundedRectangle(cx + gap // 2, cy + gap // 2, pw, ph, 3)
+        dc.SelectObject(wx.NullBitmap)
+        self._gallery_image.SetBitmap(bmp)
+        self._gallery_panel.Layout()
+
+    def _show_gallery_footprint(self):
+        """Render and display footprint SVG at gallery size."""
+        if not self._gallery_svg_string:
+            self._show_gallery_no_footprint()
+            return
+        size = self._get_gallery_image_size()
+        bmp = render_svg_bitmap(self._gallery_svg_string, size=size)
+        if bmp:
+            self._gallery_image.SetBitmap(bmp)
+            self._gallery_panel.Layout()
+        else:
+            self._show_gallery_no_footprint()
+
+    def _fetch_gallery_svg(self, lcsc_id, request_id):
+        """Fetch footprint SVG in background for gallery view."""
+        try:
+            try:
+                uuids = fetch_component_uuids(lcsc_id)
+            except SSLCertError:
+                self._handle_ssl_cert_error()
+                uuids = fetch_component_uuids(lcsc_id)
+            svg_string = uuids[-1].get("svg", "") if uuids else ""
+            if self._gallery_svg_request_id == request_id and svg_string:
+                wx.CallAfter(self._set_gallery_svg, svg_string, request_id)
+        except Exception:
+            pass  # Footprint preview is best-effort
+
+    def _set_gallery_svg(self, svg_string, request_id):
+        """Set gallery footprint SVG on main thread."""
+        if self._gallery_svg_request_id != request_id:
+            return
+        self._gallery_svg_string = svg_string
+        if self._gallery_page == 1:
+            self._stop_gallery_skeleton()
+            self._show_gallery_footprint()
+
+    def _on_gallery_page_change(self, page):
+        """Handle gallery page indicator click to switch photo/footprint."""
+        self._gallery_page = page
+        if page == 0:
+            if self._gallery_photo_bitmap:
+                self._gallery_image.SetBitmap(self._gallery_photo_bitmap)
+                self._gallery_panel.Layout()
+            else:
+                self._show_gallery_no_image()
+        else:
+            if self._gallery_svg_string:
+                self._show_gallery_footprint()
+            else:
+                self._show_gallery_no_footprint()
+
     def _get_gallery_image_size(self):
         """Get the max square image size for the gallery."""
         w, h = self.GetClientSize()
@@ -1245,9 +1432,11 @@ class JLCImportDialog(wx.Dialog):
         """Set gallery image on main thread."""
         if self._gallery_request_id != request_id:
             return
-        self._stop_gallery_skeleton()
         if not img_data:
-            self._show_gallery_no_image()
+            self._gallery_photo_bitmap = None
+            if self._gallery_page == 0:
+                self._stop_gallery_skeleton()
+                self._show_gallery_no_image()
             return
         try:
             img = wx.Image(io.BytesIO(img_data), type=wx.BITMAP_TYPE_JPEG)
@@ -1257,13 +1446,22 @@ class JLCImportDialog(wx.Dialog):
                 size = self._get_gallery_image_size()
                 w, h = img.GetWidth(), img.GetHeight()
                 scale = min(size / w, size / h)
-                img = img.Scale(int(w * scale), int(h * scale), wx.IMAGE_QUALITY_HIGH)
-                self._gallery_image.SetBitmap(wx.Bitmap(img))
-                self._gallery_panel.Layout()
+                bmp = wx.Bitmap(img.Scale(int(w * scale), int(h * scale), wx.IMAGE_QUALITY_HIGH))
+                self._gallery_photo_bitmap = bmp
+                if self._gallery_page == 0:
+                    self._stop_gallery_skeleton()
+                    self._gallery_image.SetBitmap(bmp)
+                    self._gallery_panel.Layout()
             else:
-                self._show_gallery_no_image()
+                self._gallery_photo_bitmap = None
+                if self._gallery_page == 0:
+                    self._stop_gallery_skeleton()
+                    self._show_gallery_no_image()
         except Exception:
-            self._show_gallery_no_image()
+            self._gallery_photo_bitmap = None
+            if self._gallery_page == 0:
+                self._stop_gallery_skeleton()
+                self._show_gallery_no_image()
 
     def _on_gallery_prev(self, event):
         if self._gallery_index > 0:
@@ -1372,6 +1570,7 @@ class JLCImportDialog(wx.Dialog):
         """Main thread: render the footprint SVG and cache it."""
         if self._symbol_request_id != request_id:
             return
+        self._symbol_svg_string = svg_string
         self._symbol_bitmap = render_svg_bitmap(svg_string)
         if self._detail_page == 1:
             if self._symbol_bitmap:
@@ -1425,25 +1624,53 @@ class JLCImportDialog(wx.Dialog):
                 self._log("Error: No board file open. Use Global destination or open a board.")
                 return
 
-        self.detail_import_btn.Disable()
         self.status_text.Clear()
+        self._main_panel.Disable()
+        self._busy_overlay.show()
 
         search_result = self._selected_result
+        lib_name = self._lib_name
+        kicad_version = self._get_kicad_version()
 
+        threading.Thread(
+            target=self._import_worker,
+            args=(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version),
+            daemon=True,
+        ).start()
+
+    def _import_worker(self, lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version):
+        """Background thread: run the import."""
         try:
             try:
-                self._do_import(lcsc_id, lib_dir, use_global, search_result)
+                result = self._do_import(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version)
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                self._do_import(lcsc_id, lib_dir, use_global, search_result)
-            self._persist_destination()
+                result = self._do_import(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version)
+            wx.CallAfter(self._on_import_complete, result)
         except APIError as e:
-            self._log(f"API Error: {e}")
+            wx.CallAfter(self._on_import_error, f"API Error: {e}")
         except Exception as e:
-            self._log(f"Error: {e}")
-            self._log(traceback.format_exc())
-        finally:
-            self.detail_import_btn.Enable()
+            wx.CallAfter(self._on_import_error, f"Error: {e}\n{traceback.format_exc()}")
+
+    def _on_import_complete(self, result):
+        """Main thread: handle successful import completion."""
+        self._busy_overlay.dismiss()
+        self._main_panel.Enable()
+        if result is None:
+            self._log("Import cancelled.")
+        else:
+            title = result["title"]
+            name = result["name"]
+            self._log(f"\nDone! '{title}' imported as {self._lib_name}:{name}")
+            self._refresh_imported_ids()
+            self._repopulate_results()
+            self._persist_destination()
+
+    def _on_import_error(self, msg):
+        """Main thread: handle import error."""
+        self._busy_overlay.dismiss()
+        self._main_panel.Enable()
+        self._log(msg)
 
     def _get_kicad_version(self) -> int:
         """Return the selected KiCad version from the dropdown."""
@@ -1468,28 +1695,53 @@ class JLCImportDialog(wx.Dialog):
         dlg.Destroy()
         return result
 
-    def _do_import(self, lcsc_id: str, lib_dir: str, use_global: bool, search_result=None):
-        lib_name = self._lib_name
+    def _do_import(self, lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version):
+        """Run import_component on a background thread with thread-safe callbacks."""
 
-        result = import_component(
+        def log(msg):
+            wx.CallAfter(self._log, msg)
+
+        def confirm_metadata(metadata):
+            result = [None]
+            done = threading.Event()
+
+            def _ask():
+                self._main_panel.Enable()
+                self._busy_overlay.dismiss()
+                result[0] = self._confirm_metadata(metadata)
+                self._main_panel.Disable()
+                self._busy_overlay.show()
+                done.set()
+
+            wx.CallAfter(_ask)
+            done.wait()
+            return result[0]
+
+        def confirm_overwrite(name, existing):
+            result = [False]
+            done = threading.Event()
+
+            def _ask():
+                self._main_panel.Enable()
+                self._busy_overlay.dismiss()
+                result[0] = self._confirm_overwrite(name, existing)
+                self._main_panel.Disable()
+                self._busy_overlay.show()
+                done.set()
+
+            wx.CallAfter(_ask)
+            done.wait()
+            return result[0]
+
+        return import_component(
             lcsc_id,
             lib_dir,
             lib_name,
             overwrite=False,
             use_global=use_global,
-            log=self._log,
-            kicad_version=self._get_kicad_version(),
+            log=log,
+            kicad_version=kicad_version,
             search_result=search_result,
-            confirm_metadata=self._confirm_metadata,
-            confirm_overwrite=self._confirm_overwrite,
+            confirm_metadata=confirm_metadata,
+            confirm_overwrite=confirm_overwrite,
         )
-
-        if result is None:
-            self._log("Import cancelled.")
-            return
-
-        title = result["title"]
-        name = result["name"]
-        self._log(f"\nDone! '{title}' imported as {lib_name}:{name}")
-        self._refresh_imported_ids()
-        self._repopulate_results()
