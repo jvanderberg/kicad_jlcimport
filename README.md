@@ -228,6 +228,23 @@ The footprint conversion is generally quite good, though you may occasionally fi
 
 The plugin requires no additional Python packages — it uses only the standard library and `wx` (both bundled with KiCad). The standalone GUI requires wxPython (see [Standalone GUI](#standalone-gui) above). The TUI requires Python 3.10+ and additional packages (see [TUI](#tui) above).
 
+## Troubleshooting
+
+### No symbol preview on Windows (KiCad 9)
+
+KiCad 9.0.7 on Windows ships a broken `wx.svg._nanosvg` module, which prevents
+the plugin from rendering symbol preview images. To fix this:
+
+1. Close KiCad.
+2. Copy [`fixes/_nanosvg.pyd`](fixes/_nanosvg.pyd) to:
+   ```
+   C:\Program Files\KiCad\9.0\bin\Lib\site-packages\wx\svg\_nanosvg.pyd
+   ```
+   (You may need to run the copy as Administrator.)
+3. Restart KiCad.
+
+See [`fixes/README.md`](fixes/README.md) for more details.
+
 ## License
 
 See [LICENSE](LICENSE) for details.
