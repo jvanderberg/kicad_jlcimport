@@ -70,7 +70,7 @@ def render_svg_bitmap(svg_string: str, size: int = 160) -> wx.Bitmap | None:
     """Render an SVG string to a wx.Bitmap, scaled to fit *size* x *size*.
 
     Returns None if the SVG cannot be parsed or wx.svg is unavailable
-    (e.g. KiCad 9.x on Windows ships a broken wx.svg._nanosvg).
+    (e.g. KiCad 9.x on Windows ships without a compiled wx.svg._nanosvg).
     """
     if not _has_svg:
         return None

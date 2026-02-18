@@ -2,9 +2,9 @@
 
 ## `_nanosvg.pyd` — Windows SVG rendering fix
 
-KiCad 9.x on Windows ships a broken `wx.svg._nanosvg` module, which prevents
-the plugin from rendering symbol preview images. Replacing the file with this
-working copy restores SVG support.
+KiCad 9.x on Windows ships without a compiled `wx.svg._nanosvg` module, which
+prevents the plugin from rendering symbol preview images. Adding this
+pre-compiled file restores SVG support.
 
 ### Instructions
 
@@ -18,9 +18,8 @@ working copy restores SVG support.
 
    Replace `<version>` with your KiCad version (e.g. `9.0`).
 
-3. Copy `_nanosvg.pyd` from this directory into that folder, replacing the
-   existing file. You may need to run the copy as Administrator since
-   `Program Files` is protected.
+3. Copy `_nanosvg.pyd` from this directory into that folder. You may need to
+   run the copy as Administrator since `Program Files` is protected.
 4. Restart KiCad. Symbol previews in JLCImport should now work.
 
 ### Verification

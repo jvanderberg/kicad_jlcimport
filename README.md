@@ -232,12 +232,12 @@ The plugin requires no additional Python packages — it uses only the standard 
 
 ### No symbol preview on Windows (KiCad 9)
 
-KiCad 9.x on Windows ships a broken `wx.svg._nanosvg` module, which prevents
-the plugin from rendering symbol preview images. To fix this:
+KiCad 9.x on Windows ships without a compiled `wx.svg._nanosvg` module, which
+prevents the plugin from rendering symbol preview images. To fix this:
 
 1. Close KiCad.
-2. Copy [`fixes/_nanosvg.pyd`](fixes/_nanosvg.pyd) to your KiCad installation's
-   `wx\svg` folder, replacing the existing file:
+2. Copy [`fixes/_nanosvg.pyd`](fixes/_nanosvg.pyd) into your KiCad installation's
+   `wx\svg` folder:
    ```
    C:\Program Files\KiCad\<version>\bin\Lib\site-packages\wx\svg\_nanosvg.pyd
    ```
