@@ -197,12 +197,21 @@ class _PageIndicator(wx.Control):
         bg = self.GetParent().GetBackgroundColour()
         dc.SetBackground(wx.Brush(bg))
         dc.Clear()
+        # Selected dot should contrast strongly with background:
+        # dark dot on light bg, light dot on dark bg
+        lum = (bg.Red() * 299 + bg.Green() * 587 + bg.Blue() * 114) // 1000
+        if lum >= 128:
+            active_colour = wx.Colour(80, 80, 80)
+            inactive_colour = wx.Colour(200, 200, 200)
+        else:
+            active_colour = wx.Colour(200, 200, 200)
+            inactive_colour = wx.Colour(80, 80, 80)
         dc.SetPen(wx.TRANSPARENT_PEN)
         for i, (cx, cy) in enumerate(self._dot_positions()):
             if i == self._page:
-                dc.SetBrush(wx.Brush(wx.Colour(80, 80, 80)))
+                dc.SetBrush(wx.Brush(active_colour))
             else:
-                dc.SetBrush(wx.Brush(wx.Colour(200, 200, 200)))
+                dc.SetBrush(wx.Brush(inactive_colour))
             dc.DrawCircle(cx, cy, self.DOT_RADIUS)
 
     def _on_click(self, event):
@@ -361,6 +370,7 @@ class JLCImportDialog(wx.Dialog):
         self._gallery_page = 0  # 0=photo, 1=footprint in gallery view
         self._gallery_photo_bitmap = None
         self._gallery_svg_string = None
+
         self._ssl_warning_shown = False
         self._selected_result = None
         self._photo_bitmap = None
