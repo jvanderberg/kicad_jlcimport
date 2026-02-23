@@ -630,6 +630,43 @@ class TestSearchResultMerge:
         assert captured_kwargs["manufacturer"] == "UMW"
         assert captured_kwargs["description"] == "LDO Voltage Regulators SOT-89-3"
 
+    def test_datasheet_overrides_cpara_link(self, tmp_path, monkeypatch):
+        """search_result datasheet should replace c_para link."""
+        fake_comp = self._make_fake_comp()
+        # Simulate c_para link pointing to a Chinese product page
+        fake_comp["datasheet"] = "https://item.szlcsc.com/173241.html"
+        fake_fp = self._make_fake_footprint()
+
+        captured_kwargs = {}
+
+        def capture_write_symbol(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return '  (symbol "TestPart")\n'
+
+        fake_comp["symbol_data_list"] = [{"dataStr": {"shape": []}}]
+        fake_sym = EESymbol()
+        fake_sym.pins.append(
+            EEPin(number="1", name="VCC", x=0, y=0, rotation=0, length=2.54, electrical_type="power_in")
+        )
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: fake_sym)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
+        monkeypatch.setattr(importer, "write_symbol", capture_write_symbol)
+
+        correct_datasheet = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2401161647_JST.pdf"
+        importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            export_only=True,
+            log=lambda msg: None,
+            search_result={"brand": "JST", "description": "Connector", "datasheet": correct_datasheet},
+        )
+
+        assert captured_kwargs["datasheet"] == correct_datasheet
+
     def test_none_search_result_preserves_behavior(self, tmp_path, monkeypatch):
         """search_result=None should use existing c_para manufacturer."""
         fake_comp = self._make_fake_comp()

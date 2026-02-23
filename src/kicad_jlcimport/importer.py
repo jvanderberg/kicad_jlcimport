@@ -97,8 +97,8 @@ def import_component(
         export_only: If True, write raw .kicad_mod/.kicad_sym/3D files to a flat directory.
         log: Callback for status messages.
         kicad_version: Target KiCad major version (8 or 9).
-        search_result: Optional search result dict with ``brand`` and ``description``
-            fields from the JLCPCB search API.
+        search_result: Optional search result dict with ``brand``, ``description``,
+            and ``datasheet`` fields from the JLCPCB search API.
         confirm_metadata: Optional callback that receives a dict with ``description``,
             ``keywords``, and ``manufacturer`` keys.  Returns the (possibly edited)
             dict to use, or ``None`` to cancel the import.
@@ -121,6 +121,8 @@ def import_component(
             comp["manufacturer"] = search_result["brand"]
         if search_result.get("description"):
             comp["description"] = search_result["description"]
+        if search_result.get("datasheet"):
+            comp["datasheet"] = search_result["datasheet"]
 
     title = comp["title"]
     name = sanitize_name(title)
