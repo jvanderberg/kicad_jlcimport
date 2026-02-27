@@ -223,8 +223,13 @@ def _parse_pad(parts: List[str]) -> EEPad:
 
     # parts[10] = polygon_nodes (space-separated coords, empty for ELLIPSE)
     # parts[11] = rotation
+    # parts[13] = slot length (oval drill slot, in mils — full length, not radius)
     polygon_str = parts[10] if len(parts) > 10 else ""
     rotation = float(parts[11]) if len(parts) > 11 and parts[11] else 0.0
+    try:
+        slot_length_mil = float(parts[13]) if len(parts) > 13 and parts[13] else 0.0
+    except ValueError:
+        slot_length_mil = 0.0
 
     poly_points: List[float] = []
     if polygon_str and shape == "POLYGON":
@@ -248,6 +253,7 @@ def _parse_pad(parts: List[str]) -> EEPad:
         drill=mil_to_mm(drill * 2),  # Convert radius to diameter, then to mm
         rotation=rotation,
         polygon_points=poly_points,
+        slot_length=mil_to_mm(slot_length_mil),
     )
 
 

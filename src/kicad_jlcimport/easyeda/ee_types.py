@@ -13,9 +13,10 @@ class EEPad:
     height: float
     layer: str  # "1"=F.Cu, "2"=B.Cu, "11"=multilayer
     number: str
-    drill: float  # drill radius in mils (0 for SMD)
+    drill: float  # drill diameter in mm (0 for SMD)
     rotation: float = 0.0
     polygon_points: List[float] = field(default_factory=list)
+    slot_length: float = 0.0  # oval slot drill length in mm (0 for circular)
 
 
 @dataclass

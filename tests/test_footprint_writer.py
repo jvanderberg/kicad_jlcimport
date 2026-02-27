@@ -208,6 +208,57 @@ class TestWriteFootprint:
         assert '"B.Mask"' in result
         assert '"B.Paste"' in result
 
+    def test_oval_slot_drill_vertical(self):
+        """Vertical slot pad (height >= width) should emit drill oval W H."""
+        pad = EEPad(
+            shape="OVAL",
+            x=0,
+            y=0,
+            width=1.1,
+            height=2.0,
+            layer="11",
+            number="1",
+            drill=0.6,
+            slot_length=1.5,
+        )
+        fp = _make_footprint(pads=[pad])
+        result = write_footprint(fp, "Test")
+        assert "(drill oval 0.6 1.5)" in result
+
+    def test_oval_slot_drill_horizontal(self):
+        """Horizontal slot pad (width > height) should emit drill oval H W."""
+        pad = EEPad(
+            shape="OVAL",
+            x=0,
+            y=0,
+            width=2.0,
+            height=1.1,
+            layer="11",
+            number="1",
+            drill=0.6,
+            slot_length=1.5,
+        )
+        fp = _make_footprint(pads=[pad])
+        result = write_footprint(fp, "Test")
+        assert "(drill oval 1.5 0.6)" in result
+
+    def test_circular_drill_no_slot(self):
+        """Pad with slot_length=0 should emit plain circular drill."""
+        pad = EEPad(
+            shape="OVAL",
+            x=0,
+            y=0,
+            width=1.5,
+            height=1.5,
+            layer="11",
+            number="1",
+            drill=0.8,
+        )
+        fp = _make_footprint(pads=[pad])
+        result = write_footprint(fp, "Test")
+        assert "(drill 0.8)" in result
+        assert "oval" not in result.split("drill")[1].split(")")[0]
+
     def test_arc_sweep_zero_swaps_start_end(self):
         """When sweep==0, arc start/end must be swapped in KiCad output."""
         arc = EEArc(

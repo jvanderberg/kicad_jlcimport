@@ -54,6 +54,76 @@ class TestParsePad:
         pad = _parse_pad(parts)
         assert pad.shape == "POLYGON"
 
+    def test_parse_oval_pad_with_slot_length(self):
+        """OVAL pad with non-zero parts[13] should set slot_length."""
+        parts = [
+            "PAD",
+            "OVAL",
+            "100",
+            "200",
+            "4.3307",
+            "7.874",
+            "11",
+            "",
+            "13",
+            "1.1811",
+            "100 198 100 202",
+            "0",
+            "gge1",
+            "5.9055",
+        ]
+        pad = _parse_pad(parts)
+        assert pad.slot_length == mil_to_mm(5.9055)
+        assert pad.slot_length > 0
+
+    def test_parse_pad_no_slot_length(self):
+        """Pad without parts[13] should have slot_length=0."""
+        parts = ["PAD", "OVAL", "100", "200", "20", "10", "11", "", "2", "5", "", "0"]
+        pad = _parse_pad(parts)
+        assert pad.slot_length == 0.0
+
+    def test_parse_pad_slot_length_zero(self):
+        """Pad with parts[13]=0 should have slot_length=0."""
+        parts = [
+            "PAD",
+            "RECT",
+            "100",
+            "200",
+            "20",
+            "10",
+            "1",
+            "",
+            "1",
+            "0",
+            "",
+            "0",
+            "gge1",
+            "0",
+        ]
+        pad = _parse_pad(parts)
+        assert pad.slot_length == 0.0
+
+    def test_parse_pad_slot_length_non_numeric(self):
+        """Non-numeric parts[13] (e.g. an ID) should fall back to slot_length=0."""
+        parts = [
+            "PAD",
+            "OVAL",
+            "100",
+            "200",
+            "20",
+            "10",
+            "11",
+            "",
+            "2",
+            "5",
+            "",
+            "0",
+            "gge1",
+            "some_text",
+        ]
+        pad = _parse_pad(parts)
+        assert pad.slot_length == 0.0
+
     def test_parse_pad_layer_mapping(self):
         parts = ["PAD", "RECT", "100", "200", "20", "10", "2", "", "1", "0", "", "0"]
         pad = _parse_pad(parts)

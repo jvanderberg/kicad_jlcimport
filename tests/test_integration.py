@@ -12,6 +12,17 @@ from kicad_jlcimport.kicad.symbol_writer import write_symbol
 TESTDATA_DIR = os.path.join(os.path.dirname(__file__), "..", "testdata")
 
 
+def _extract_datastr(data: dict) -> dict:
+    """Extract the dataStr dict regardless of JSON wrapper format.
+
+    Some test data uses ``{"result": {"dataStr": ...}}`` while newer
+    downloads put ``dataStr`` at the top level.
+    """
+    if "result" in data and "dataStr" in data["result"]:
+        return data["result"]["dataStr"]
+    return data["dataStr"]
+
+
 def load_component_data(lcsc_id: str):
     """Load footprint and symbol data from testdata directory."""
     fp_path = os.path.join(TESTDATA_DIR, f"{lcsc_id}_footprint.json")
@@ -22,7 +33,7 @@ def load_component_data(lcsc_id: str):
     with open(sym_path) as f:
         sym_data = json.load(f)
 
-    return fp_data, sym_data
+    return _extract_datastr(fp_data), _extract_datastr(sym_data)
 
 
 class TestC427602:
@@ -31,15 +42,13 @@ class TestC427602:
     @pytest.fixture
     def component(self):
         fp_data, sym_data = load_component_data("C427602")
-        fp_result = fp_data["result"]["dataStr"]
-        sym_result = sym_data["result"]["dataStr"]
         return {
-            "fp_shapes": fp_result["shape"],
-            "fp_origin_x": fp_result["head"]["x"],
-            "fp_origin_y": fp_result["head"]["y"],
-            "sym_shapes": sym_result["shape"],
-            "sym_origin_x": sym_result["head"]["x"],
-            "sym_origin_y": sym_result["head"]["y"],
+            "fp_shapes": fp_data["shape"],
+            "fp_origin_x": fp_data["head"]["x"],
+            "fp_origin_y": fp_data["head"]["y"],
+            "sym_shapes": sym_data["shape"],
+            "sym_origin_x": sym_data["head"]["x"],
+            "sym_origin_y": sym_data["head"]["y"],
         }
 
     def test_footprint_pad_count(self, component):
@@ -133,15 +142,13 @@ class TestC2040:
     @pytest.fixture
     def component(self):
         fp_data, sym_data = load_component_data("C2040")
-        fp_result = fp_data["result"]["dataStr"]
-        sym_result = sym_data["result"]["dataStr"]
         return {
-            "fp_shapes": fp_result["shape"],
-            "fp_origin_x": fp_result["head"]["x"],
-            "fp_origin_y": fp_result["head"]["y"],
-            "sym_shapes": sym_result["shape"],
-            "sym_origin_x": sym_result["head"]["x"],
-            "sym_origin_y": sym_result["head"]["y"],
+            "fp_shapes": fp_data["shape"],
+            "fp_origin_x": fp_data["head"]["x"],
+            "fp_origin_y": fp_data["head"]["y"],
+            "sym_shapes": sym_data["shape"],
+            "sym_origin_x": sym_data["head"]["x"],
+            "sym_origin_y": sym_data["head"]["y"],
         }
 
     def test_footprint_pad_count(self, component):
@@ -219,15 +226,13 @@ class TestC87097:
     @pytest.fixture
     def component(self):
         fp_data, sym_data = load_component_data("C87097")
-        fp_result = fp_data["result"]["dataStr"]
-        sym_result = sym_data["result"]["dataStr"]
         return {
-            "fp_shapes": fp_result["shape"],
-            "fp_origin_x": fp_result["head"]["x"],
-            "fp_origin_y": fp_result["head"]["y"],
-            "sym_shapes": sym_result["shape"],
-            "sym_origin_x": sym_result["head"]["x"],
-            "sym_origin_y": sym_result["head"]["y"],
+            "fp_shapes": fp_data["shape"],
+            "fp_origin_x": fp_data["head"]["x"],
+            "fp_origin_y": fp_data["head"]["y"],
+            "sym_shapes": sym_data["shape"],
+            "sym_origin_x": sym_data["head"]["x"],
+            "sym_origin_y": sym_data["head"]["y"],
         }
 
     def test_footprint_pad_count(self, component):
@@ -292,15 +297,13 @@ class TestC5360901:
     @pytest.fixture
     def component(self):
         fp_data, sym_data = load_component_data("C5360901")
-        fp_result = fp_data["result"]["dataStr"]
-        sym_result = sym_data["result"]["dataStr"]
         return {
-            "fp_shapes": fp_result["shape"],
-            "fp_origin_x": fp_result["head"]["x"],
-            "fp_origin_y": fp_result["head"]["y"],
-            "sym_shapes": sym_result["shape"],
-            "sym_origin_x": sym_result["head"]["x"],
-            "sym_origin_y": sym_result["head"]["y"],
+            "fp_shapes": fp_data["shape"],
+            "fp_origin_x": fp_data["head"]["x"],
+            "fp_origin_y": fp_data["head"]["y"],
+            "sym_shapes": sym_data["shape"],
+            "sym_origin_x": sym_data["head"]["x"],
+            "sym_origin_y": sym_data["head"]["y"],
         }
 
     def test_footprint_parses(self, component):
@@ -371,6 +374,55 @@ class TestC5360901:
         assert '(name "9"' in output
 
 
+class TestC2765186:
+    """USB-C 16-pin connector — tests oval slot drill support.
+
+    This component has 4 OVAL mounting tab PADs with slot drill data
+    in parts[13]. Without slot parsing, these produce tiny circular
+    drills instead of proper oval slots.
+    """
+
+    @pytest.fixture
+    def component(self):
+        fp_data, sym_data = load_component_data("C2765186")
+        return {
+            "fp_shapes": fp_data["shape"],
+            "fp_origin_x": fp_data["head"]["x"],
+            "fp_origin_y": fp_data["head"]["y"],
+            "sym_shapes": sym_data["shape"],
+            "sym_origin_x": sym_data["head"]["x"],
+            "sym_origin_y": sym_data["head"]["y"],
+        }
+
+    def test_slot_pads_parsed(self, component):
+        """Should parse exactly 4 pads with non-zero slot_length."""
+        fp = parse_footprint_shapes(component["fp_shapes"], component["fp_origin_x"], component["fp_origin_y"])
+        slot_pads = [p for p in fp.pads if p.slot_length > 0]
+        assert len(slot_pads) == 4, f"Expected 4 slot pads, got {len(slot_pads)}"
+
+    def test_non_slot_pads_have_zero_slot_length(self, component):
+        """RECT signal pads must not get slot_length from parsing."""
+        fp = parse_footprint_shapes(component["fp_shapes"], component["fp_origin_x"], component["fp_origin_y"])
+        rect_pads = [p for p in fp.pads if p.shape == "RECT"]
+        assert len(rect_pads) > 0
+        for p in rect_pads:
+            assert p.slot_length == 0.0, f"RECT pad {p.number} has unexpected slot_length={p.slot_length}"
+
+    def test_oval_drill_count_in_output(self, component):
+        """Output must contain exactly 4 'drill oval' entries for the slot pads."""
+        fp = parse_footprint_shapes(component["fp_shapes"], component["fp_origin_x"], component["fp_origin_y"])
+        output = write_footprint(fp, "USB-C_Test", lcsc_id="C2765186")
+        assert output.count("drill oval") == 4, f"Expected 4 'drill oval', got {output.count('drill oval')}"
+
+    def test_footprint_writes_valid_kicad(self, component):
+        """Should generate valid KiCad footprint format."""
+        fp = parse_footprint_shapes(component["fp_shapes"], component["fp_origin_x"], component["fp_origin_y"])
+        output = write_footprint(fp, "USB-C_Test", lcsc_id="C2765186")
+        assert output.startswith('(footprint "USB-C_Test"')
+        assert "(pad " in output
+        assert 'property "LCSC" "C2765186"' in output
+
+
 class TestC558421:
     """TVS diode array (SOP-8) - tests PT path shapes (filled triangles).
 
@@ -386,15 +438,13 @@ class TestC558421:
     @pytest.fixture
     def component(self):
         fp_data, sym_data = load_component_data("C558421")
-        fp_result = fp_data["result"]["dataStr"]
-        sym_result = sym_data["result"]["dataStr"]
         return {
-            "fp_shapes": fp_result["shape"],
-            "fp_origin_x": fp_result["head"]["x"],
-            "fp_origin_y": fp_result["head"]["y"],
-            "sym_shapes": sym_result["shape"],
-            "sym_origin_x": sym_result["head"]["x"],
-            "sym_origin_y": sym_result["head"]["y"],
+            "fp_shapes": fp_data["shape"],
+            "fp_origin_x": fp_data["head"]["x"],
+            "fp_origin_y": fp_data["head"]["y"],
+            "sym_shapes": sym_data["shape"],
+            "sym_origin_x": sym_data["head"]["x"],
+            "sym_origin_y": sym_data["head"]["y"],
         }
 
     def test_raw_shape_counts(self, component):

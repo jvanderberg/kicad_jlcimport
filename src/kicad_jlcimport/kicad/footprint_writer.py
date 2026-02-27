@@ -145,7 +145,7 @@ def write_footprint(
             pts_str = " ".join(f"(xy {_fmt(pts[i])} {_fmt(pts[i + 1])})" for i in range(0, len(pts) - 1, 2))
             lines.append(f'  (pad "{pad.number}" {pad_type} {pad_shape} {custom_at} {size_str}')
             if pad.drill > 0:
-                lines.append(f"    (drill {_fmt(pad.drill)})")
+                lines.append(f"    {_drill_str(pad)}")
             lines.append(f"    (layers {layers_str})")
             lines.append("    (primitives")
             lines.append(f"      (gr_poly (pts {pts_str}) (width 0) (fill yes))")
@@ -153,7 +153,7 @@ def write_footprint(
         else:
             pad_line = f'  (pad "{pad.number}" {pad_type} {pad_shape} {at_str} {size_str}'
             if pad.drill > 0:
-                pad_line += f" (drill {_fmt(pad.drill)})"
+                pad_line += f" {_drill_str(pad)}"
             pad_line += f' (layers {layers_str}) (uuid "{_uuid()}"))'
             lines.append(pad_line)
 
@@ -182,6 +182,23 @@ def write_footprint(
     lines.append(")")
 
     return "\n".join(lines) + "\n"
+
+
+def _drill_str(pad) -> str:
+    """Return the KiCad drill specification string for a pad.
+
+    For oval slot drills (slot_length > 0), returns ``(drill oval W H)``
+    with the slot oriented to match the pad aspect ratio.
+    For circular drills, returns ``(drill D)``.
+    """
+    if pad.slot_length > 0:
+        if pad.height >= pad.width:
+            # Vertical slot: narrow dimension = drill, long dimension = slot_length
+            return f"(drill oval {_fmt(pad.drill)} {_fmt(pad.slot_length)})"
+        else:
+            # Horizontal slot: long dimension = slot_length, narrow dimension = drill
+            return f"(drill oval {_fmt(pad.slot_length)} {_fmt(pad.drill)})"
+    return f"(drill {_fmt(pad.drill)})"
 
 
 def _pad_type_info(pad):
