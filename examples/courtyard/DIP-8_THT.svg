@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="444" height="444" viewBox="-7.4 -7.4 14.8 14.8">
+  <rect x="-7.4" y="-7.4" width="14.8" height="14.8" fill="#1a1a2e"/>
+  <defs>
+    <mask id="clearance-mask">
+      <rect x="-4.9" y="-4.9" width="9.8" height="9.8" fill="white"/>
+      <rect x="-4.61" y="-4.61" width="9.22" height="9.22" fill="black"/>
+    </mask>
+  </defs>
+  <rect x="-4.9" y="-4.9" width="9.8" height="9.8" fill="#FF00FF" opacity="0.08" mask="url(#clearance-mask)"/>
+  <line x1="-3.2" y1="-4.4" x2="-0.5" y2="-4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="-0.5" y1="-4.4" x2="-0.5" y2="-3.6000000000000005" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="-0.5" y1="-3.6000000000000005" x2="0.5" y2="-3.6000000000000005" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="0.5" y1="-3.6000000000000005" x2="0.5" y2="-4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="0.5" y1="-4.4" x2="3.2" y2="-4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="3.2" y1="-4.4" x2="3.2" y2="4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="3.2" y1="4.4" x2="-3.2" y2="4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="-3.2" y1="4.4" x2="-3.2" y2="-4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <circle cx="-2.2" cy="-3.2" r="0.25" fill="#C4A000" stroke="#C4A000" stroke-width="0.1"/>
+  <rect x="-4.61" y="-4.61" width="1.6" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <circle cx="-3.81" cy="-3.81" r="0.4" fill="#2a2a2a"/>
+  <rect x="3.01" y="-4.61" width="1.6" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <circle cx="3.81" cy="-3.81" r="0.4" fill="#2a2a2a"/>
+  <rect x="-4.61" y="-2.0700000000000003" width="1.6" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <circle cx="-3.81" cy="-1.27" r="0.4" fill="#2a2a2a"/>
+  <rect x="3.01" y="-2.0700000000000003" width="1.6" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <circle cx="3.81" cy="-1.27" r="0.4" fill="#2a2a2a"/>
+  <rect x="-4.61" y="0.47" width="1.6" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <circle cx="-3.81" cy="1.27" r="0.4" fill="#2a2a2a"/>
+  <rect x="3.01" y="0.47" width="1.6" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <circle cx="3.81" cy="1.27" r="0.4" fill="#2a2a2a"/>
+  <rect x="-4.61" y="3.01" width="1.6" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <circle cx="-3.81" cy="3.81" r="0.4" fill="#2a2a2a"/>
+  <rect x="3.01" y="3.01" width="1.6" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <circle cx="3.81" cy="3.81" r="0.4" fill="#2a2a2a"/>
+  <rect x="-4.9" y="-4.9" width="9.8" height="9.8" fill="none" stroke="#FF00FF" stroke-width="0.08" stroke-dasharray="0.2,0.1"/>
+  <line x1="4.61" y1="-0.5" x2="4.61" y2="0.5" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="4.9" y1="-0.5" x2="4.9" y2="0.5" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="4.61" y1="0.0" x2="4.9" y2="0.0" stroke="#888888" stroke-width="0.04"/>
+  <polygon points="4.61,0.0 4.73,-0.06 4.73,0.06" fill="#888888"/>
+  <polygon points="4.9,0.0 4.78,-0.06 4.78,0.06" fill="#888888"/>
+  <text x="4.755000000000001" y="-0.15" text-anchor="middle" font-size="0.35" font-family="sans-serif" fill="#888888">≥0.25mm</text>
+  <line x1="-0.5" y1="4.61" x2="0.5" y2="4.61" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="-0.5" y1="4.9" x2="0.5" y2="4.9" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="0.0" y1="4.61" x2="0.0" y2="4.9" stroke="#888888" stroke-width="0.04"/>
+  <polygon points="0.0,4.61 -0.06,4.73 0.06,4.73" fill="#888888"/>
+  <polygon points="0.0,4.9 -0.06,4.78 0.06,4.78" fill="#888888"/>
+  <text x="0.3" y="4.855" font-size="0.35" font-family="sans-serif" fill="#888888">≥0.25mm</text>
+  <text x="0.0" y="-6.800000000000001" text-anchor="middle" font-size="0.5" font-family="sans-serif" fill="#cccccc" font-weight="bold">DIP-8_THT</text>
+  <rect x="-7.0" y="6.9" width="0.35" height="0.25" fill="#C87533" rx="0.03"/>
+  <text x="-6.5" y="7.1000000000000005" font-size="0.3" font-family="sans-serif" fill="#cccccc">Pads</text>
+  <rect x="-2.7714285714285714" y="6.9" width="0.35" height="0.25" fill="#C4A000" rx="0.03"/>
+  <text x="-2.2714285714285714" y="7.1000000000000005" font-size="0.3" font-family="sans-serif" fill="#cccccc">Silkscreen</text>
+  <rect x="1.4571428571428573" y="6.9" width="0.35" height="0.25" fill="#FF00FF" rx="0.03"/>
+  <text x="1.9571428571428573" y="7.1000000000000005" font-size="0.3" font-family="sans-serif" fill="#cccccc">Courtyard (F.CrtYd)</text>
+</svg>

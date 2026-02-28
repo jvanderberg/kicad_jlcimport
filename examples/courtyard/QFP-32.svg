@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="561" height="561" viewBox="-9.350000000000001 -9.350000000000001 18.700000000000003 18.700000000000003">
+  <rect x="-9.350000000000001" y="-9.350000000000001" width="18.700000000000003" height="18.700000000000003" fill="#1a1a2e"/>
+  <defs>
+    <mask id="clearance-mask">
+      <rect x="-6.8500000000000005" y="-6.8500000000000005" width="13.700000000000001" height="13.700000000000001" fill="white"/>
+      <rect x="-6.6" y="-6.6" width="13.2" height="13.2" fill="black"/>
+    </mask>
+  </defs>
+  <rect x="-6.8500000000000005" y="-6.8500000000000005" width="13.700000000000001" height="13.700000000000001" fill="#FF00FF" opacity="0.08" mask="url(#clearance-mask)"/>
+  <line x1="-4.4" y1="4.4" x2="4.4" y2="4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="4.4" y1="4.4" x2="4.4" y2="-4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="4.4" y1="-4.4" x2="-4.4" y2="-4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="-4.4" y1="-4.4" x2="-4.4" y2="4.4" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <circle cx="-3.5" cy="3.5" r="0.3" fill="#C4A000" stroke="#C4A000" stroke-width="0.15"/>
+  <polygon points="-4.0,4.8 -3.5,4.0 -3.0,4.8" fill="#C4A000" opacity="0.7"/>
+  <rect x="-3.0" y="5.0" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-2.1999999999999997" y="5.0" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-1.3999999999999997" y="5.0" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-0.5999999999999994" y="5.0" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="0.20000000000000034" y="5.0" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="1.0000000000000002" y="5.0" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="1.800000000000001" y="5.0" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="2.6000000000000005" y="5.0" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="5.0" y="2.5999999999999996" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="5.0" y="1.7999999999999998" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="5.0" y="0.9999999999999998" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="5.0" y="0.19999999999999946" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="5.0" y="-0.6000000000000003" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="5.0" y="-1.4000000000000001" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="5.0" y="-2.200000000000001" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="5.0" y="-3.000000000000001" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="2.5999999999999996" y="-6.6" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="1.7999999999999998" y="-6.6" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="0.9999999999999998" y="-6.6" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="0.19999999999999946" y="-6.6" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-0.6000000000000003" y="-6.6" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-1.4000000000000001" y="-6.6" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-2.200000000000001" y="-6.6" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-3.000000000000001" y="-6.6" width="0.4" height="1.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-6.6" y="-3.0" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-6.6" y="-2.1999999999999997" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-6.6" y="-1.3999999999999997" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-6.6" y="-0.5999999999999994" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-6.6" y="0.20000000000000034" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-6.6" y="1.0000000000000002" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-6.6" y="1.800000000000001" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-6.6" y="2.6000000000000005" width="1.6" height="0.4" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-6.8500000000000005" y="-6.8500000000000005" width="13.700000000000001" height="13.700000000000001" fill="none" stroke="#FF00FF" stroke-width="0.08" stroke-dasharray="0.2,0.1"/>
+  <line x1="6.6" y1="-0.5" x2="6.6" y2="0.5" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="6.8500000000000005" y1="-0.5" x2="6.8500000000000005" y2="0.5" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="6.6" y1="0.0" x2="6.8500000000000005" y2="0.0" stroke="#888888" stroke-width="0.04"/>
+  <polygon points="6.6,0.0 6.72,-0.06 6.72,0.06" fill="#888888"/>
+  <polygon points="6.8500000000000005,0.0 6.73,-0.06 6.73,0.06" fill="#888888"/>
+  <text x="6.725" y="-0.15" text-anchor="middle" font-size="0.35" font-family="sans-serif" fill="#888888">≥0.25mm</text>
+  <line x1="-0.5" y1="6.6" x2="0.5" y2="6.6" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="-0.5" y1="6.8500000000000005" x2="0.5" y2="6.8500000000000005" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="0.0" y1="6.6" x2="0.0" y2="6.8500000000000005" stroke="#888888" stroke-width="0.04"/>
+  <polygon points="0.0,6.6 -0.06,6.72 0.06,6.72" fill="#888888"/>
+  <polygon points="0.0,6.8500000000000005 -0.06,6.73 0.06,6.73" fill="#888888"/>
+  <text x="0.3" y="6.824999999999999" font-size="0.35" font-family="sans-serif" fill="#888888">≥0.25mm</text>
+  <text x="0.0" y="-8.750000000000002" text-anchor="middle" font-size="0.5" font-family="sans-serif" fill="#cccccc" font-weight="bold">QFP-32</text>
+  <rect x="-8.950000000000001" y="8.850000000000001" width="0.35" height="0.25" fill="#C87533" rx="0.03"/>
+  <text x="-8.450000000000001" y="9.05" font-size="0.3" font-family="sans-serif" fill="#cccccc">Pads</text>
+  <rect x="-3.6071428571428577" y="8.850000000000001" width="0.35" height="0.25" fill="#C4A000" rx="0.03"/>
+  <text x="-3.1071428571428577" y="9.05" font-size="0.3" font-family="sans-serif" fill="#cccccc">Silkscreen</text>
+  <rect x="1.7357142857142858" y="8.850000000000001" width="0.35" height="0.25" fill="#FF00FF" rx="0.03"/>
+  <text x="2.2357142857142858" y="9.05" font-size="0.3" font-family="sans-serif" fill="#cccccc">Courtyard (F.CrtYd)</text>
+</svg>

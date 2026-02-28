@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="261" height="258" viewBox="-4.35 -4.3 8.7 8.6">
+  <rect x="-4.35" y="-4.3" width="8.7" height="8.6" fill="#1a1a2e"/>
+  <defs>
+    <mask id="clearance-mask">
+      <rect x="-1.85" y="-1.8" width="3.7" height="3.6" fill="white"/>
+      <rect x="-1.6" y="-1.525" width="3.2" height="3.05" fill="black"/>
+    </mask>
+  </defs>
+  <rect x="-1.85" y="-1.8" width="3.7" height="3.6" fill="#FF00FF" opacity="0.08" mask="url(#clearance-mask)"/>
+  <line x1="-0.4" y1="-1.45" x2="0.4" y2="-1.45" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="0.4" y1="-1.45" x2="0.4" y2="1.45" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="0.4" y1="1.45" x2="-0.4" y2="1.45" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <line x1="-0.4" y1="1.45" x2="-0.4" y2="-1.45" stroke="#C4A000" stroke-width="0.15" stroke-linecap="round"/>
+  <circle cx="-0.15" cy="-1.1" r="0.15" fill="#C4A000" stroke="#C4A000" stroke-width="0.1"/>
+  <rect x="-1.6" y="-1.25" width="1.0" height="0.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-1.6" y="-0.3" width="1.0" height="0.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-1.6" y="0.6499999999999999" width="1.0" height="0.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="0.6000000000000001" y="-1.25" width="1.0" height="0.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="0.6000000000000001" y="0.6499999999999999" width="1.0" height="0.6" fill="#C87533" stroke="#8B4513" stroke-width="0.05" rx="0.05"/>
+  <rect x="-1.85" y="-1.8" width="3.7" height="3.6" fill="none" stroke="#FF00FF" stroke-width="0.08" stroke-dasharray="0.2,0.1"/>
+  <line x1="1.6" y1="-0.5" x2="1.6" y2="0.5" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="1.85" y1="-0.5" x2="1.85" y2="0.5" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="1.6" y1="0.0" x2="1.85" y2="0.0" stroke="#888888" stroke-width="0.04"/>
+  <polygon points="1.6,0.0 1.7200000000000002,-0.06 1.7200000000000002,0.06" fill="#888888"/>
+  <polygon points="1.85,0.0 1.73,-0.06 1.73,0.06" fill="#888888"/>
+  <text x="1.725" y="-0.15" text-anchor="middle" font-size="0.35" font-family="sans-serif" fill="#888888">≥0.25mm</text>
+  <line x1="-0.5" y1="1.525" x2="0.5" y2="1.525" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="-0.5" y1="1.8" x2="0.5" y2="1.8" stroke="#888888" stroke-width="0.04" stroke-dasharray="0.15,0.08"/>
+  <line x1="0.0" y1="1.525" x2="0.0" y2="1.8" stroke="#888888" stroke-width="0.04"/>
+  <polygon points="0.0,1.525 -0.06,1.645 0.06,1.645" fill="#888888"/>
+  <polygon points="0.0,1.8 -0.06,1.6800000000000002 0.06,1.6800000000000002" fill="#888888"/>
+  <text x="0.3" y="1.7625000000000002" font-size="0.35" font-family="sans-serif" fill="#888888">≥0.25mm</text>
+  <text x="0.0" y="-3.6999999999999997" text-anchor="middle" font-size="0.5" font-family="sans-serif" fill="#cccccc" font-weight="bold">SOT-23-5</text>
+  <rect x="-3.9499999999999997" y="3.8" width="0.35" height="0.25" fill="#C87533" rx="0.03"/>
+  <text x="-3.4499999999999997" y="4.0" font-size="0.3" font-family="sans-serif" fill="#cccccc">Pads</text>
+  <rect x="-1.4642857142857144" y="3.8" width="0.35" height="0.25" fill="#C4A000" rx="0.03"/>
+  <text x="-0.9642857142857144" y="4.0" font-size="0.3" font-family="sans-serif" fill="#cccccc">Silkscreen</text>
+  <rect x="1.021428571428571" y="3.8" width="0.35" height="0.25" fill="#FF00FF" rx="0.03"/>
+  <text x="1.521428571428571" y="4.0" font-size="0.3" font-family="sans-serif" fill="#cccccc">Courtyard (F.CrtYd)</text>
+</svg>
