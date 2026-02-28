@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="452" height="516" viewBox="0 0 452 516">
+  <rect width="100%" height="100%" fill="#1a1a2e"/>
+  <text x="226" y="15" text-anchor="middle" font-size="12" font-family="sans-serif" fill="white">DIP-8</text>
+    <line x1="126.00" y1="54.00" x2="326.00" y2="54.00" stroke="#C4A000" stroke-width="6.00"/>
+  <line x1="326.00" y1="54.00" x2="326.00" y2="462.00" stroke="#C4A000" stroke-width="6.00"/>
+  <line x1="326.00" y1="462.00" x2="126.00" y2="462.00" stroke="#C4A000" stroke-width="6.00"/>
+  <line x1="126.00" y1="462.00" x2="126.00" y2="54.00" stroke="#C4A000" stroke-width="6.00"/>
+  <line x1="30.00" y1="40.00" x2="422.00" y2="40.00" stroke="#C0C0C0" stroke-width="2.00"/>
+  <line x1="422.00" y1="40.00" x2="422.00" y2="476.00" stroke="#C0C0C0" stroke-width="2.00"/>
+  <line x1="422.00" y1="476.00" x2="30.00" y2="476.00" stroke="#C0C0C0" stroke-width="2.00"/>
+  <line x1="30.00" y1="476.00" x2="30.00" y2="40.00" stroke="#C0C0C0" stroke-width="2.00"/>
+  <ellipse cx="73.60" cy="105.60" rx="32.00" ry="32.00" fill="#C87533" stroke="#8B4513" stroke-width="1"/>
+  <ellipse cx="378.40" cy="105.60" rx="32.00" ry="32.00" fill="#C87533" stroke="#8B4513" stroke-width="1"/>
+  <ellipse cx="73.60" cy="207.20" rx="32.00" ry="32.00" fill="#C87533" stroke="#8B4513" stroke-width="1"/>
+  <ellipse cx="378.40" cy="207.20" rx="32.00" ry="32.00" fill="#C87533" stroke="#8B4513" stroke-width="1"/>
+  <ellipse cx="73.60" cy="308.80" rx="32.00" ry="32.00" fill="#C87533" stroke="#8B4513" stroke-width="1"/>
+  <ellipse cx="378.40" cy="308.80" rx="32.00" ry="32.00" fill="#C87533" stroke="#8B4513" stroke-width="1"/>
+  <ellipse cx="73.60" cy="410.40" rx="32.00" ry="32.00" fill="#C87533" stroke="#8B4513" stroke-width="1"/>
+  <ellipse cx="378.40" cy="410.40" rx="32.00" ry="32.00" fill="#C87533" stroke="#8B4513" stroke-width="1"/>
+  <circle cx="73.60" cy="105.60" r="16.00" fill="#FFFFFF" stroke="#333333" stroke-width="1"/>
+  <circle cx="378.40" cy="105.60" r="16.00" fill="#FFFFFF" stroke="#333333" stroke-width="1"/>
+  <circle cx="73.60" cy="207.20" r="16.00" fill="#FFFFFF" stroke="#333333" stroke-width="1"/>
+  <circle cx="378.40" cy="207.20" r="16.00" fill="#FFFFFF" stroke="#333333" stroke-width="1"/>
+  <circle cx="73.60" cy="308.80" r="16.00" fill="#FFFFFF" stroke="#333333" stroke-width="1"/>
+  <circle cx="378.40" cy="308.80" r="16.00" fill="#FFFFFF" stroke="#333333" stroke-width="1"/>
+  <circle cx="73.60" cy="410.40" r="16.00" fill="#FFFFFF" stroke="#333333" stroke-width="1"/>
+  <circle cx="378.40" cy="410.40" r="16.00" fill="#FFFFFF" stroke="#333333" stroke-width="1"/>
+  <text x="73.60" y="110.27" text-anchor="middle" font-size="14.0" font-family="monospace" fill="white" font-weight="bold">1</text>
+  <text x="378.40" y="110.27" text-anchor="middle" font-size="14.0" font-family="monospace" fill="white" font-weight="bold">8</text>
+  <text x="73.60" y="211.87" text-anchor="middle" font-size="14.0" font-family="monospace" fill="white" font-weight="bold">2</text>
+  <text x="378.40" y="211.87" text-anchor="middle" font-size="14.0" font-family="monospace" fill="white" font-weight="bold">7</text>
+  <text x="73.60" y="313.47" text-anchor="middle" font-size="14.0" font-family="monospace" fill="white" font-weight="bold">3</text>
+  <text x="378.40" y="313.47" text-anchor="middle" font-size="14.0" font-family="monospace" fill="white" font-weight="bold">6</text>
+  <text x="73.60" y="415.07" text-anchor="middle" font-size="14.0" font-family="monospace" fill="white" font-weight="bold">4</text>
+  <text x="378.40" y="415.07" text-anchor="middle" font-size="14.0" font-family="monospace" fill="white" font-weight="bold">5</text>
+  <text x="226.00" y="14.00" text-anchor="middle" font-size="40.0" font-family="sans-serif" fill="#C4A000">REF**</text>
+  <text x="226.00" y="502.00" text-anchor="middle" font-size="40.0" font-family="sans-serif" fill="#808080">~</text>
+</svg>
