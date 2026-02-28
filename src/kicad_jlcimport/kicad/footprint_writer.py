@@ -10,8 +10,10 @@ from ._format import fmt_float as _fmt
 from ._format import gen_uuid as _uuid
 from .version import DEFAULT_KICAD_VERSION, footprint_format_version, has_embedded_fonts, has_generator_version
 
-# Courtyard generation constants (IPC-7351 / KiCad conventions)
-_COURTYARD_CLEARANCE = 0.25  # mm expansion beyond component geometry
+# Courtyard generation constants (IPC-7351 / KiCad KLC F5.3)
+_COURTYARD_CLEARANCE = 0.25  # mm clearance for standard parts
+_COURTYARD_CLEARANCE_SMALL = 0.15  # mm clearance for parts < 1.5mm in any dimension
+_COURTYARD_SMALL_THRESHOLD = 1.5  # mm — parts smaller than this use reduced clearance
 _COURTYARD_LINE_WIDTH = 0.05  # mm stroke width
 _COURTYARD_GRID = 0.05  # mm grid for rounding coordinates
 
@@ -300,8 +302,16 @@ def _compute_courtyard(footprint: EEFootprint) -> Optional[Tuple[float, float, f
     if not xs or not ys:
         return None
 
+    raw_w = max(xs) - min(xs)
+    raw_h = max(ys) - min(ys)
+
+    # KLC F5.3: use reduced clearance for parts smaller than 1.5mm
+    if raw_w < _COURTYARD_SMALL_THRESHOLD or raw_h < _COURTYARD_SMALL_THRESHOLD:
+        c = _COURTYARD_CLEARANCE_SMALL
+    else:
+        c = _COURTYARD_CLEARANCE
+
     g = _COURTYARD_GRID
-    c = _COURTYARD_CLEARANCE
     min_x = math.floor((min(xs) - c) / g) * g
     min_y = math.floor((min(ys) - c) / g) * g
     max_x = math.ceil((max(xs) + c) / g) * g

@@ -3,6 +3,7 @@
 from kicad_jlcimport.easyeda.ee_types import EEArc, EECircle, EEFootprint, EEHole, EEPad, EESolidRegion, EETrack
 from kicad_jlcimport.kicad.footprint_writer import (
     _COURTYARD_CLEARANCE,
+    _COURTYARD_CLEARANCE_SMALL,
     _COURTYARD_GRID,
     _arc_bounds,
     _compute_courtyard,
@@ -351,12 +352,11 @@ class TestCourtyard:
         bbox = _compute_courtyard(fp)
         assert bbox is not None
         min_x, min_y, max_x, max_y = bbox
-        # Pad extents: x=[-1, 1], y=[-0.5, 0.5]
-        # With 0.25mm clearance: [-1.25, -0.75, 1.25, 0.75]
-        assert min_x <= -1.25
-        assert min_y <= -0.75
-        assert max_x >= 1.25
-        assert max_y >= 0.75
+        # Pad extents: x=[-1, 1], y=[-0.5, 0.5] — height 1.0mm < 1.5mm → small clearance
+        assert min_x <= -1.0 - _COURTYARD_CLEARANCE_SMALL
+        assert min_y <= -0.5 - _COURTYARD_CLEARANCE_SMALL
+        assert max_x >= 1.0 + _COURTYARD_CLEARANCE_SMALL
+        assert max_y >= 0.5 + _COURTYARD_CLEARANCE_SMALL
 
     def test_courtyard_from_tracks(self):
         """Courtyard should encompass track outlines including stroke width."""
@@ -366,8 +366,9 @@ class TestCourtyard:
         assert bbox is not None
         min_x, min_y, max_x, max_y = bbox
         # Track extents: x=[-3.1, 3.1], y=[-0.1, 0.1] (with 0.2/2 stroke)
-        assert min_x <= -3.1 - _COURTYARD_CLEARANCE
-        assert max_x >= 3.1 + _COURTYARD_CLEARANCE
+        # Height 0.2mm < 1.5mm → small clearance
+        assert min_x <= -3.1 - _COURTYARD_CLEARANCE_SMALL
+        assert max_x >= 3.1 + _COURTYARD_CLEARANCE_SMALL
 
     def test_courtyard_from_circles(self):
         circle = EECircle(cx=0, cy=0, radius=2.0, width=0.15, layer="F.SilkS")
@@ -409,6 +410,43 @@ class TestCourtyard:
         assert min_y <= -1.0 - _COURTYARD_CLEARANCE
         assert max_x >= 2.0 + _COURTYARD_CLEARANCE
         assert max_y >= 1.0 + _COURTYARD_CLEARANCE
+
+    def test_small_part_uses_reduced_clearance(self):
+        """Parts smaller than 1.5mm in any dimension get 0.15mm clearance (KLC F5.3)."""
+        # 1.0mm x 0.5mm pad — both dimensions under threshold
+        pad = EEPad(shape="RECT", x=0, y=0, width=1.0, height=0.5, layer="1", number="1", drill=0)
+        fp = _make_footprint(pads=[pad])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        # Should use 0.15mm clearance, not 0.25mm
+        assert min_x <= -0.5 - _COURTYARD_CLEARANCE_SMALL
+        assert max_x >= 0.5 + _COURTYARD_CLEARANCE_SMALL
+        # Should NOT expand as far as standard clearance would
+        assert min_x > -0.5 - _COURTYARD_CLEARANCE - _COURTYARD_GRID
+        assert max_x < 0.5 + _COURTYARD_CLEARANCE + _COURTYARD_GRID
+
+    def test_standard_part_uses_full_clearance(self):
+        """Parts >= 1.5mm in both dimensions get standard 0.25mm clearance."""
+        pad = EEPad(shape="RECT", x=0, y=0, width=4.0, height=3.0, layer="1", number="1", drill=0)
+        fp = _make_footprint(pads=[pad])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        assert min_x <= -2.0 - _COURTYARD_CLEARANCE
+        assert max_x >= 2.0 + _COURTYARD_CLEARANCE
+
+    def test_small_in_one_dimension_uses_reduced_clearance(self):
+        """If only one dimension is under 1.5mm, still use reduced clearance."""
+        # 3.0mm wide but only 1.0mm tall
+        pad = EEPad(shape="RECT", x=0, y=0, width=3.0, height=1.0, layer="1", number="1", drill=0)
+        fp = _make_footprint(pads=[pad])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        # Height is 1.0mm < 1.5mm threshold, so reduced clearance applies
+        assert min_y <= -0.5 - _COURTYARD_CLEARANCE_SMALL
+        assert min_y > -0.5 - _COURTYARD_CLEARANCE - _COURTYARD_GRID
 
     def test_write_footprint_emits_courtyard_lines(self):
         """write_footprint should emit exactly 4 fp_line segments on F.CrtYd."""
@@ -476,8 +514,9 @@ class TestCourtyard:
         assert bbox is not None
         min_x, min_y, max_x, max_y = bbox
         # Should span from pad at x=-5.5 to track at x=10.05
-        assert min_x <= -5.5 - _COURTYARD_CLEARANCE
-        assert max_x >= 10.05 + _COURTYARD_CLEARANCE
+        # Height is 1.0mm < 1.5mm → small clearance
+        assert min_x <= -5.5 - _COURTYARD_CLEARANCE_SMALL
+        assert max_x >= 10.05 + _COURTYARD_CLEARANCE_SMALL
 
     def test_courtyard_includes_regions(self):
         """Solid regions (e.g., pin-1 indicators) should contribute to courtyard."""
