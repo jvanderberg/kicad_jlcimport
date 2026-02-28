@@ -133,23 +133,17 @@ def write_footprint(
             f' (layer "{region.layer}") (uuid "{_uuid()}"))'
         )
 
-    # Courtyard — axis-aligned bounding rectangle around all geometry
+    # Courtyard — convex hull around pads and holes
     crtyd = _compute_courtyard(footprint)
     if crtyd is not None:
-        x1, y1, x2, y2 = crtyd
         w = _COURTYARD_LINE_WIDTH
-        layer = "F.CrtYd"
-        for sa, sb in [
-            ((x1, y1), (x2, y1)),
-            ((x2, y1), (x2, y2)),
-            ((x2, y2), (x1, y2)),
-            ((x1, y2), (x1, y1)),
-        ]:
-            lines.append(
-                f"  (fp_line (start {_fmt(sa[0])} {_fmt(sa[1])}) (end {_fmt(sb[0])} {_fmt(sb[1])})"
-                f" (stroke (width {_fmt(w)}) (type solid))"
-                f' (layer "{layer}") (uuid "{_uuid()}"))'
-            )
+        pts_str = " ".join(f"(xy {_fmt(x)} {_fmt(y)})" for x, y in crtyd)
+        lines.append(
+            f"  (fp_poly (pts {pts_str})"
+            f" (stroke (width {_fmt(w)}) (type solid))"
+            f" (fill none)"
+            f' (layer "F.CrtYd") (uuid "{_uuid()}"))'
+        )
 
     # Pads
     for pad in footprint.pads:
@@ -259,64 +253,136 @@ def _pad_type_info(pad):
     return pad_type, pad_shape, layers
 
 
-def _compute_courtyard(footprint: EEFootprint) -> Optional[Tuple[float, float, float, float]]:
-    """Compute a courtyard bounding rectangle from all footprint geometry.
+def _compute_courtyard(footprint: EEFootprint) -> Optional[List[Tuple[float, float]]]:
+    """Compute a courtyard convex-hull polygon from pads and holes.
 
-    Returns ``(min_x, min_y, max_x, max_y)`` expanded by
-    :data:`_COURTYARD_CLEARANCE` and snapped to the :data:`_COURTYARD_GRID`,
-    or *None* when the footprint contains no geometry.
+    Only copper features (pads) and physical board penetrations (holes)
+    contribute to the courtyard.  Silkscreen, fab-layer markings, and
+    solid regions are informational and do not affect keep-out spacing.
+
+    Returns polygon vertices (counter-clockwise) offset by the appropriate
+    clearance and snapped to the courtyard grid, or *None* when the footprint
+    has no pads or holes.
     """
-    xs: List[float] = []
-    ys: List[float] = []
+    points: List[Tuple[float, float]] = []
 
     for pad in footprint.pads:
-        hw, hh = pad.width / 2, pad.height / 2
-        xs.extend([pad.x - hw, pad.x + hw])
-        ys.extend([pad.y - hh, pad.y + hh])
-
-    for track in footprint.tracks:
-        hw = track.width / 2
-        for px, py in track.points:
-            xs.extend([px - hw, px + hw])
-            ys.extend([py - hw, py + hw])
-
-    for circle in footprint.circles:
-        r = circle.radius + circle.width / 2
-        xs.extend([circle.cx - r, circle.cx + r])
-        ys.extend([circle.cy - r, circle.cy + r])
-
-    for arc in footprint.arcs:
-        ax1, ay1, ax2, ay2 = _arc_bounds(arc)
-        xs.extend([ax1, ax2])
-        ys.extend([ay1, ay2])
-
-    for region in footprint.regions:
-        for px, py in region.points:
-            xs.append(px)
-            ys.append(py)
+        points.extend(_pad_corners(pad))
 
     for hole in footprint.holes:
-        xs.extend([hole.x - hole.radius, hole.x + hole.radius])
-        ys.extend([hole.y - hole.radius, hole.y + hole.radius])
+        # Approximate circle with 8 perimeter points (every 45°)
+        r = hole.radius
+        for k in range(8):
+            a = k * math.pi / 4
+            points.append((hole.x + r * math.cos(a), hole.y + r * math.sin(a)))
 
-    if not xs or not ys:
+    if not points:
         return None
 
+    hull = _convex_hull(points)
+    if len(hull) < 3:
+        return None
+
+    # Determine clearance based on bounding box of the hull
+    xs = [p[0] for p in hull]
+    ys = [p[1] for p in hull]
     raw_w = max(xs) - min(xs)
     raw_h = max(ys) - min(ys)
 
-    # KLC F5.3: use reduced clearance for parts smaller than 1.5mm
     if raw_w < _COURTYARD_SMALL_THRESHOLD or raw_h < _COURTYARD_SMALL_THRESHOLD:
-        c = _COURTYARD_CLEARANCE_SMALL
+        clearance = _COURTYARD_CLEARANCE_SMALL
     else:
-        c = _COURTYARD_CLEARANCE
+        clearance = _COURTYARD_CLEARANCE
 
+    offset = _offset_hull(hull, clearance)
+
+    # Snap each vertex outward (away from centroid) to the courtyard grid
+    cx = sum(x for x, y in offset) / len(offset)
+    cy = sum(y for x, y in offset) / len(offset)
     g = _COURTYARD_GRID
-    min_x = math.floor((min(xs) - c) / g) * g
-    min_y = math.floor((min(ys) - c) / g) * g
-    max_x = math.ceil((max(xs) + c) / g) * g
-    max_y = math.ceil((max(ys) + c) / g) * g
-    return (min_x, min_y, max_x, max_y)
+    snapped = []
+    for x, y in offset:
+        sx = math.floor(x / g) * g if x < cx else math.ceil(x / g) * g
+        sy = math.floor(y / g) * g if y < cy else math.ceil(y / g) * g
+        snapped.append((round(sx, 6), round(sy, 6)))
+    return snapped
+
+
+def _pad_corners(pad) -> List[Tuple[float, float]]:
+    """Return the 4 corners of a pad's bounding rectangle, with rotation."""
+    hw, hh = pad.width / 2, pad.height / 2
+    corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+    if pad.rotation == 0:
+        return [(pad.x + dx, pad.y + dy) for dx, dy in corners]
+    rad = math.radians(pad.rotation)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    return [(pad.x + dx * cos_a - dy * sin_a, pad.y + dx * sin_a + dy * cos_a) for dx, dy in corners]
+
+
+def _convex_hull(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """Compute convex hull using Andrew's monotone chain (CCW order)."""
+    pts = sorted(set(points))
+    if len(pts) <= 2:
+        return pts
+
+    lower: List[Tuple[float, float]] = []
+    for p in pts:
+        while len(lower) >= 2 and _cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+
+    upper: List[Tuple[float, float]] = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and _cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+
+    return lower[:-1] + upper[:-1]
+
+
+def _cross(o: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    """2D cross product of vectors OA and OB."""
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+
+def _offset_hull(hull: List[Tuple[float, float]], offset: float) -> List[Tuple[float, float]]:
+    """Offset a convex polygon outward by *offset* mm.
+
+    Each edge is shifted outward along its normal, and adjacent shifted
+    edges are intersected to produce the new vertices.  The hull must be
+    in counter-clockwise order with at least 3 vertices.
+    """
+    n = len(hull)
+
+    # Unit outward normals for each edge (CCW winding → outward is right-hand)
+    normals: List[Tuple[float, float]] = []
+    for i in range(n):
+        dx = hull[(i + 1) % n][0] - hull[i][0]
+        dy = hull[(i + 1) % n][1] - hull[i][1]
+        length = math.hypot(dx, dy)
+        if length < 1e-10:
+            normals.append((0.0, -1.0))
+        else:
+            normals.append((dy / length, -dx / length))
+
+    result: List[Tuple[float, float]] = []
+    for i in range(n):
+        n1 = normals[(i - 1) % n]  # normal of edge ending at vertex i
+        n2 = normals[i]  # normal of edge starting at vertex i
+
+        # Bisector of the two outward normals
+        bx = n1[0] + n2[0]
+        by = n1[1] + n2[1]
+        dot = n1[0] * bx + n1[1] * by  # = 1 + cos(angle between normals)
+
+        if abs(dot) < 1e-10:
+            # Nearly anti-parallel normals (shouldn't happen for valid convex hull)
+            result.append((hull[i][0] + offset * n2[0], hull[i][1] + offset * n2[1]))
+        else:
+            scale = offset / dot
+            result.append((hull[i][0] + scale * bx, hull[i][1] + scale * by))
+    return result
 
 
 def _arc_bounds(arc) -> Tuple[float, float, float, float]:

@@ -334,7 +334,9 @@ class TestC5360901:
         assert output.count("(pad ") == len(fp.pads)
         assert output.count("(fp_line") >= len([t for t in fp.tracks if len(t.points) > 1])
         assert output.count("(fp_circle") == len(fp.circles)
-        assert output.count("(fp_poly") == len(fp.regions)
+        # fp_poly count = regions + courtyard (1 if pads/holes exist, else 0)
+        has_courtyard = 1 if fp.pads or fp.holes else 0
+        assert output.count("(fp_poly") == len(fp.regions) + has_courtyard
 
     def test_roundtrip_symbol(self, component):
         """Parse and write should produce valid output with all elements."""
