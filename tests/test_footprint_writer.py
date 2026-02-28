@@ -1,7 +1,13 @@
 """Tests for footprint_writer.py - KiCad footprint generation."""
 
-from kicad_jlcimport.easyeda.ee_types import EEArc, EECircle, EEFootprint, EEHole, EEPad, EETrack
-from kicad_jlcimport.kicad.footprint_writer import write_footprint
+from kicad_jlcimport.easyeda.ee_types import EEArc, EECircle, EEFootprint, EEHole, EEPad, EESolidRegion, EETrack
+from kicad_jlcimport.kicad.footprint_writer import (
+    _COURTYARD_CLEARANCE,
+    _COURTYARD_GRID,
+    _arc_bounds,
+    _compute_courtyard,
+    write_footprint,
+)
 from kicad_jlcimport.kicad.version import KICAD_V8, KICAD_V9
 
 
@@ -134,8 +140,9 @@ class TestWriteFootprint:
         fp = _make_footprint(tracks=[track])
         result = write_footprint(fp, "Test")
         assert "(fp_line" in result
-        # Two segments for 3 points
-        assert result.count("(fp_line") == 2
+        # Two silkscreen segments for 3 points (courtyard adds 4 more on F.CrtYd)
+        silk_lines = [line for line in result.split("\n") if "(fp_line" in line and "F.SilkS" in line]
+        assert len(silk_lines) == 2
 
     def test_circle_generation(self):
         circle = EECircle(cx=0, cy=0, radius=2.0, width=0.15, layer="F.SilkS")
@@ -323,3 +330,161 @@ class TestWriteFootprintVersions:
         assert '(footprint "Test"' in result
         assert '(pad "1" smd rect' in result
         assert result.endswith(")\n")
+
+
+class TestCourtyard:
+    """Tests for courtyard generation from footprint geometry."""
+
+    def test_no_geometry_returns_none(self):
+        fp = _make_footprint()
+        assert _compute_courtyard(fp) is None
+
+    def test_no_courtyard_for_empty_footprint(self):
+        fp = _make_footprint()
+        result = write_footprint(fp, "Test")
+        assert "F.CrtYd" not in result
+
+    def test_courtyard_from_pads(self):
+        """Courtyard should encompass pads with clearance."""
+        pad = EEPad(shape="RECT", x=0, y=0, width=2.0, height=1.0, layer="1", number="1", drill=0)
+        fp = _make_footprint(pads=[pad])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        # Pad extents: x=[-1, 1], y=[-0.5, 0.5]
+        # With 0.25mm clearance: [-1.25, -0.75, 1.25, 0.75]
+        assert min_x <= -1.25
+        assert min_y <= -0.75
+        assert max_x >= 1.25
+        assert max_y >= 0.75
+
+    def test_courtyard_from_tracks(self):
+        """Courtyard should encompass track outlines including stroke width."""
+        track = EETrack(width=0.2, layer="F.SilkS", points=[(-3, 0), (3, 0)])
+        fp = _make_footprint(tracks=[track])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        # Track extents: x=[-3.1, 3.1], y=[-0.1, 0.1] (with 0.2/2 stroke)
+        assert min_x <= -3.1 - _COURTYARD_CLEARANCE
+        assert max_x >= 3.1 + _COURTYARD_CLEARANCE
+
+    def test_courtyard_from_circles(self):
+        circle = EECircle(cx=0, cy=0, radius=2.0, width=0.15, layer="F.SilkS")
+        fp = _make_footprint(circles=[circle])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        # Circle extents: radius+stroke/2 = 2.075
+        assert min_x <= -(2.075 + _COURTYARD_CLEARANCE)
+        assert max_x >= 2.075 + _COURTYARD_CLEARANCE
+
+    def test_courtyard_from_holes(self):
+        hole = EEHole(x=0, y=0, radius=1.5)
+        fp = _make_footprint(holes=[hole])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        assert min_x <= -(1.5 + _COURTYARD_CLEARANCE)
+        assert max_x >= 1.5 + _COURTYARD_CLEARANCE
+
+    def test_courtyard_grid_alignment(self):
+        """All courtyard coordinates must snap to the 0.05mm grid."""
+        pad = EEPad(shape="RECT", x=0.123, y=0.456, width=1.0, height=1.0, layer="1", number="1", drill=0)
+        fp = _make_footprint(pads=[pad])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        for val in bbox:
+            remainder = round(val / _COURTYARD_GRID, 6) % 1
+            assert remainder < 1e-6 or remainder > 1 - 1e-6, f"{val} not on {_COURTYARD_GRID}mm grid"
+
+    def test_courtyard_clearance_expands_outward(self):
+        """Courtyard min must be <= geometry_min - clearance, max >= geometry_max + clearance."""
+        pad = EEPad(shape="RECT", x=0, y=0, width=4.0, height=2.0, layer="1", number="1", drill=0)
+        fp = _make_footprint(pads=[pad])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        assert min_x <= -2.0 - _COURTYARD_CLEARANCE
+        assert min_y <= -1.0 - _COURTYARD_CLEARANCE
+        assert max_x >= 2.0 + _COURTYARD_CLEARANCE
+        assert max_y >= 1.0 + _COURTYARD_CLEARANCE
+
+    def test_write_footprint_emits_courtyard_lines(self):
+        """write_footprint should emit exactly 4 fp_line segments on F.CrtYd."""
+        pad = EEPad(shape="RECT", x=0, y=0, width=1, height=1, layer="1", number="1", drill=0)
+        fp = _make_footprint(pads=[pad])
+        result = write_footprint(fp, "Test")
+        crtyd_lines = [line for line in result.split("\n") if "F.CrtYd" in line]
+        assert len(crtyd_lines) == 4
+        for line in crtyd_lines:
+            assert "(fp_line" in line
+            assert f"(stroke (width {0.05})" in line
+
+    def test_courtyard_before_pads_in_output(self):
+        """Courtyard lines must appear before pad definitions."""
+        pad = EEPad(shape="RECT", x=0, y=0, width=1, height=1, layer="1", number="1", drill=0)
+        fp = _make_footprint(pads=[pad])
+        result = write_footprint(fp, "Test")
+        crtyd_pos = result.index("F.CrtYd")
+        pad_pos = result.index('(pad "1"')
+        assert crtyd_pos < pad_pos
+
+    def test_courtyard_from_arcs(self):
+        """Courtyard should encompass arc geometry."""
+        arc = EEArc(
+            width=0.2,
+            layer="F.SilkS",
+            start=(5.0, 0.0),
+            end=(-5.0, 0.0),
+            rx=5.0,
+            ry=5.0,
+            large_arc=0,
+            sweep=1,
+        )
+        fp = _make_footprint(arcs=[arc])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        # This arc goes from (5,0) to (-5,0) through the top (y<0 in screen coords
+        # or y>0 depending on sweep). With r=5, the arc should reach y=-5 or y=5.
+        assert max_x >= 5.0 + _COURTYARD_CLEARANCE
+        assert min_x <= -5.0 - _COURTYARD_CLEARANCE
+
+    def test_arc_bounds_degenerate(self):
+        """Degenerate arc (start==end) should still return valid bounds."""
+        arc = EEArc(
+            width=0.2,
+            layer="F.SilkS",
+            start=(1.0, 2.0),
+            end=(1.0, 2.0),
+            rx=5.0,
+            ry=5.0,
+            large_arc=0,
+            sweep=1,
+        )
+        bx1, by1, bx2, by2 = _arc_bounds(arc)
+        assert bx1 < bx2
+        assert by1 < by2
+
+    def test_courtyard_combines_pads_and_tracks(self):
+        """Courtyard should span the union of all geometry types."""
+        pad = EEPad(shape="RECT", x=-5, y=0, width=1, height=1, layer="1", number="1", drill=0)
+        track = EETrack(width=0.1, layer="F.SilkS", points=[(5, 0), (10, 0)])
+        fp = _make_footprint(pads=[pad], tracks=[track])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        # Should span from pad at x=-5.5 to track at x=10.05
+        assert min_x <= -5.5 - _COURTYARD_CLEARANCE
+        assert max_x >= 10.05 + _COURTYARD_CLEARANCE
+
+    def test_courtyard_includes_regions(self):
+        """Solid regions (e.g., pin-1 indicators) should contribute to courtyard."""
+        region = EESolidRegion(layer="F.SilkS", points=[(-1, -1), (1, -1), (1, 1), (-1, 1)], region_type="solid")
+        fp = EEFootprint(regions=[region])
+        bbox = _compute_courtyard(fp)
+        assert bbox is not None
+        min_x, min_y, max_x, max_y = bbox
+        assert min_x <= -1.0 - _COURTYARD_CLEARANCE
+        assert max_x >= 1.0 + _COURTYARD_CLEARANCE

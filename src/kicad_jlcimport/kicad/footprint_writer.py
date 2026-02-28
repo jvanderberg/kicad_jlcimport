@@ -1,6 +1,7 @@
 """Generate KiCad .kicad_mod footprint files (v8 and v9)."""
 
-from typing import Tuple
+import math
+from typing import List, Optional, Tuple
 
 from ..easyeda.ee_types import EEFootprint
 from ..easyeda.parser import compute_arc_midpoint
@@ -8,6 +9,11 @@ from ._format import escape_sexpr as _escape
 from ._format import fmt_float as _fmt
 from ._format import gen_uuid as _uuid
 from .version import DEFAULT_KICAD_VERSION, footprint_format_version, has_embedded_fonts, has_generator_version
+
+# Courtyard generation constants (IPC-7351 / KiCad conventions)
+_COURTYARD_CLEARANCE = 0.25  # mm expansion beyond component geometry
+_COURTYARD_LINE_WIDTH = 0.05  # mm stroke width
+_COURTYARD_GRID = 0.05  # mm grid for rounding coordinates
 
 
 def write_footprint(
@@ -125,6 +131,24 @@ def write_footprint(
             f' (layer "{region.layer}") (uuid "{_uuid()}"))'
         )
 
+    # Courtyard — axis-aligned bounding rectangle around all geometry
+    crtyd = _compute_courtyard(footprint)
+    if crtyd is not None:
+        x1, y1, x2, y2 = crtyd
+        w = _COURTYARD_LINE_WIDTH
+        layer = "F.CrtYd"
+        for sa, sb in [
+            ((x1, y1), (x2, y1)),
+            ((x2, y1), (x2, y2)),
+            ((x2, y2), (x1, y2)),
+            ((x1, y2), (x1, y1)),
+        ]:
+            lines.append(
+                f"  (fp_line (start {_fmt(sa[0])} {_fmt(sa[1])}) (end {_fmt(sb[0])} {_fmt(sb[1])})"
+                f" (stroke (width {_fmt(w)}) (type solid))"
+                f' (layer "{layer}") (uuid "{_uuid()}"))'
+            )
+
     # Pads
     for pad in footprint.pads:
         pad_type, pad_shape, layers = _pad_type_info(pad)
@@ -231,3 +255,104 @@ def _pad_type_info(pad):
         layers = ["F.Cu", "F.Mask", "F.Paste"]
 
     return pad_type, pad_shape, layers
+
+
+def _compute_courtyard(footprint: EEFootprint) -> Optional[Tuple[float, float, float, float]]:
+    """Compute a courtyard bounding rectangle from all footprint geometry.
+
+    Returns ``(min_x, min_y, max_x, max_y)`` expanded by
+    :data:`_COURTYARD_CLEARANCE` and snapped to the :data:`_COURTYARD_GRID`,
+    or *None* when the footprint contains no geometry.
+    """
+    xs: List[float] = []
+    ys: List[float] = []
+
+    for pad in footprint.pads:
+        hw, hh = pad.width / 2, pad.height / 2
+        xs.extend([pad.x - hw, pad.x + hw])
+        ys.extend([pad.y - hh, pad.y + hh])
+
+    for track in footprint.tracks:
+        hw = track.width / 2
+        for px, py in track.points:
+            xs.extend([px - hw, px + hw])
+            ys.extend([py - hw, py + hw])
+
+    for circle in footprint.circles:
+        r = circle.radius + circle.width / 2
+        xs.extend([circle.cx - r, circle.cx + r])
+        ys.extend([circle.cy - r, circle.cy + r])
+
+    for arc in footprint.arcs:
+        ax1, ay1, ax2, ay2 = _arc_bounds(arc)
+        xs.extend([ax1, ax2])
+        ys.extend([ay1, ay2])
+
+    for region in footprint.regions:
+        for px, py in region.points:
+            xs.append(px)
+            ys.append(py)
+
+    for hole in footprint.holes:
+        xs.extend([hole.x - hole.radius, hole.x + hole.radius])
+        ys.extend([hole.y - hole.radius, hole.y + hole.radius])
+
+    if not xs or not ys:
+        return None
+
+    g = _COURTYARD_GRID
+    c = _COURTYARD_CLEARANCE
+    min_x = math.floor((min(xs) - c) / g) * g
+    min_y = math.floor((min(ys) - c) / g) * g
+    max_x = math.ceil((max(xs) + c) / g) * g
+    max_y = math.ceil((max(ys) + c) / g) * g
+    return (min_x, min_y, max_x, max_y)
+
+
+def _arc_bounds(arc) -> Tuple[float, float, float, float]:
+    """Return ``(min_x, min_y, max_x, max_y)`` for an arc including stroke width."""
+    sx, sy = arc.start
+    ex, ey = arc.end
+    hw = arc.width / 2
+    r = (arc.rx + arc.ry) / 2
+
+    # Compute arc centre (same derivation as compute_arc_midpoint)
+    mx, my = (sx + ex) / 2, (sy + ey) / 2
+    dx, dy = ex - sx, ey - sy
+    chord = math.hypot(dx, dy)
+    if chord < 1e-10:
+        return (sx - hw, sy - hw, sx + hw, sy + hw)
+    if r < chord / 2:
+        r = chord / 2
+    h = math.sqrt(max(0, r * r - (chord / 2) ** 2))
+    px, py = -dy / chord, dx / chord
+    if arc.large_arc != arc.sweep:
+        cx, cy = mx + h * px, my + h * py
+    else:
+        cx, cy = mx - h * px, my - h * py
+
+    # Angles swept by the arc
+    a_start = math.atan2(sy - cy, sx - cx)
+    a_end = math.atan2(ey - cy, ex - cx)
+    if arc.sweep == 1:
+        if a_end <= a_start:
+            a_end += 2 * math.pi
+    else:
+        if a_end >= a_start:
+            a_end -= 2 * math.pi
+
+    # Start/end always contribute
+    pts_x = [sx, ex]
+    pts_y = [sy, ey]
+
+    # Check if the arc passes through any cardinal direction; if so the
+    # circle extremum at that angle must be included in the bounding box.
+    lo, hi = (a_start, a_end) if a_start <= a_end else (a_end, a_start)
+    for base in (0.0, math.pi / 2, math.pi, -math.pi / 2):
+        for k in range(-2, 3):
+            a = base + 2 * math.pi * k
+            if lo <= a <= hi:
+                pts_x.append(cx + r * math.cos(a))
+                pts_y.append(cy + r * math.sin(a))
+
+    return (min(pts_x) - hw, min(pts_y) - hw, max(pts_x) + hw, max(pts_y) + hw)
