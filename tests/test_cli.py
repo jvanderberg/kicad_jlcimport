@@ -1,5 +1,11 @@
 from types import SimpleNamespace
 
+from kicad_jlcimport.easyeda.ee_types import EEPin
+
+
+def _mock_pin(number="1"):
+    return EEPin(number=number, name="", x=0, y=0, rotation=0, length=2.54, electrical_type="unspecified")
+
 
 def test_cli_import_project_writes_kicad_library(tmp_path, monkeypatch, capsys):
     import kicad_jlcimport.cli as cli
@@ -29,7 +35,7 @@ def test_cli_import_project_writes_kicad_library(tmp_path, monkeypatch, capsys):
         model = None
 
     class _Symbol:
-        pins = [object(), object()]
+        pins = [_mock_pin("1"), _mock_pin("2")]
         rectangles = []
 
     monkeypatch.setattr(importer, "fetch_full_component", lambda _lcsc: fake_comp)
@@ -209,7 +215,7 @@ def test_cli_import_with_kicad_v8(tmp_path, monkeypatch, capsys):
         model = None
 
     class _Symbol:
-        pins = [object()]
+        pins = [_mock_pin()]
         rectangles = []
 
     monkeypatch.setattr(importer, "fetch_full_component", lambda _lcsc: fake_comp)

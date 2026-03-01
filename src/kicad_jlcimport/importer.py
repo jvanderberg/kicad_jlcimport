@@ -7,6 +7,7 @@ from typing import Callable
 
 from .easyeda.api import download_step, download_wrl_source, fetch_full_component
 from .easyeda.parser import parse_footprint_shapes, parse_symbol_shapes
+from .easyeda.pin_types import infer_pin_types
 from .kicad.footprint_writer import write_footprint
 from .kicad.library import (
     add_symbol_to_lib,
@@ -178,6 +179,7 @@ def import_component(
         sym_shapes = sym_data["dataStr"]["shape"]
         symbol = parse_symbol_shapes(sym_shapes, comp["sym_origin_x"], comp["sym_origin_y"])
         log(f"  {len(symbol.pins)} pins, {len(symbol.rectangles)} rects")
+        infer_pin_types(symbol, comp["prefix"])
 
         footprint_ref = f"{lib_name}:{name}"
         sym_content = write_symbol(
