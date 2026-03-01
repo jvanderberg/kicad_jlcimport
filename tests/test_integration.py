@@ -423,6 +423,65 @@ class TestC2765186:
         assert 'property "LCSC" "C2765186"' in output
 
 
+class TestC34376141:
+    """TOLL-8 MOSFET — tests custom polygon pad with anchor rect.
+
+    This component has a castellated polygon pad (pad 2) that requires
+    proper KiCad custom pad output with (options (clearance outline)
+    (anchor rect)) and a minimal anchor size to avoid filling in the
+    castellated notches.
+    """
+
+    @pytest.fixture
+    def component(self):
+        fp_data, sym_data = load_component_data("C34376141")
+        return {
+            "fp_shapes": fp_data["shape"],
+            "fp_origin_x": fp_data["head"]["x"],
+            "fp_origin_y": fp_data["head"]["y"],
+            "sym_shapes": sym_data["shape"],
+            "sym_origin_x": sym_data["head"]["x"],
+            "sym_origin_y": sym_data["head"]["y"],
+        }
+
+    def test_polygon_pad_parsed(self, component):
+        """Should parse exactly 1 POLYGON pad (pad 2)."""
+        fp = parse_footprint_shapes(component["fp_shapes"], component["fp_origin_x"], component["fp_origin_y"])
+        polygon_pads = [p for p in fp.pads if p.shape == "POLYGON"]
+        assert len(polygon_pads) == 1
+        assert polygon_pads[0].number == "2"
+        assert len(polygon_pads[0].polygon_points) > 0
+
+    def test_custom_pad_has_anchor_rect(self, component):
+        """Output must contain anchor rect options for the custom polygon pad."""
+        fp = parse_footprint_shapes(component["fp_shapes"], component["fp_origin_x"], component["fp_origin_y"])
+        output = write_footprint(fp, "TOLL8_Test", lcsc_id="C34376141")
+        assert "(options (clearance outline) (anchor rect))" in output
+
+    def test_custom_pad_has_minimal_anchor_size(self, component):
+        """Custom pad anchor size must be minimal, not the bounding box."""
+        fp = parse_footprint_shapes(component["fp_shapes"], component["fp_origin_x"], component["fp_origin_y"])
+        output = write_footprint(fp, "TOLL8_Test", lcsc_id="C34376141")
+        assert "smd custom" in output
+        # The anchor size must be 0.1x0.1, not the polygon bounding box
+        assert "(size 0.1 0.1)" in output
+
+    def test_custom_pad_has_primitives(self, component):
+        """Custom pad must have gr_poly primitives defining the castellated shape."""
+        fp = parse_footprint_shapes(component["fp_shapes"], component["fp_origin_x"], component["fp_origin_y"])
+        output = write_footprint(fp, "TOLL8_Test", lcsc_id="C34376141")
+        assert "(primitives" in output
+        assert "(gr_poly" in output
+        assert "(fill yes)" in output
+
+    def test_footprint_has_three_pads(self, component):
+        """Should have 3 pads: pin 1 (rect), pin 2 (polygon), pin 3 (rect exposed pad)."""
+        fp = parse_footprint_shapes(component["fp_shapes"], component["fp_origin_x"], component["fp_origin_y"])
+        assert len(fp.pads) == 3
+        output = write_footprint(fp, "TOLL8_Test", lcsc_id="C34376141")
+        assert output.count("(pad ") == 3
+
+
 class TestC558421:
     """TVS diode array (SOP-8) - tests PT path shapes (filled triangles).
 

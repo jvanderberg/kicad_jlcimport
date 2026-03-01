@@ -143,10 +143,14 @@ def write_footprint(
             custom_at = f"(at {_fmt(pad.x)} {_fmt(pad.y)})"
             pts = pad.polygon_points
             pts_str = " ".join(f"(xy {_fmt(pts[i])} {_fmt(pts[i + 1])})" for i in range(0, len(pts) - 1, 2))
-            lines.append(f'  (pad "{pad.number}" {pad_type} {pad_shape} {custom_at} {size_str}')
+            # Use a minimal anchor size — the actual shape is defined
+            # entirely by the gr_poly primitive.  A large anchor would fill
+            # in the castellated notches of the custom polygon.
+            lines.append(f'  (pad "{pad.number}" {pad_type} {pad_shape} {custom_at} (size 0.1 0.1)')
             if pad.drill > 0:
                 lines.append(f"    {_drill_str(pad)}")
             lines.append(f"    (layers {layers_str})")
+            lines.append("    (options (clearance outline) (anchor rect))")
             lines.append("    (primitives")
             lines.append(f"      (gr_poly (pts {pts_str}) (width 0) (fill yes))")
             lines.append(f'    ) (uuid "{_uuid()}"))')

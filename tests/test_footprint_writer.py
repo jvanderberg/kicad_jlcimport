@@ -87,9 +87,30 @@ class TestWriteFootprint:
         fp = _make_footprint(pads=[pad])
         result = write_footprint(fp, "Test")
         assert "smd custom" in result
+        assert "(options (clearance outline) (anchor rect))" in result
         assert "(primitives" in result
         assert "(gr_poly" in result
         assert "(fill yes)" in result
+
+    def test_polygon_pad_uses_minimal_anchor_size(self):
+        """Custom polygon pad anchor size should be minimal, not the bounding box."""
+        pad = EEPad(
+            shape="POLYGON",
+            x=0,
+            y=0,
+            width=8.0,
+            height=2.0,
+            layer="1",
+            number="2",
+            drill=0,
+            polygon_points=[-4.0, -1.0, 4.0, -1.0, 4.0, 1.0, -4.0, 1.0],
+        )
+        fp = _make_footprint(pads=[pad])
+        result = write_footprint(fp, "Test")
+        # The anchor size must be minimal (0.1x0.1), not the pad bounding box,
+        # otherwise the anchor rect fills in custom polygon notches.
+        assert "(size 0.1 0.1)" in result
+        assert "(size 8 2)" not in result
 
     def test_polygon_pad_omits_rotation(self):
         """Custom polygon pad should not include rotation in (at ...) to avoid double-rotation."""
