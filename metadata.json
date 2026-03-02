@@ -19,7 +19,7 @@
   },
   "versions": [
     {
-      "version": "1.2.4",
+      "version": "1.2.6",
       "status": "stable",
       "kicad_version": "8.0",
       "runtime": "swig"
