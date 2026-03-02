@@ -47,6 +47,10 @@ tools/                        # developer utilities (not part of the package)
 
 This project has two separate UIs: a wxPython dialog (`src/kicad_jlcimport/dialog.py`) and a Textual TUI (`src/kicad_jlcimport/tui/app.py`). When the user shows a screenshot or describes a UI issue, verify which UI it applies to before implementing changes. Native-looking widgets = wxPython dialog; terminal-rendered widgets = TUI.
 
+## GIT STASH
+
+NEVER run `git stash` without asking the user first. Stashing someone's in-progress work without permission is not acceptable — ask how they want to handle uncommitted changes.
+
 ## FIXING TEST FAILURES
 
 **Understand the root cause before changing anything.** Don't jump to the first edit that makes tests pass.
