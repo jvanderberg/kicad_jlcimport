@@ -570,10 +570,10 @@ class JLCImportDialog(wx.Dialog):
         self._global_path_label.SetFont(bold_font)
         self._global_path_label.SetToolTip(global_dir)
         global_row.Add(self._global_path_label, 0, wx.ALIGN_CENTER_VERTICAL)
-        self._global_browse_btn = wx.Button(panel, label="...", size=(30, -1))
+        self._global_browse_btn = wx.Button(panel, label="...", style=wx.BU_EXACTFIT)
         self._global_browse_btn.Bind(wx.EVT_BUTTON, self._on_global_browse)
         global_row.Add(self._global_browse_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 5)
-        self._global_reset_btn = wx.Button(panel, label="\u2715", size=(30, -1))
+        self._global_reset_btn = wx.Button(panel, label="\u2715", style=wx.BU_EXACTFIT)
         self._global_reset_btn.Bind(wx.EVT_BUTTON, self._on_global_reset)
         global_row.Add(self._global_reset_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 2)
         import_box.Add(global_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5)
@@ -626,7 +626,7 @@ class JLCImportDialog(wx.Dialog):
 
         # Navigation row: [<] image+dots [>]
         nav_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._gallery_prev = wx.Button(self._gallery_panel, label="\u25c0", size=(40, -1))
+        self._gallery_prev = wx.Button(self._gallery_panel, label="\u25c0", style=wx.BU_EXACTFIT)
         self._gallery_prev.Bind(wx.EVT_BUTTON, self._on_gallery_prev)
         nav_sizer.Add(self._gallery_prev, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
 
@@ -640,7 +640,7 @@ class JLCImportDialog(wx.Dialog):
         img_stack.Add(self._gallery_page_indicator, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP, 2)
         nav_sizer.Add(img_stack, 1, wx.ALIGN_CENTER_VERTICAL)
 
-        self._gallery_next = wx.Button(self._gallery_panel, label="\u25b6", size=(40, -1))
+        self._gallery_next = wx.Button(self._gallery_panel, label="\u25b6", style=wx.BU_EXACTFIT)
         self._gallery_next.Bind(wx.EVT_BUTTON, self._on_gallery_next)
         nav_sizer.Add(self._gallery_next, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 5)
 
