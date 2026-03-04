@@ -426,50 +426,104 @@ def _parse_svg_polygon(svg_path: str) -> List[Tuple[float, float]]:
     return points
 
 
+def _svg_arc_center(x1: float, y1: float, x2: float, y2: float, r: float, fA: int, fS: int) -> Tuple[float, float]:
+    """Compute the center of an SVG arc using the SVG spec algorithm (phi=0)."""
+    dx = (x1 - x2) / 2
+    dy = (y1 - y2) / 2
+    d_sq = dx * dx + dy * dy
+    r_sq = r * r
+    # Scale radius up if endpoints are too far apart
+    if d_sq > r_sq:
+        r = math.sqrt(d_sq)
+        r_sq = d_sq
+    sq = math.sqrt(max(0, (r_sq - d_sq) / d_sq))
+    if fA == fS:
+        sq = -sq
+    mx = (x1 + x2) / 2
+    my = (y1 + y2) / 2
+    cx = mx + sq * dy
+    cy = my - sq * dx
+    return cx, cy
+
+
 def _parse_svg_path_with_arcs(svg_path: str) -> List[Tuple[float, float]]:
     """Parse SVG path containing arc commands, approximating arcs as polygons.
 
-    Handles paths like: M x y A rx ry rot large sweep ex ey A rx ry rot large sweep ex ey
-    which draw circles using two 180-degree arcs.
+    Walks through M, L, H, V, A, and Z commands to produce a polygon outline.
+    Works for full circles, D-shapes, rounded rectangles, and any mixed path.
     """
-    points = []
-    # Remove Z at end
-    path = svg_path.replace("Z", "").replace("z", "").strip()
+    # Tokenise: split on SVG commands while keeping the command letter
+    tokens = re.split(r"(?=[MLAZHVmlazhv])", svg_path.strip())
 
-    # Extract starting point from M command
-    m_match = re.match(r"M\s*([\d.e+-]+)\s+([\d.e+-]+)", path)
-    if not m_match:
-        return []
+    points: List[Tuple[float, float]] = []
+    cur_x = cur_y = 0.0
+    arc_segments = 16
 
-    start_x = float(m_match.group(1))
-    start_y = float(m_match.group(2))
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+        cmd = token[0]
+        args = re.split(r"[,\s]+", token[1:].strip())
+        args = [a for a in args if a]  # drop empty strings
 
-    # Find all arc commands
-    arc_pattern = r"A\s*([\d.e+-]+)\s+([\d.e+-]+)\s+([\d.e+-]+)\s+([01])\s+([01])\s+([\d.e+-]+)\s+([\d.e+-]+)"
-    arcs = re.findall(arc_pattern, path)
+        if cmd in ("M", "m"):
+            if len(args) < 2:
+                continue
+            cur_x, cur_y = float(args[0]), float(args[1])
+            points.append((mil_to_mm(cur_x), mil_to_mm(cur_y)))
 
-    if not arcs:
-        return []
+        elif cmd in ("L", "l"):
+            if len(args) < 2:
+                continue
+            cur_x, cur_y = float(args[0]), float(args[1])
+            points.append((mil_to_mm(cur_x), mil_to_mm(cur_y)))
 
-    # For a circle made of two arcs, compute center and radius
-    # First arc goes from start to end1, second arc goes from end1 back to start
-    rx = float(arcs[0][0])
-    ry = float(arcs[0][1])
-    end1_x = float(arcs[0][5])
-    end1_y = float(arcs[0][6])
+        elif cmd in ("H", "h"):
+            if len(args) < 1:
+                continue
+            cur_x = float(args[0])
+            points.append((mil_to_mm(cur_x), mil_to_mm(cur_y)))
 
-    # Center is midpoint between start and end1 (for a circle)
-    cx = (start_x + end1_x) / 2
-    cy = (start_y + end1_y) / 2
-    radius = (rx + ry) / 2  # Average for slight ellipses
+        elif cmd in ("V", "v"):
+            if len(args) < 1:
+                continue
+            cur_y = float(args[0])
+            points.append((mil_to_mm(cur_x), mil_to_mm(cur_y)))
 
-    # Generate polygon approximation of circle (16 segments)
-    num_segments = 16
-    for i in range(num_segments):
-        angle = 2 * math.pi * i / num_segments
-        px = cx + radius * math.cos(angle)
-        py = cy + radius * math.sin(angle)
-        points.append((mil_to_mm(px), mil_to_mm(py)))
+        elif cmd in ("A", "a"):
+            # A rx ry rotation large-arc-flag sweep-flag ex ey
+            if len(args) < 7:
+                continue
+            rx = float(args[0])
+            ry = float(args[1])
+            # args[2] = rotation (unused, always 0 in EasyEDA)
+            fA = int(args[3])
+            fS = int(args[4])
+            end_x, end_y = float(args[5]), float(args[6])
+            radius = (rx + ry) / 2  # average for slight ellipses
+
+            cx, cy = _svg_arc_center(cur_x, cur_y, end_x, end_y, radius, fA, fS)
+
+            theta1 = math.atan2(cur_y - cy, cur_x - cx)
+            theta2 = math.atan2(end_y - cy, end_x - cx)
+            dtheta = theta2 - theta1
+            if fS == 0 and dtheta > 0:
+                dtheta -= 2 * math.pi
+            elif fS == 1 and dtheta < 0:
+                dtheta += 2 * math.pi
+
+            # Skip the start point (already in points list), emit interior + end
+            for i in range(1, arc_segments + 1):
+                angle = theta1 + dtheta * i / arc_segments
+                px = cx + radius * math.cos(angle)
+                py = cy + radius * math.sin(angle)
+                points.append((mil_to_mm(px), mil_to_mm(py)))
+
+            cur_x, cur_y = end_x, end_y
+
+        elif cmd in ("Z", "z"):
+            pass  # KiCad polygons auto-close
 
     return points
 

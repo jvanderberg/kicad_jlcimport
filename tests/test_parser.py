@@ -6,6 +6,7 @@ from kicad_jlcimport.easyeda.parser import (
     _find_svg_path,
     _parse_solid_region,
     _parse_svg_arc_path,
+    _parse_svg_path_with_arcs,
     _parse_svg_polygon,
     _parse_sym_path,
     compute_arc_midpoint,
@@ -511,6 +512,87 @@ class TestParseSolidRegion:
         region = _parse_solid_region(parts)
         assert region is not None
         assert len(region.points) == 3
+
+
+class TestParseSvgPathWithArcs:
+    """Test _parse_svg_path_with_arcs general SVG path walker."""
+
+    def test_full_circle_two_arcs(self):
+        """Two arcs forming a full circle (C427602 pin 1 dot)."""
+        path = (
+            "M 3979.0547 2997.751 A 0.6969 0.6969 0 1 1 3980.4484 2997.751 A 0.6969 0.6969 0 1 1 3979.0547 2997.751 Z"
+        )
+        points = _parse_svg_path_with_arcs(path)
+        # Two 180-degree arcs = full circle, should have many points
+        assert len(points) >= 16
+        # Check bounding box is roughly circular with expected center/radius
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        cx = (min(xs) + max(xs)) / 2
+        cy = (min(ys) + max(ys)) / 2
+        expected_cx = mil_to_mm((3979.0547 + 3980.4484) / 2)
+        expected_cy = mil_to_mm(2997.751)
+        assert abs(cx - expected_cx) < 0.01
+        assert abs(cy - expected_cy) < 0.01
+        diameter = max(xs) - min(xs)
+        expected_diameter = mil_to_mm(0.6969 * 2)
+        assert abs(diameter - expected_diameter) < 0.01
+
+    def test_single_arc_d_shape(self):
+        """Single arc D-shape (semicircle polarity mark)."""
+        # Fabricated D-shape: start at top, arc 180 degrees to bottom, line back
+        path = "M 100 90 A 10 10 0 0 1 100 110 L 100 90 Z"
+        points = _parse_svg_path_with_arcs(path)
+        assert len(points) >= 3
+        # All arc points should be on one side (x >= 100 for sweep=1)
+        xs = [p[0] for p in points]
+        # Center of arc is at (100, 100), radius 10 — arc goes rightward
+        assert max(xs) > mil_to_mm(100)
+
+    def test_rounded_rectangle_c395958(self):
+        """Rounded rectangle with 4 corner arcs + lines (C395958 layer 12)."""
+        path = (
+            "M 3960.3278 2985.4332 L 3960.3278 3048.7126 L 4040.0363 3048.7126"
+            " L 4040.0363 2985.4332 A 0.5 0.5 0 0 1 4041.0363 2985.4332"
+            " L 4041.0363 3049.2126 A 0.5 0.5 0 0 1 4040.5363 3049.7126"
+            " L 3959.8278 3049.7126 A 0.5 0.5 0 0 1 3959.3278 3049.2126"
+            " L 3959.3278 2985.4332 A 0.5 0.5 0 0 1 3960.3278 2985.4332 Z"
+        )
+        points = _parse_svg_path_with_arcs(path)
+        # 8 L/M points + 4 arcs * 16 segments each = lots of points
+        assert len(points) >= 20
+        # Bounding box should be roughly 81.7 x 64.3 mils
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        expected_w = mil_to_mm(4041.0363 - 3959.3278)
+        expected_h = mil_to_mm(3049.7126 - 2985.4332)
+        assert abs(width - expected_w) < 0.15
+        assert abs(height - expected_h) < 0.15
+
+    def test_empty_path(self):
+        """Empty path returns empty list."""
+        assert _parse_svg_path_with_arcs("") == []
+
+    def test_no_arcs_still_works(self):
+        """Path with only M and L commands (no arcs) still produces points."""
+        path = "M 100 100 L 200 100 L 200 200 L 100 200 Z"
+        points = _parse_svg_path_with_arcs(path)
+        assert len(points) == 4
+        assert points[0] == (mil_to_mm(100), mil_to_mm(100))
+        assert points[1] == (mil_to_mm(200), mil_to_mm(100))
+
+    def test_horizontal_and_vertical_lineto(self):
+        """H and V commands produce correct points."""
+        path = "M 100 100 H 200 V 200 H 100 V 100 Z"
+        points = _parse_svg_path_with_arcs(path)
+        assert len(points) == 5
+        assert points[0] == (mil_to_mm(100), mil_to_mm(100))
+        assert points[1] == (mil_to_mm(200), mil_to_mm(100))  # H 200
+        assert points[2] == (mil_to_mm(200), mil_to_mm(200))  # V 200
+        assert points[3] == (mil_to_mm(100), mil_to_mm(200))  # H 100
+        assert points[4] == (mil_to_mm(100), mil_to_mm(100))  # V 100
 
 
 class TestC17451410PinRotations:
