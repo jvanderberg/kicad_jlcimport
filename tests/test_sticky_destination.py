@@ -156,6 +156,7 @@ class TestDialogStickyDestination:
         from kicad_jlcimport.dialog import JLCImportDialog
 
         dlg = SimpleNamespace(
+            _closing=False,
             _busy_overlay=MagicMock(),
             _main_panel=MagicMock(),
             _log=MagicMock(),

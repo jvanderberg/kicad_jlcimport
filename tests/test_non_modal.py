@@ -38,6 +38,7 @@ class TestOnCloseCleanup:
             _stop_search_pulse=MagicMock(),
             _stop_skeleton=MagicMock(),
             _stop_gallery_skeleton=MagicMock(),
+            _category_popup=MagicMock(),
             IsModal=MagicMock(return_value=False),
             Destroy=MagicMock(),
         )
@@ -144,6 +145,7 @@ class TestCloseBlockedDuringImport:
             _stop_search_pulse=MagicMock(),
             _stop_skeleton=MagicMock(),
             _stop_gallery_skeleton=MagicMock(),
+            _category_popup=MagicMock(),
             IsModal=MagicMock(return_value=False),
             Destroy=MagicMock(),
         )

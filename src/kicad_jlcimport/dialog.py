@@ -405,6 +405,7 @@ class JLCImportDialog(wx.Dialog):
         self._stop_gallery_skeleton()
         self._busy_overlay.dismiss()
         self._search_overlay.dismiss()
+        self._category_popup.Dismiss()
         # Invalidate all in-flight background requests so their CallAfter
         # callbacks will no-op when they check the request ID
         self._search_request_id += 1
@@ -809,8 +810,10 @@ class JLCImportDialog(wx.Dialog):
         self._update_version_visibility()
 
     def _log(self, msg: str):
+        if self._closing:
+            return
         self.status_text.AppendText(msg + "\n")
-        wx.Yield()
+        self.status_text.Update()
 
     def _handle_ssl_cert_error(self):
         """Show a one-time SSL warning and enable unverified HTTPS."""
@@ -924,11 +927,14 @@ class JLCImportDialog(wx.Dialog):
             except SSLCertError:
                 self._handle_ssl_cert_error()
                 result = search_components(keyword, page_size=500)
-            wx.CallAfter(self._on_search_complete, result, request_id)
+            if not self._closing:
+                wx.CallAfter(self._on_search_complete, result, request_id)
         except APIError as e:
-            wx.CallAfter(self._on_search_error, f"Search error: {e}", request_id)
+            if not self._closing:
+                wx.CallAfter(self._on_search_error, f"Search error: {e}", request_id)
         except Exception as e:
-            wx.CallAfter(self._on_search_error, f"Unexpected error: {type(e).__name__}: {e}", request_id)
+            if not self._closing:
+                wx.CallAfter(self._on_search_error, f"Unexpected error: {type(e).__name__}: {e}", request_id)
 
     def _on_search_complete(self, result, request_id):
         """Handle search results on the main thread."""
@@ -1456,7 +1462,7 @@ class JLCImportDialog(wx.Dialog):
                 self._handle_ssl_cert_error()
                 uuids = fetch_component_uuids(lcsc_id)
             svg_string = uuids[-1].get("svg", "") if uuids else ""
-            if self._gallery_svg_request_id == request_id and svg_string:
+            if not self._closing and self._gallery_svg_request_id == request_id and svg_string:
                 wx.CallAfter(self._set_gallery_svg, svg_string, request_id)
         except Exception:
             pass  # Footprint preview is best-effort
@@ -1500,7 +1506,7 @@ class JLCImportDialog(wx.Dialog):
                 img_data = fetch_product_image(lcsc_url)
         except Exception:
             img_data = None
-        if self._gallery_request_id == request_id:
+        if not self._closing and self._gallery_request_id == request_id:
             wx.CallAfter(self._set_gallery_image, img_data, request_id)
 
     def _set_gallery_image(self, img_data, request_id):
@@ -1588,7 +1594,7 @@ class JLCImportDialog(wx.Dialog):
                 img_data = fetch_product_image(lcsc_url)
         except Exception:
             img_data = None
-        if self._image_request_id == request_id:
+        if not self._closing and self._image_request_id == request_id:
             wx.CallAfter(self._set_image, img_data, request_id)
 
     def _set_image(self, img_data, request_id):
@@ -1639,7 +1645,7 @@ class JLCImportDialog(wx.Dialog):
             # Last entry is the footprint
             svg_string = uuids[-1].get("svg", "") if uuids else ""
 
-            if self._symbol_request_id == request_id and svg_string:
+            if not self._closing and self._symbol_request_id == request_id and svg_string:
                 wx.CallAfter(self._set_footprint_svg, svg_string, request_id)
         except Exception:
             pass  # Footprint preview is best-effort
@@ -1723,6 +1729,8 @@ class JLCImportDialog(wx.Dialog):
 
     def _on_import_complete(self, result):
         """Main thread: handle successful import completion."""
+        if self._closing:
+            return
         self._busy_overlay.dismiss()
         self._main_panel.Enable()
         if result is None:
@@ -1737,6 +1745,8 @@ class JLCImportDialog(wx.Dialog):
 
     def _on_import_error(self, msg):
         """Main thread: handle import error."""
+        if self._closing:
+            return
         self._busy_overlay.dismiss()
         self._main_panel.Enable()
         self._log(msg)
