@@ -380,6 +380,13 @@ class JLCImportDialog(wx.Dialog):
         self._symbol_request_id = 0
         self._init_ui()
         self.Centre()
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+
+    def _on_close(self, event):
+        from .plugin import JLCImportPlugin
+
+        JLCImportPlugin._dialog = None
+        self.Destroy()
 
     def _init_ui(self):
         self._root_sizer = wx.BoxSizer(wx.VERTICAL)

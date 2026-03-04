@@ -7,6 +7,8 @@ from .kicad.version import detect_kicad_version_from_pcbnew
 
 
 class JLCImportPlugin(pcbnew.ActionPlugin):
+    _dialog = None
+
     def defaults(self):
         self.name = "JLCImport"
         self.category = "Import"
@@ -15,8 +17,11 @@ class JLCImportPlugin(pcbnew.ActionPlugin):
         self.icon_file_name = ""
 
     def Run(self):
+        if JLCImportPlugin._dialog is not None:
+            JLCImportPlugin._dialog.Raise()
+            return
         board = pcbnew.GetBoard()
         kicad_version = detect_kicad_version_from_pcbnew()
         dlg = JLCImportDialog(None, board, kicad_version=kicad_version)
-        dlg.ShowModal()
-        dlg.Destroy()
+        JLCImportPlugin._dialog = dlg
+        dlg.Show()
