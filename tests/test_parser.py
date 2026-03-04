@@ -594,6 +594,93 @@ class TestParseSvgPathWithArcs:
         assert points[3] == (mil_to_mm(100), mil_to_mm(200))  # H 100
         assert points[4] == (mil_to_mm(100), mil_to_mm(100))  # V 100
 
+    def test_relative_commands_match_absolute(self):
+        """Lowercase m/l/h/v commands produce same result as absolute equivalent."""
+        abs_path = "M 100 100 L 200 100 L 200 200 L 100 200 Z"
+        rel_path = "M 100 100 l 100 0 l 0 100 l -100 0 Z"
+        abs_points = _parse_svg_path_with_arcs(abs_path)
+        rel_points = _parse_svg_path_with_arcs(rel_path)
+        assert len(abs_points) == len(rel_points)
+        for ap, rp in zip(abs_points, rel_points):
+            assert abs(ap[0] - rp[0]) < 1e-10
+            assert abs(ap[1] - rp[1]) < 1e-10
+
+    def test_relative_h_v_commands(self):
+        """Lowercase h/v commands use offsets from current position."""
+        abs_path = "M 100 100 H 200 V 200 H 100 V 100 Z"
+        rel_path = "M 100 100 h 100 v 100 h -100 v -100 Z"
+        abs_points = _parse_svg_path_with_arcs(abs_path)
+        rel_points = _parse_svg_path_with_arcs(rel_path)
+        assert len(abs_points) == len(rel_points)
+        for ap, rp in zip(abs_points, rel_points):
+            assert abs(ap[0] - rp[0]) < 1e-10
+            assert abs(ap[1] - rp[1]) < 1e-10
+
+    def test_relative_m_command(self):
+        """Lowercase m command uses offset from current position."""
+        # Start at (100, 100), then relative move to (110, 110)
+        path = "M 100 100 L 200 100 m 10 10 L 300 200 Z"
+        points = _parse_svg_path_with_arcs(path)
+        # After L 200 100, m 10 10 -> (210, 110)
+        assert abs(points[2][0] - mil_to_mm(210)) < 1e-10
+        assert abs(points[2][1] - mil_to_mm(110)) < 1e-10
+
+    def test_relative_arc_command(self):
+        """Lowercase a command offsets endpoint from current position."""
+        abs_path = "M 100 90 A 10 10 0 0 1 100 110 Z"
+        rel_path = "M 100 90 a 10 10 0 0 1 0 20 Z"
+        abs_points = _parse_svg_path_with_arcs(abs_path)
+        rel_points = _parse_svg_path_with_arcs(rel_path)
+        assert len(abs_points) == len(rel_points)
+        for ap, rp in zip(abs_points, rel_points):
+            assert abs(ap[0] - rp[0]) < 1e-6
+            assert abs(ap[1] - rp[1]) < 1e-6
+
+    def test_elliptical_arc_different_rx_ry(self):
+        """Full ellipse with rx != ry produces correct bounding box."""
+        # Two semicircular arcs forming a full ellipse: rx=20, ry=10
+        # Start at left (80, 100), arc to right (120, 100), arc back
+        path = "M 80 100 A 20 10 0 0 1 120 100 A 20 10 0 0 1 80 100 Z"
+        points = _parse_svg_path_with_arcs(path)
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        # Full ellipse: width = 2*rx = 40 mils, height = 2*ry = 20 mils
+        expected_width = mil_to_mm(40)
+        expected_height = mil_to_mm(20)
+        assert abs(width - expected_width) < mil_to_mm(1)
+        assert abs(height - expected_height) < mil_to_mm(1)
+
+    def test_adaptive_segments_large_vs_small_arc(self):
+        """Large arc gets more segments than small arc."""
+        # Small arc: radius 1 mil, 90 degree sweep
+        small_path = "M 100 100 A 1 1 0 0 1 101 101 Z"
+        small_points = _parse_svg_path_with_arcs(small_path)
+        small_arc_points = len(small_points) - 1  # subtract M point
+
+        # Large arc: radius 50 mils, full semicircle
+        large_path = "M 100 50 A 50 50 0 1 1 100 150 Z"
+        large_points = _parse_svg_path_with_arcs(large_path)
+        large_arc_points = len(large_points) - 1  # subtract M point
+
+        assert large_arc_points > small_arc_points
+
+
+class TestParseSolidRegionArcDetection:
+    """Test arc detection heuristic in _parse_solid_region."""
+
+    def test_spaceless_arc_detected(self):
+        """Path where A has no space before it still routes to arc parser."""
+        # "...3008.5A8.5..." — digit immediately before A
+        path = "M3000,3000A8.5,8.5,0,1,1,3017,3000A8.5,8.5,0,1,1,3000,3000Z"
+        shape = f"SOLIDREGION~3~~{path}~solid~gge1~~~~0"
+        parts = shape.split("~")
+        region = _parse_solid_region(parts)
+        assert region is not None
+        # Should have arc-generated points (many more than 3)
+        assert len(region.points) > 8
+
 
 class TestC17451410PinRotations:
     """Test pin rotations for C17451410 (IS01EBFRGB) - has pins in all 4 directions."""
