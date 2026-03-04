@@ -170,28 +170,44 @@ def import_component(
             footprint.model, comp["fp_origin_x"], comp["fp_origin_y"], wrl_source
         )
 
-    # Parse symbol
+    # Parse symbol (may have multiple units)
     sym_content = ""
     if comp["symbol_data_list"]:
         log("Parsing symbol...")
-        sym_data = comp["symbol_data_list"][0]
-        sym_shapes = sym_data["dataStr"]["shape"]
-        symbol = parse_symbol_shapes(sym_shapes, comp["sym_origin_x"], comp["sym_origin_y"])
-        log(f"  {len(symbol.pins)} pins, {len(symbol.rectangles)} rects")
-
+        total_units = len(comp["symbol_data_list"])
         footprint_ref = f"{lib_name}:{name}"
-        sym_content = write_symbol(
-            symbol,
-            name,
-            prefix=comp["prefix"],
-            footprint_ref=footprint_ref,
-            lcsc_id=lcsc_id,
-            datasheet=comp.get("datasheet", ""),
-            description=metadata["description"],
-            keywords=metadata["keywords"],
-            manufacturer=metadata["manufacturer"],
-            manufacturer_part=comp.get("manufacturer_part", ""),
-        )
+        sym_parts = []
+        total_pins = 0
+        total_rects = 0
+
+        for unit_idx, sym_data in enumerate(comp["symbol_data_list"]):
+            # Each unit may have its own origin
+            origin_x = sym_data.get("dataStr", {}).get("head", {}).get("x", comp["sym_origin_x"])
+            origin_y = sym_data.get("dataStr", {}).get("head", {}).get("y", comp["sym_origin_y"])
+            sym_shapes = sym_data["dataStr"]["shape"]
+            symbol = parse_symbol_shapes(sym_shapes, origin_x, origin_y)
+            total_pins += len(symbol.pins)
+            total_rects += len(symbol.rectangles)
+
+            sym_parts.append(
+                write_symbol(
+                    symbol,
+                    name,
+                    prefix=comp["prefix"],
+                    footprint_ref=footprint_ref,
+                    lcsc_id=lcsc_id,
+                    datasheet=comp.get("datasheet", ""),
+                    description=metadata["description"],
+                    keywords=metadata["keywords"],
+                    manufacturer=metadata["manufacturer"],
+                    manufacturer_part=comp.get("manufacturer_part", ""),
+                    unit_index=unit_idx,
+                    total_units=total_units,
+                )
+            )
+
+        sym_content = "".join(sym_parts)
+        log(f"  {total_pins} pins, {total_rects} rects ({total_units} unit(s))")
     else:
         log("No symbol data available")
 

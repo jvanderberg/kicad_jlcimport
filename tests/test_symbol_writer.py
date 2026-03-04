@@ -193,6 +193,60 @@ class TestWriteSymbol:
         # Single unit: uses _0_1
         assert '(symbol "MyPart_0_1"' in result
 
+    def test_multi_unit_first_unit_does_not_close_outer(self):
+        """For multi-unit symbols, the first unit must NOT close the outer symbol wrapper."""
+        sym = _make_symbol(
+            pins=[EEPin(number="1", name="A", x=0, y=0, rotation=0, length=2.54, electrical_type="input")]
+        )
+        result = write_symbol(sym, "DualMOS", unit_index=0, total_units=2)
+        # Should have outer symbol opening
+        assert '(symbol "DualMOS"' in result
+        # Should have unit sub-symbol with unit number 0
+        assert '(symbol "DualMOS_0_1"' in result
+        # Count closing parens at the top level: the outer symbol should NOT be closed
+        # The result should end with just the unit sub-symbol closing
+        lines = result.strip().split("\n")
+        # Should NOT have a final "  )" closing the outer symbol
+        assert lines[-1].strip() == ")", "First unit should close sub-symbol but not outer"
+        # Check there's no double-close at the end
+        assert lines[-1] != "  )", "First unit of multi-unit must not close outer symbol"
+
+    def test_multi_unit_last_unit_closes_outer(self):
+        """For multi-unit symbols, the last unit should close the outer symbol wrapper."""
+        sym = _make_symbol(
+            pins=[EEPin(number="2", name="B", x=0, y=0, rotation=0, length=2.54, electrical_type="input")]
+        )
+        result = write_symbol(sym, "DualMOS", unit_index=1, total_units=2)
+        # Should have unit sub-symbol with unit number 1
+        assert '(symbol "DualMOS_1_1"' in result
+        # Last two lines should close sub-symbol and outer symbol
+        lines = result.strip().split("\n")
+        assert lines[-1].strip() == ")"
+        assert lines[-2].strip() == ")"
+
+    def test_multi_unit_concatenation_produces_valid_structure(self):
+        """Concatenating all units should produce a valid symbol with multiple sub-symbols."""
+        sym1 = _make_symbol(
+            pins=[EEPin(number="1", name="A", x=0, y=0, rotation=0, length=2.54, electrical_type="input")]
+        )
+        sym2 = _make_symbol(
+            pins=[EEPin(number="2", name="B", x=0, y=5, rotation=0, length=2.54, electrical_type="output")]
+        )
+        part1 = write_symbol(sym1, "DualPart", prefix="U", unit_index=0, total_units=2)
+        part2 = write_symbol(sym2, "DualPart", unit_index=1, total_units=2)
+        full = part1 + part2
+
+        # Both sub-symbols should be present
+        assert '(symbol "DualPart_0_1"' in full
+        assert '(symbol "DualPart_1_1"' in full
+        # Outer wrapper should appear once
+        assert full.count('(symbol "DualPart"') == 1
+        # Properties should appear in first unit only
+        assert full.count('(property "Reference"') == 1
+        # Both pins should be present
+        assert '(name "A"' in full
+        assert '(name "B"' in full
+
     def test_rounded_rect_produces_closed_polyline(self):
         """A rounded rectangle must produce a closed polyline (first point == last point).
 

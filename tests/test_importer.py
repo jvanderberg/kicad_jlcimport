@@ -400,6 +400,146 @@ class TestImportComponent:
         assert "${KIPRJMOD}" not in captured_model_path[0]
 
 
+class TestMultiUnitSymbolImport:
+    """Tests for multi-unit symbol import."""
+
+    def _make_fake_comp(self, num_units=2):
+        """Create a fake component with multiple symbol units."""
+        symbol_data_list = []
+        for i in range(num_units):
+            symbol_data_list.append(
+                {
+                    "dataStr": {
+                        "head": {"x": i * 100, "y": i * 100},
+                        "shape": [],
+                    }
+                }
+            )
+        return {
+            "title": "DualMOSFET",
+            "prefix": "Q",
+            "description": "Dual N-Channel MOSFET",
+            "datasheet": "https://example.com/ds.pdf",
+            "manufacturer": "ACME",
+            "manufacturer_part": "DUAL-MOS",
+            "footprint_data": {"dataStr": {"shape": []}},
+            "fp_origin_x": 0,
+            "fp_origin_y": 0,
+            "symbol_data_list": symbol_data_list,
+            "sym_origin_x": 0,
+            "sym_origin_y": 0,
+        }
+
+    def _make_fake_footprint(self):
+        fp = EEFootprint()
+        pad = EEPad(shape="RECT", x=0, y=0, width=1, height=1, layer="1", number="1", drill=0, rotation=0)
+        fp.pads.append(pad)
+        return fp
+
+    def test_multi_unit_calls_write_symbol_per_unit(self, tmp_path, monkeypatch):
+        """write_symbol should be called once per symbol unit with correct indices."""
+        fake_comp = self._make_fake_comp(num_units=3)
+        fake_fp = self._make_fake_footprint()
+        fake_sym = EESymbol()
+        fake_sym.pins.append(EEPin(number="1", name="G", x=0, y=0, rotation=0, length=2.54, electrical_type="input"))
+
+        write_calls = []
+
+        def capture_write_symbol(*args, **kwargs):
+            write_calls.append(kwargs)
+            return '    (symbol "DualMOSFET_0_1")\n'
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: fake_sym)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint DualMOSFET)\n")
+        monkeypatch.setattr(importer, "write_symbol", capture_write_symbol)
+
+        importer.import_component(
+            "C42372676",
+            str(tmp_path),
+            "TestLib",
+            export_only=True,
+            log=lambda msg: None,
+        )
+
+        assert len(write_calls) == 3
+        assert write_calls[0]["unit_index"] == 0
+        assert write_calls[0]["total_units"] == 3
+        assert write_calls[1]["unit_index"] == 1
+        assert write_calls[1]["total_units"] == 3
+        assert write_calls[2]["unit_index"] == 2
+        assert write_calls[2]["total_units"] == 3
+
+    def test_multi_unit_uses_per_unit_origin(self, tmp_path, monkeypatch):
+        """Each symbol unit should use its own origin from dataStr.head."""
+        fake_comp = self._make_fake_comp(num_units=2)
+        # Set distinct origins for each unit
+        fake_comp["symbol_data_list"][0]["dataStr"]["head"]["x"] = 100
+        fake_comp["symbol_data_list"][0]["dataStr"]["head"]["y"] = 200
+        fake_comp["symbol_data_list"][1]["dataStr"]["head"]["x"] = 300
+        fake_comp["symbol_data_list"][1]["dataStr"]["head"]["y"] = 400
+
+        parse_calls = []
+
+        def capture_parse(shapes, ox, oy):
+            parse_calls.append((ox, oy))
+            return EESymbol()
+
+        fake_fp = self._make_fake_footprint()
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "parse_symbol_shapes", capture_parse)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint DualMOSFET)\n")
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: '    (symbol "X_0_1")\n')
+
+        importer.import_component(
+            "C42372676",
+            str(tmp_path),
+            "TestLib",
+            export_only=True,
+            log=lambda msg: None,
+        )
+
+        assert len(parse_calls) == 2
+        assert parse_calls[0] == (100, 200)
+        assert parse_calls[1] == (300, 400)
+
+    def test_single_unit_backward_compatible(self, tmp_path, monkeypatch):
+        """Single-unit components should still work as before."""
+        fake_comp = self._make_fake_comp(num_units=1)
+        fake_fp = self._make_fake_footprint()
+        fake_sym = EESymbol()
+        fake_sym.pins.append(
+            EEPin(number="1", name="VCC", x=0, y=0, rotation=0, length=2.54, electrical_type="power_in")
+        )
+
+        write_calls = []
+
+        def capture_write_symbol(*args, **kwargs):
+            write_calls.append(kwargs)
+            return '  (symbol "Test")\n'
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: fake_sym)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint Test)\n")
+        monkeypatch.setattr(importer, "write_symbol", capture_write_symbol)
+
+        importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            export_only=True,
+            log=lambda msg: None,
+        )
+
+        assert len(write_calls) == 1
+        assert write_calls[0]["unit_index"] == 0
+        assert write_calls[0]["total_units"] == 1
+
+
 class TestImportBackslashPaths:
     """Tests for backslash path handling in importer."""
 
