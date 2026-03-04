@@ -85,6 +85,8 @@ def import_component(
     search_result: dict | None = None,
     confirm_metadata: Callable[[dict], dict | None] | None = None,
     confirm_overwrite: Callable[[str, list[str]], bool] | None = None,
+    component_data: dict | None = None,
+    symbol_kwargs: dict | None = None,
 ) -> dict | None:
     """Import an LCSC component into a KiCad library or export raw files.
 
@@ -107,13 +109,19 @@ def import_component(
             already exists (e.g. ``["footprint", "symbol"]``).  Returns ``True`` to
             overwrite or ``False`` to cancel.  When ``None``, the ``overwrite`` bool
             governs behavior.
+        component_data: Optional pre-fetched component dict.  When provided the
+            API call to ``fetch_full_component`` is skipped.
+        symbol_kwargs: Optional extra keyword arguments forwarded to
+            ``write_symbol()`` (e.g. ``include_pin_dots``, ``hide_properties``).
 
     Returns:
         dict with keys: title, name, fp_content, sym_content; or None if cancelled.
     """
-    log(f"Fetching component {lcsc_id}...")
-
-    comp = fetch_full_component(lcsc_id)
+    if component_data is not None:
+        comp = component_data
+    else:
+        log(f"Fetching component {lcsc_id}...")
+        comp = fetch_full_component(lcsc_id)
 
     # Merge richer metadata from search result when available
     if search_result:
@@ -170,28 +178,69 @@ def import_component(
             footprint.model, comp["fp_origin_x"], comp["fp_origin_y"], wrl_source
         )
 
-    # Parse symbol
+    # Parse symbol (may have multiple units)
     sym_content = ""
     if comp["symbol_data_list"]:
         log("Parsing symbol...")
-        sym_data = comp["symbol_data_list"][0]
-        sym_shapes = sym_data["dataStr"]["shape"]
-        symbol = parse_symbol_shapes(sym_shapes, comp["sym_origin_x"], comp["sym_origin_y"])
-        log(f"  {len(symbol.pins)} pins, {len(symbol.rectangles)} rects")
-
+        sym_data_list = comp["symbol_data_list"]
+        # Multi-unit symbols: entry 0 is the package overview (all pins, basic
+        # outline).  The real per-unit data starts at index 1.
+        if len(sym_data_list) > 1:
+            sym_data_list = sym_data_list[1:]
+        total_units = len(sym_data_list)
         footprint_ref = f"{lib_name}:{name}"
-        sym_content = write_symbol(
-            symbol,
-            name,
-            prefix=comp["prefix"],
-            footprint_ref=footprint_ref,
-            lcsc_id=lcsc_id,
-            datasheet=comp.get("datasheet", ""),
-            description=metadata["description"],
-            keywords=metadata["keywords"],
-            manufacturer=metadata["manufacturer"],
-            manufacturer_part=comp.get("manufacturer_part", ""),
+        sym_parts = []
+        total_pins = 0
+        total_rects = 0
+
+        # Filter symbol_kwargs to keys that won't collide with explicit args
+        _EXPLICIT_SYM_KEYS = frozenset(
+            {
+                "symbol",
+                "name",
+                "prefix",
+                "footprint_ref",
+                "lcsc_id",
+                "datasheet",
+                "description",
+                "keywords",
+                "manufacturer",
+                "manufacturer_part",
+                "unit_index",
+                "total_units",
+            }
         )
+        extra_sym_kwargs = {k: v for k, v in (symbol_kwargs or {}).items() if k not in _EXPLICIT_SYM_KEYS}
+
+        for unit_idx, sym_data in enumerate(sym_data_list):
+            # Each unit may have its own origin
+            origin_x = sym_data.get("dataStr", {}).get("head", {}).get("x", comp["sym_origin_x"])
+            origin_y = sym_data.get("dataStr", {}).get("head", {}).get("y", comp["sym_origin_y"])
+            sym_shapes = sym_data["dataStr"]["shape"]
+            symbol = parse_symbol_shapes(sym_shapes, origin_x, origin_y)
+            total_pins += len(symbol.pins)
+            total_rects += len(symbol.rectangles)
+
+            sym_parts.append(
+                write_symbol(
+                    symbol,
+                    name,
+                    prefix=comp["prefix"],
+                    footprint_ref=footprint_ref,
+                    lcsc_id=lcsc_id,
+                    datasheet=comp.get("datasheet", ""),
+                    description=metadata["description"],
+                    keywords=metadata["keywords"],
+                    manufacturer=metadata["manufacturer"],
+                    manufacturer_part=comp.get("manufacturer_part", ""),
+                    unit_index=unit_idx,
+                    total_units=total_units,
+                    **extra_sym_kwargs,
+                )
+            )
+
+        sym_content = "".join(sym_parts)
+        log(f"  {total_pins} pins, {total_rects} rects ({total_units} unit(s))")
     else:
         log("No symbol data available")
 

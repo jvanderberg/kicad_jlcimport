@@ -3,7 +3,6 @@
 
 import argparse
 import html
-import json
 import os
 import re
 import shutil
@@ -18,12 +17,9 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from kicad_jlcimport.easyeda.api import download_wrl_source, fetch_component_uuids, fetch_full_component
-from kicad_jlcimport.easyeda.parser import parse_footprint_shapes, parse_symbol_shapes
-from kicad_jlcimport.kicad.footprint_writer import write_footprint
+from kicad_jlcimport.easyeda.api import fetch_component_uuids, fetch_full_component
+from kicad_jlcimport.importer import import_component
 from kicad_jlcimport.kicad.library import sanitize_name
-from kicad_jlcimport.kicad.model3d import compute_model_transform, convert_to_vrml
-from kicad_jlcimport.kicad.symbol_writer import write_symbol, write_symbol_library
 
 KICAD_CLI = shutil.which("kicad-cli") or "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"
 
@@ -51,13 +47,15 @@ def fetch_easyeda_svgs(lcsc_id: str) -> dict:
 
 
 def convert_to_kicad(comp: dict, tmp_dir: str) -> dict:
-    """Convert component data to KiCad files.
+    """Convert component data to KiCad files via the shared importer.
 
+    Uses import_component(export_only=True) so that the compare tool
+    exercises the exact same parsing/writing code path as a real import.
     Returns dict with file paths, sanitized name, and metadata.
     """
-    title = comp.get("title", comp["lcsc_id"])
-    name = sanitize_name(title)
     lcsc_id = comp["lcsc_id"]
+    title = comp.get("title", lcsc_id)
+    name = sanitize_name(title)
 
     result = {
         "name": name,
@@ -72,54 +70,34 @@ def convert_to_kicad(comp: dict, tmp_dir: str) -> dict:
         "fp_file": None,
     }
 
-    # Symbol — find the first subpart entry with actual shapes
-    sym_list = comp.get("symbol_data_list", [])
-    shapes = []
-    origin_x = origin_y = 0
-    for sym_data in sym_list:
-        ds = sym_data.get("dataStr", {})
-        if isinstance(ds, str):
-            ds = json.loads(ds)
-        shapes = ds.get("shape", [])
-        head = ds.get("head", {})
-        origin_x = head.get("x", 0)
-        origin_y = head.get("y", 0)
-        if shapes:
-            break
-    if sym_list and shapes:
-        symbol = parse_symbol_shapes(shapes, origin_x, origin_y)
-        sym_content = write_symbol(
-            symbol,
-            title,
-            prefix=comp.get("prefix", "U"),
-            include_pin_dots=True,
-            hide_properties=True,
-        )
-        sym_lib = write_symbol_library([sym_content])
-        sym_file = Path(tmp_dir) / f"{lcsc_id}.kicad_sym"
-        sym_file.write_text(sym_lib)
-        result["sym_file"] = str(sym_file)
+    import_result = import_component(
+        lcsc_id,
+        tmp_dir,
+        "compare",
+        export_only=True,
+        log=lambda msg: None,
+        component_data=comp,
+        symbol_kwargs={"include_pin_dots": True, "hide_properties": True},
+    )
 
-    # Footprint
-    fp_data = comp.get("footprint_data", {})
-    if fp_data:
-        ds = fp_data.get("dataStr", {})
-        if isinstance(ds, str):
-            ds = json.loads(ds)
-        shapes = ds.get("shape", [])
-        head = ds.get("head", {})
-        origin_x = head.get("x", 0)
-        origin_y = head.get("y", 0)
-        if shapes:
-            footprint = parse_footprint_shapes(shapes, origin_x, origin_y)
-            fp_content = write_footprint(footprint, title)
-            # kicad-cli requires .kicad_mod inside a .pretty directory
-            pretty_dir = Path(tmp_dir) / f"{lcsc_id}.pretty"
-            pretty_dir.mkdir(exist_ok=True)
-            fp_file = pretty_dir / f"{name}.kicad_mod"
-            fp_file.write_text(fp_content)
-            result["fp_file"] = str(fp_file)
-            result["pretty_dir"] = str(pretty_dir)
+    if import_result is None:
+        return result
+
+    # import_component(export_only=True) writes files to tmp_dir:
+    #   {name}.kicad_sym, {name}.kicad_mod, 3dmodels/{name}.wrl
+    sym_path = Path(tmp_dir) / f"{name}.kicad_sym"
+    if sym_path.exists():
+        result["sym_file"] = str(sym_path)
+
+    fp_path = Path(tmp_dir) / f"{name}.kicad_mod"
+    if fp_path.exists():
+        # kicad-cli requires .kicad_mod inside a .pretty directory
+        pretty_dir = Path(tmp_dir) / f"{lcsc_id}.pretty"
+        pretty_dir.mkdir(exist_ok=True)
+        dest = pretty_dir / f"{name}.kicad_mod"
+        shutil.copy2(str(fp_path), str(dest))
+        result["fp_file"] = str(dest)
+        result["pretty_dir"] = str(pretty_dir)
 
     return result
 
@@ -188,10 +166,6 @@ def _create_minimal_pcb(footprint_content: str) -> str:
 """
     # Inject (at 0 0 0) into the footprint to make it a placed footprint
     # This ensures kicad-cli renders it the same as the interactive viewer
-    footprint_with_at = footprint_content.replace('(footprint "', '(footprint "', 1)
-    # Find the first line break after (footprint and insert (at 0 0 0)
-    import re
-
     footprint_with_at = re.sub(r'(\(footprint "[^"]*"\s*\n)', r"\1  (at 0 0 0)\n", footprint_content, count=1)
 
     return pcb_header + edge_cuts + footprint_with_at + "\n)"
@@ -204,8 +178,8 @@ def render_kicad_svgs(kicad_files: dict, tmp_dir: str) -> dict:
     """
     result = {"symbol_svg": None, "footprint_svg": None}
 
-    # Symbol SVG — kicad-cli sym export matches by the internal symbol name
-    # (the raw title stored inside the .kicad_sym file).
+    # Symbol SVG — kicad-cli sym export matches by the sanitized symbol name
+    # stored inside the .kicad_sym file (same name the importer uses).
     if kicad_files.get("sym_file"):
         sym_svg_dir = Path(tmp_dir) / "sym_svg"
         sym_svg_dir.mkdir(exist_ok=True)
@@ -215,16 +189,20 @@ def render_kicad_svgs(kicad_files: dict, tmp_dir: str) -> dict:
             "export",
             "svg",
             "--symbol",
-            kicad_files["title"],
+            kicad_files["name"],
             "--output",
             str(sym_svg_dir),
             kicad_files["sym_file"],
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode == 0:
-            svg_files = list(sym_svg_dir.glob("*.svg"))
+            svg_files = sorted(sym_svg_dir.glob("*.svg"))
             if svg_files:
+                # For multi-unit symbols kicad-cli emits one SVG per unit.
+                # Collect all of them so the comparison page can show every unit.
                 result["symbol_svg"] = svg_files[0].read_text()
+                if len(svg_files) > 1:
+                    result["symbol_svgs"] = [f.read_text() for f in svg_files]
         if not result["symbol_svg"]:
             print(f"  Warning: kicad-cli sym export failed: {proc.stderr.strip()}")
 
@@ -330,6 +308,16 @@ def render_3d_model(
             if last_paren != -1:
                 footprint_content = footprint_content[:last_paren] + model_ref + footprint_content[last_paren:]
 
+        # Resolve relative model paths to absolute — kicad-cli doesn't resolve
+        # them from the PCB file's directory.
+        def _abs_model(m):
+            path = m.group(1)
+            if not os.path.isabs(path):
+                path = os.path.join(tmp_dir, path)
+            return f'(model "{path}"'
+
+        footprint_content = re.sub(r'\(model "([^"]+)"', _abs_model, footprint_content)
+
         # Create minimal PCB with the footprint (including 3D model)
         pcb_content = _create_minimal_pcb(footprint_content)
         pcb_file = Path(tmp_dir) / f"render_3d_{view}.kicad_pcb"
@@ -431,16 +419,36 @@ def generate_html(parts: list) -> str:
                 )
             return f'<div class="svg-cell empty">{html.escape(label)}</div>'
 
-        symbol_row = (
-            f'<div class="compare-row">'
-            f'<div class="row-label">Symbol</div>'
-            f'<div class="row-pair">'
-            f'<div class="col"><div class="col-label">EasyEDA</div>'
-            f"{svg_cell(easyeda.get('symbol_svg'), 'No SVG')}</div>"
-            f'<div class="col"><div class="col-label">KiCad</div>'
-            f"{svg_cell(kicad.get('symbol_svg'), 'Render failed')}</div>"
-            f"</div></div>"
-        )
+        # For multi-unit symbols, show each KiCad unit side by side with the
+        # single EasyEDA preview SVG.
+        kicad_sym_svgs = kicad.get("symbol_svgs") or ([kicad["symbol_svg"]] if kicad.get("symbol_svg") else [])
+        if len(kicad_sym_svgs) <= 1:
+            symbol_row = (
+                f'<div class="compare-row">'
+                f'<div class="row-label">Symbol</div>'
+                f'<div class="row-pair">'
+                f'<div class="col"><div class="col-label">EasyEDA</div>'
+                f"{svg_cell(easyeda.get('symbol_svg'), 'No SVG')}</div>"
+                f'<div class="col"><div class="col-label">KiCad</div>'
+                f"{svg_cell(kicad.get('symbol_svg'), 'Render failed')}</div>"
+                f"</div></div>"
+            )
+        else:
+            kicad_cols = ""
+            for i, svg in enumerate(kicad_sym_svgs):
+                kicad_cols += (
+                    f'<div class="col"><div class="col-label">KiCad Unit {i + 1}</div>'
+                    f"{svg_cell(svg, 'Render failed')}</div>"
+                )
+            symbol_row = (
+                f'<div class="compare-row">'
+                f'<div class="row-label">Symbol</div>'
+                f'<div class="row-pair">'
+                f'<div class="col"><div class="col-label">EasyEDA</div>'
+                f"{svg_cell(easyeda.get('symbol_svg'), 'No SVG')}</div>"
+                f"{kicad_cols}"
+                f"</div></div>"
+            )
 
         footprint_row = (
             f'<div class="compare-row">'
@@ -560,76 +568,34 @@ def compare_part(lcsc_id: str, tmp_dir: str, verbose: bool = False) -> dict:
         print("  Rendering KiCad SVGs...")
     kicad_svgs = render_kicad_svgs(kicad_files, part_dir)
 
-    # Render 3D model if available
+    # Render 3D model if available.
+    # import_component(export_only=True) already downloaded the WRL and wrote the
+    # footprint with the model reference + offsets embedded, so we just need to
+    # find the WRL file and render the footprint that already references it.
     if verbose:
         print("  Checking for 3D model...")
     model_3d = None
     try:
-        # Get uuid_3d from parsed footprint (same as importer does)
-        # The parser extracts uuid from SVGNODE shapes
-        fp_data = comp.get("footprint_data", {})
-        if fp_data:
-            ds = fp_data.get("dataStr", {})
-            if isinstance(ds, str):
-                ds = json.loads(ds)
-            shapes = ds.get("shape", [])
-            origin_x = ds.get("head", {}).get("x", 0)
-            origin_y = ds.get("head", {}).get("y", 0)
-
-            # Parse footprint to get the model UUID
-            footprint = parse_footprint_shapes(shapes, origin_x, origin_y)
-            uuid_3d = footprint.model.uuid if footprint.model else ""
-
-            if uuid_3d:
+        name = kicad_files["name"]
+        wrl_path = Path(part_dir) / "3dmodels" / f"{name}.wrl"
+        if wrl_path.exists() and kicad_files.get("fp_file"):
+            if verbose:
+                print(f"  Found 3D model: {wrl_path}")
+                print("  Rendering 3D snapshots (top and bottom views)...")
+            fp_content = Path(kicad_files["fp_file"]).read_text()
+            # The footprint already has the model reference with correct offsets;
+            # render_3d_model will skip injection when it finds "(model " present.
+            # Dummy offset/rotation values won't be used.
+            model_3d_top = render_3d_model(fp_content, "", part_dir, (0, 0, 0), (0, 0, 0), "top")
+            model_3d_bottom = render_3d_model(fp_content, "", part_dir, (0, 0, 0), (0, 0, 0), "bottom")
+            if model_3d_top and model_3d_bottom:
+                model_3d = {"top": model_3d_top, "bottom": model_3d_bottom}
                 if verbose:
-                    print(f"  Found 3D model: {uuid_3d}")
-                # Download OBJ source
-                obj_source = download_wrl_source(uuid_3d)
-                if obj_source:
-                    if verbose:
-                        print("  Converting to VRML...")
-                    vrml_content = convert_to_vrml(obj_source)
-                    if vrml_content:
-                        # Save VRML file
-                        vrml_path = Path(part_dir) / "model.wrl"
-                        vrml_path.write_text(vrml_content)
-
-                        # Compute model transform (same as importer)
-                        if verbose:
-                            print("  Computing 3D model offsets...")
-                        model_offset, model_rotation = compute_model_transform(
-                            footprint.model, origin_x, origin_y, obj_source
-                        )
-                        if verbose:
-                            print(f"    Offset: ({model_offset[0]:.3f}, {model_offset[1]:.3f}, {model_offset[2]:.3f})")
-
-                        # Render 3D model (top and bottom views)
-                        if kicad_files.get("fp_file"):
-                            if verbose:
-                                print("  Rendering 3D snapshots (top and bottom views)...")
-                            fp_content = Path(kicad_files["fp_file"]).read_text()
-                            model_3d_top = render_3d_model(
-                                fp_content, str(vrml_path), part_dir, model_offset, model_rotation, "top"
-                            )
-                            model_3d_bottom = render_3d_model(
-                                fp_content, str(vrml_path), part_dir, model_offset, model_rotation, "bottom"
-                            )
-                            if model_3d_top and model_3d_bottom:
-                                model_3d = {"top": model_3d_top, "bottom": model_3d_bottom}
-                                if verbose:
-                                    print("  3D models rendered successfully")
-                            else:
-                                if verbose:
-                                    print("  Warning: Some 3D renders failed")
-                    else:
-                        if verbose:
-                            print("  Warning: VRML conversion failed")
-                else:
-                    if verbose:
-                        print("  Warning: Failed to download 3D model")
-            else:
-                if verbose:
-                    print("  No 3D model found")
+                    print("  3D models rendered successfully")
+            elif verbose:
+                print("  Warning: Some 3D renders failed")
+        elif verbose:
+            print("  No 3D model found")
     except Exception as e:
         if verbose:
             print(f"  Error processing 3D model: {e}")

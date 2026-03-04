@@ -30,7 +30,7 @@ For each part, compare the EasyEDA (source) and KiCad (output) renderings:
 
 ### Pre-release regression suite
 
-Run the full 101-part comparison across ICs, passives, LEDs, transistors, connectors, and other component types:
+Run the full 102-part comparison across ICs, passives, LEDs, transistors, connectors, and other component types:
 
 ```bash
 python3 tools/compare_part.py \
@@ -44,5 +44,5 @@ python3 tools/compare_part.py \
     C12889 C13885 C14529 C15134 C15157 C15331 C15999 C18901 C20953 C21235 \
     C23892 C24112 C33696 C67528 C71101 C82899 C85181 C94598 C94599 C138392 \
     C173573 C173580 C173602 C347218 C347219 C385834 C386756 C386757 C386758 C393939 C395958 C668119 \
-    C52016391 C160404
+    C52016391 C160404 C52195554
 ```

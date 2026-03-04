@@ -224,7 +224,7 @@ def write_symbol(
 
     lines.append("    )")  # Close unit sub-symbol
 
-    if unit_index == 0 or (unit_index == total_units - 1 and total_units > 1):
+    if total_units <= 1 or unit_index == total_units - 1:
         lines.append("  )")  # Close outer symbol
 
     return "\n".join(lines) + "\n"
