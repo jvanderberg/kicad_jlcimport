@@ -126,7 +126,7 @@ def write_symbol(
             lines.append("    )")
 
     # Unit sub-symbol for graphics
-    unit_num = unit_index if total_units > 1 else 0
+    unit_num = (unit_index + 1) if total_units > 1 else 0
     lines.append(f'    (symbol "{name}_{unit_num}_1"')
 
     # Rectangles

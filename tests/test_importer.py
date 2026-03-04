@@ -575,10 +575,10 @@ class TestMultiUnitRealData:
         sym_path = tmp_path / "LM358DR.kicad_sym"
         assert sym_path.exists()
         content = sym_path.read_text()
-        # Should have exactly 2 unit sub-symbols (units 1 and 2), not 3
-        assert content.count('(symbol "LM358DR_0_1"') == 1
+        # Should have exactly 2 unit sub-symbols (1-based: _1_1 and _2_1), not 3
         assert content.count('(symbol "LM358DR_1_1"') == 1
-        assert "LM358DR_2_1" not in content
+        assert content.count('(symbol "LM358DR_2_1"') == 1
+        assert "LM358DR_3_1" not in content
 
     def test_lm358_unit_pin_counts(self, tmp_path):
         """C5423 LM358DR: unit 1 should have 5 pins, unit 2 should have 3."""
@@ -593,8 +593,8 @@ class TestMultiUnitRealData:
         )
         content = (tmp_path / "LM358DR.kicad_sym").read_text()
         # Split at unit boundaries to count pins per unit
-        unit0_start = content.index('"LM358DR_0_1"')
-        unit1_start = content.index('"LM358DR_1_1"')
+        unit0_start = content.index('"LM358DR_1_1"')
+        unit1_start = content.index('"LM358DR_2_1"')
         unit0_section = content[unit0_start:unit1_start]
         unit1_section = content[unit1_start:]
         assert unit0_section.count("(pin ") == 5
@@ -629,8 +629,8 @@ class TestMultiUnitRealData:
         content = (tmp_path / "XR40K03D.kicad_sym").read_text()
         # 2 real units, each with 4 pins = 8 total
         assert content.count("(pin ") == 8
-        assert content.count('(symbol "XR40K03D_0_1"') == 1
         assert content.count('(symbol "XR40K03D_1_1"') == 1
+        assert content.count('(symbol "XR40K03D_2_1"') == 1
 
     def test_symbol_kwargs_forwarded_with_real_data(self, tmp_path):
         """symbol_kwargs like include_pin_dots should work with real multi-unit data."""

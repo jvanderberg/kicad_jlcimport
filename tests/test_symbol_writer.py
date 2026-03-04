@@ -201,8 +201,8 @@ class TestWriteSymbol:
         result = write_symbol(sym, "DualMOS", unit_index=0, total_units=2)
         # Should have outer symbol opening
         assert '(symbol "DualMOS"' in result
-        # Should have unit sub-symbol with unit number 0
-        assert '(symbol "DualMOS_0_1"' in result
+        # Should have unit sub-symbol with unit number 1 (1-based in KiCad)
+        assert '(symbol "DualMOS_1_1"' in result
         # Count closing parens at the top level: the outer symbol should NOT be closed
         # The result should end with just the unit sub-symbol closing
         lines = result.strip().split("\n")
@@ -217,8 +217,8 @@ class TestWriteSymbol:
             pins=[EEPin(number="2", name="B", x=0, y=0, rotation=0, length=2.54, electrical_type="input")]
         )
         result = write_symbol(sym, "DualMOS", unit_index=1, total_units=2)
-        # Should have unit sub-symbol with unit number 1
-        assert '(symbol "DualMOS_1_1"' in result
+        # Should have unit sub-symbol with unit number 2 (1-based in KiCad)
+        assert '(symbol "DualMOS_2_1"' in result
         # Last two lines should close sub-symbol and outer symbol
         lines = result.strip().split("\n")
         assert lines[-1].strip() == ")"
@@ -237,8 +237,8 @@ class TestWriteSymbol:
         full = part1 + part2
 
         # Both sub-symbols should be present
-        assert '(symbol "DualPart_0_1"' in full
         assert '(symbol "DualPart_1_1"' in full
+        assert '(symbol "DualPart_2_1"' in full
         # Outer wrapper should appear once
         assert full.count('(symbol "DualPart"') == 1
         # Properties should appear in first unit only
