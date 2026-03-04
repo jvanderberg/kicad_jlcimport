@@ -99,6 +99,7 @@ jobs:
           find pcm-staging -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
           cp metadata.json pcm-staging/
           cp resources/icon.png pcm-staging/resources/
+          cp resources/icon_toolbar.png pcm-staging/plugins/icon.png
           cd pcm-staging
           zip -r ../JLCImport-${{ github.ref_name }}.zip metadata.json plugins/ resources/
 

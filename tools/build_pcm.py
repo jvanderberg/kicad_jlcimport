@@ -54,6 +54,11 @@ def build_zip() -> str:
         if os.path.isfile(icon_path):
             zf.write(icon_path, "resources/icon.png")
 
+        # Add toolbar icon into plugins/ for runtime loading
+        toolbar_icon = os.path.join(ROOT, "resources", "icon_toolbar.png")
+        if os.path.isfile(toolbar_icon):
+            zf.write(toolbar_icon, "plugins/icon.png")
+
         # Add all source files under plugins/
         for dirpath, dirnames, filenames in os.walk(SRC_DIR):
             # Skip __pycache__
