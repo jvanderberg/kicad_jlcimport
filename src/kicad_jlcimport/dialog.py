@@ -414,7 +414,10 @@ class JLCImportDialog(wx.Dialog):
         self._symbol_request_id += 1
         if self._on_close_callback:
             self._on_close_callback()
-        self.Destroy()
+        if self.IsModal():
+            self.EndModal(wx.ID_CANCEL)
+        else:
+            self.Destroy()
 
     def _init_ui(self):
         self._root_sizer = wx.BoxSizer(wx.VERTICAL)
