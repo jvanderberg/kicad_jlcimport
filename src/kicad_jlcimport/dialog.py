@@ -355,12 +355,14 @@ class _SpinnerOverlay(wx.Window):
 
 
 class JLCImportDialog(wx.Dialog):
-    def __init__(self, parent, board, project_dir=None, kicad_version=None, global_lib_dir=""):
+    def __init__(self, parent, board, project_dir=None, kicad_version=None, global_lib_dir="", on_close=None):
         super().__init__(parent, title="JLCImport", size=(700, 640), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.board = board
         self._project_dir = project_dir  # Used when board is None (standalone mode)
         self._kicad_version = kicad_version or DEFAULT_KICAD_VERSION
         self._global_lib_dir_override = global_lib_dir
+        self._on_close_callback = on_close
+        self._closing = False
         self._search_results = []
         self._raw_search_results = []
         self._search_request_id = 0
@@ -383,9 +385,35 @@ class JLCImportDialog(wx.Dialog):
         self.Bind(wx.EVT_CLOSE, self._on_close)
 
     def _on_close(self, event):
-        from .plugin import JLCImportPlugin
-
-        JLCImportPlugin._dialog = None
+        if self._closing:
+            return
+        # Warn if an import is in progress (main panel disabled during import)
+        if not self._main_panel.IsEnabled():
+            if (
+                wx.MessageBox(
+                    "An import is in progress. Close anyway?",
+                    "Confirm",
+                    wx.YES_NO | wx.ICON_WARNING,
+                )
+                != wx.YES
+            ):
+                return
+        self._closing = True
+        # Stop all timers to prevent callbacks on destroyed widgets
+        self._stop_search_pulse()
+        self._stop_skeleton()
+        self._stop_gallery_skeleton()
+        self._busy_overlay.dismiss()
+        self._search_overlay.dismiss()
+        # Invalidate all in-flight background requests so their CallAfter
+        # callbacks will no-op when they check the request ID
+        self._search_request_id += 1
+        self._image_request_id += 1
+        self._gallery_request_id += 1
+        self._gallery_svg_request_id += 1
+        self._symbol_request_id += 1
+        if self._on_close_callback:
+            self._on_close_callback()
         self.Destroy()
 
     def _init_ui(self):
@@ -785,20 +813,21 @@ class JLCImportDialog(wx.Dialog):
         """Show a one-time SSL warning and enable unverified HTTPS."""
         if not self._ssl_warning_shown:
             self._ssl_warning_shown = True
-            wx.CallAfter(
-                wx.MessageBox,
-                "TLS certificate verification failed.\n\n"
-                "A proxy or firewall may be intercepting HTTPS traffic. "
-                "The session will continue without certificate verification.\n\n"
-                "Consider downloading the latest version of this plugin which "
-                "may include updated CA certificates.",
-                "TLS Certificate Warning",
-                wx.OK | wx.ICON_WARNING,
-            )
-            wx.CallAfter(
-                self._log,
-                "TLS certificate verification disabled for this session.",
-            )
+            if not self._closing:
+                wx.CallAfter(
+                    wx.MessageBox,
+                    "TLS certificate verification failed.\n\n"
+                    "A proxy or firewall may be intercepting HTTPS traffic. "
+                    "The session will continue without certificate verification.\n\n"
+                    "Consider downloading the latest version of this plugin which "
+                    "may include updated CA certificates.",
+                    "TLS Certificate Warning",
+                    wx.OK | wx.ICON_WARNING,
+                )
+                wx.CallAfter(
+                    self._log,
+                    "TLS certificate verification disabled for this session.",
+                )
         _api_module.allow_unverified_ssl()
 
     def _show_category_list(self, matches):
@@ -1520,8 +1549,8 @@ class JLCImportDialog(wx.Dialog):
         self._exit_gallery()
 
     def _on_key(self, event):
+        key = event.GetKeyCode()
         if self._gallery_panel.IsShown():
-            key = event.GetKeyCode()
             if key == wx.WXK_ESCAPE:
                 self._exit_gallery()
                 return
@@ -1531,6 +1560,9 @@ class JLCImportDialog(wx.Dialog):
             elif key == wx.WXK_RIGHT:
                 self._on_gallery_next(None)
                 return
+        elif key == wx.WXK_ESCAPE:
+            self.Close()
+            return
         event.Skip()
 
     def _on_datasheet(self, event):
@@ -1677,11 +1709,14 @@ class JLCImportDialog(wx.Dialog):
             except SSLCertError:
                 self._handle_ssl_cert_error()
                 result = self._do_import(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version)
-            wx.CallAfter(self._on_import_complete, result)
+            if not self._closing:
+                wx.CallAfter(self._on_import_complete, result)
         except APIError as e:
-            wx.CallAfter(self._on_import_error, f"API Error: {e}")
+            if not self._closing:
+                wx.CallAfter(self._on_import_error, f"API Error: {e}")
         except Exception as e:
-            wx.CallAfter(self._on_import_error, f"Error: {e}\n{traceback.format_exc()}")
+            if not self._closing:
+                wx.CallAfter(self._on_import_error, f"Error: {e}\n{traceback.format_exc()}")
 
     def _on_import_complete(self, result):
         """Main thread: handle successful import completion."""
@@ -1730,13 +1765,17 @@ class JLCImportDialog(wx.Dialog):
         """Run import_component on a background thread with thread-safe callbacks."""
 
         def log(msg):
-            wx.CallAfter(self._log, msg)
+            if not self._closing:
+                wx.CallAfter(self._log, msg)
 
         def confirm_metadata(metadata):
             result = [None]
             done = threading.Event()
 
             def _ask():
+                if self._closing:
+                    done.set()
+                    return
                 self._main_panel.Enable()
                 self._busy_overlay.dismiss()
                 result[0] = self._confirm_metadata(metadata)
@@ -1753,6 +1792,9 @@ class JLCImportDialog(wx.Dialog):
             done = threading.Event()
 
             def _ask():
+                if self._closing:
+                    done.set()
+                    return
                 self._main_panel.Enable()
                 self._busy_overlay.dismiss()
                 result[0] = self._confirm_overwrite(name, existing)
