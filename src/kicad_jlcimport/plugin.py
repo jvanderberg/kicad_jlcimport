@@ -30,7 +30,7 @@ class JLCImportPlugin(pcbnew.ActionPlugin):
             return
         board = pcbnew.GetBoard()
         kicad_version = detect_kicad_version_from_pcbnew()
-        parent = wx.GetApp().GetTopWindow()
+        parent = wx.FindWindowByName("PcbFrame") or wx.FindWindowByName("SchematicFrame")
         dlg = JLCImportDialog(parent, board, kicad_version=kicad_version, on_close=self._clear_dialog)
         JLCImportPlugin._dialog = dlg
         dlg.Show()
