@@ -32,6 +32,8 @@ def fetch_easyeda_svgs(lcsc_id: str) -> dict:
     """Fetch EasyEDA preview SVGs for a part.
 
     Returns dict with 'symbol_svg' and 'footprint_svg' strings (or None).
+    Multi-unit symbols use docType 6 for subpart SVGs; docType 2 often has
+    bogus dimensions (negative width or Infinity), so prefer docType 6.
     """
     uuids = fetch_component_uuids(lcsc_id)
     symbol_svg = None
@@ -39,8 +41,10 @@ def fetch_easyeda_svgs(lcsc_id: str) -> dict:
     for entry in uuids:
         doc_type = entry.get("docType")
         svg = entry.get("svg")
-        if doc_type == 2 and symbol_svg is None:
-            symbol_svg = svg
+        if doc_type in (2, 6) and symbol_svg is None and svg:
+            # Skip SVGs with bogus dimensions (negative width, Infinity)
+            if 'width="-' not in svg and 'width="Infinity' not in svg:
+                symbol_svg = svg
         elif doc_type == 4 and footprint_svg is None:
             footprint_svg = svg
     return {"symbol_svg": symbol_svg, "footprint_svg": footprint_svg}
@@ -68,10 +72,11 @@ def convert_to_kicad(comp: dict, tmp_dir: str) -> dict:
         "fp_file": None,
     }
 
-    # Symbol
+    # Symbol — find the first subpart entry with actual shapes
     sym_list = comp.get("symbol_data_list", [])
-    if sym_list:
-        sym_data = sym_list[0]
+    shapes = []
+    origin_x = origin_y = 0
+    for sym_data in sym_list:
         ds = sym_data.get("dataStr", {})
         if isinstance(ds, str):
             ds = json.loads(ds)
@@ -80,18 +85,20 @@ def convert_to_kicad(comp: dict, tmp_dir: str) -> dict:
         origin_x = head.get("x", 0)
         origin_y = head.get("y", 0)
         if shapes:
-            symbol = parse_symbol_shapes(shapes, origin_x, origin_y)
-            sym_content = write_symbol(
-                symbol,
-                title,
-                prefix=comp.get("prefix", "U"),
-                include_pin_dots=True,
-                hide_properties=True,
-            )
-            sym_lib = write_symbol_library([sym_content])
-            sym_file = Path(tmp_dir) / f"{lcsc_id}.kicad_sym"
-            sym_file.write_text(sym_lib)
-            result["sym_file"] = str(sym_file)
+            break
+    if sym_list and shapes:
+        symbol = parse_symbol_shapes(shapes, origin_x, origin_y)
+        sym_content = write_symbol(
+            symbol,
+            title,
+            prefix=comp.get("prefix", "U"),
+            include_pin_dots=True,
+            hide_properties=True,
+        )
+        sym_lib = write_symbol_library([sym_content])
+        sym_file = Path(tmp_dir) / f"{lcsc_id}.kicad_sym"
+        sym_file.write_text(sym_lib)
+        result["sym_file"] = str(sym_file)
 
     # Footprint
     fp_data = comp.get("footprint_data", {})
