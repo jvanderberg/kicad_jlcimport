@@ -94,12 +94,13 @@ jobs:
 
       - name: Build PCM ZIP
         run: |
-          mkdir -p pcm-staging/plugins
+          mkdir -p pcm-staging/plugins pcm-staging/resources
           cp -r src/kicad_jlcimport/* pcm-staging/plugins/
           find pcm-staging -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
           cp metadata.json pcm-staging/
+          cp resources/icon.png pcm-staging/resources/
           cd pcm-staging
-          zip -r ../JLCImport-${{ github.ref_name }}.zip metadata.json plugins/
+          zip -r ../JLCImport-${{ github.ref_name }}.zip metadata.json plugins/ resources/
 
       - name: Upload PCM artifact
         uses: actions/upload-artifact@v4

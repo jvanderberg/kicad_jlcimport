@@ -1,5 +1,7 @@
 """KiCad ActionPlugin subclass for JLCImport."""
 
+import os
+
 import pcbnew
 import wx
 
@@ -15,7 +17,7 @@ class JLCImportPlugin(pcbnew.ActionPlugin):
         self.category = "Import"
         self.description = "Import symbols, footprints, and 3D models from LCSC/EasyEDA"
         self.show_toolbar_button = True
-        self.icon_file_name = ""
+        self.icon_file_name = os.path.join(os.path.dirname(__file__), "icon.png")
 
     @staticmethod
     def _clear_dialog():

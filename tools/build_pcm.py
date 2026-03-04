@@ -49,6 +49,11 @@ def build_zip() -> str:
         # Add metadata.json at root
         zf.write(METADATA, "metadata.json")
 
+        # Add resources/icon.png for PCM dialog
+        icon_path = os.path.join(ROOT, "resources", "icon.png")
+        if os.path.isfile(icon_path):
+            zf.write(icon_path, "resources/icon.png")
+
         # Add all source files under plugins/
         for dirpath, dirnames, filenames in os.walk(SRC_DIR):
             # Skip __pycache__
