@@ -1,5 +1,7 @@
 """Library file management - create/append symbols, save footprints, update lib-tables."""
 
+from __future__ import annotations
+
 import json
 import os
 import re
