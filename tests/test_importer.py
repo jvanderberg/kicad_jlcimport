@@ -1253,3 +1253,162 @@ class TestConfirmOverwrite:
 
         assert result is not None
         assert len(callback_called) == 0
+
+
+class TestReuseFootprint:
+    """Tests for confirm_reuse_footprint callback in import_component."""
+
+    def _make_fake_comp(self):
+        return {
+            "title": "TestPart",
+            "prefix": "U",
+            "description": "Test description",
+            "datasheet": "https://example.com/ds.pdf",
+            "manufacturer": "ACME",
+            "manufacturer_part": "MPN123",
+            "lcsc_id": "C123",
+            "package": "DIP-8",
+            "footprint_data": {"dataStr": {"shape": []}},
+            "fp_origin_x": 0,
+            "fp_origin_y": 0,
+            "symbol_data_list": [{"dataStr": {"shape": []}}],
+            "sym_origin_x": 0,
+            "sym_origin_y": 0,
+        }
+
+    def _make_fake_symbol(self):
+        sym = EESymbol()
+        sym.pins.append(EEPin(number="1", name="VCC", x=0, y=0, rotation=0, length=2.54, electrical_type="power_in"))
+        return sym
+
+    def test_confirm_true_reuses_existing_footprint_ref(self, tmp_path, monkeypatch):
+        fake_comp = self._make_fake_comp()
+        symbol_kwargs = {}
+        write_footprint_called = []
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "find_best_matching_footprint", lambda *a, **k: "Package_DIP:DIP-8_W7.62mm")
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: symbol_kwargs.update(k) or '  (symbol "TestPart")\n')
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: None)
+        monkeypatch.setattr(
+            importer,
+            "write_footprint",
+            lambda *a, **k: write_footprint_called.append(True) or "(footprint TestPart)\n",
+        )
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            overwrite=False,
+            log=lambda msg: None,
+            confirm_reuse_footprint=lambda package, ref: True,
+        )
+
+        assert result is not None
+        assert symbol_kwargs["footprint_ref"] == "Package_DIP:DIP-8_W7.62mm"
+        assert write_footprint_called == []
+
+    def test_confirm_false_keeps_generated_footprint_ref(self, tmp_path, monkeypatch):
+        fake_comp = self._make_fake_comp()
+        symbol_kwargs = {}
+        write_footprint_called = []
+        fake_fp = EEFootprint()
+        fake_fp.pads.append(EEPad(shape="RECT", x=0, y=0, width=1, height=1, layer="1", number="1", drill=0, rotation=0))
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "find_best_matching_footprint", lambda *a, **k: "Package_DIP:DIP-8_W7.62mm")
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: symbol_kwargs.update(k) or '  (symbol "TestPart")\n')
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(
+            importer,
+            "write_footprint",
+            lambda *a, **k: write_footprint_called.append(True) or "(footprint TestPart)\n",
+        )
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            overwrite=False,
+            log=lambda msg: None,
+            confirm_reuse_footprint=lambda package, ref: False,
+        )
+
+        assert result is not None
+        assert symbol_kwargs["footprint_ref"] == "TestLib:TestPart"
+        assert write_footprint_called == [True]
+
+    def test_metadata_callback_can_choose_use_existing(self, tmp_path, monkeypatch):
+        fake_comp = self._make_fake_comp()
+        symbol_kwargs = {}
+        write_footprint_called = []
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "find_best_matching_footprint", lambda *a, **k: "Diode_SMD:D_SOD-323")
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: symbol_kwargs.update(k) or '  (symbol "TestPart")\n')
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: None)
+        monkeypatch.setattr(
+            importer,
+            "write_footprint",
+            lambda *a, **k: write_footprint_called.append(True) or "(footprint TestPart)\n",
+        )
+
+        def metadata_select_existing(metadata):
+            assert metadata["__footprint_candidate_ref"] == "Diode_SMD:D_SOD-323"
+            metadata["__reuse_existing_footprint"] = True
+            return metadata
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            overwrite=False,
+            log=lambda msg: None,
+            confirm_metadata=metadata_select_existing,
+            confirm_reuse_footprint=lambda package, ref: (_ for _ in ()).throw(
+                AssertionError("fallback reuse callback should not be called")
+            ),
+        )
+
+        assert result is not None
+        assert symbol_kwargs["footprint_ref"] == "Diode_SMD:D_SOD-323"
+        assert write_footprint_called == []
+
+    def test_search_result_package_used_for_matching_when_component_package_missing(self, tmp_path, monkeypatch):
+        fake_comp = self._make_fake_comp()
+        fake_comp["package"] = ""
+        symbol_kwargs = {}
+
+        seen_packages = []
+        fake_fp = EEFootprint()
+        fake_fp.pads.append(EEPad(shape="RECT", x=0, y=0, width=1, height=1, layer="1", number="1", drill=0, rotation=0))
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: symbol_kwargs.update(k) or '  (symbol "TestPart")\n')
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
+
+        def capture_package(package, project_dir="", kicad_version=9):
+            seen_packages.append(package)
+            return "Package_DFN_QFN:QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"
+
+        monkeypatch.setattr(importer, "find_best_matching_footprint", capture_package)
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            overwrite=False,
+            log=lambda msg: None,
+            search_result={"package": "QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"},
+            confirm_reuse_footprint=lambda package, ref: True,
+        )
+
+        assert result is not None
+        assert seen_packages == ["QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"]
+        assert symbol_kwargs["footprint_ref"] == "Package_DFN_QFN:QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"

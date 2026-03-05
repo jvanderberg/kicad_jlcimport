@@ -8,6 +8,7 @@ from kicad_jlcimport.kicad.library import (
     _update_lib_table,
     add_symbol_to_lib,
     ensure_lib_structure,
+    find_best_matching_footprint,
     sanitize_name,
     save_footprint,
 )
@@ -224,6 +225,108 @@ class TestRemoveSymbol:
         content = '(kicad_symbol_lib\n  (symbol "R_100")\n)\n'
         result = _remove_symbol(content, "X_999")
         assert result == content
+
+
+class TestFindBestMatchingFootprint:
+    def test_finds_match_from_project_fp_lib_table(self, tmp_path, monkeypatch):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        empty_global = tmp_path / "empty_global"
+        empty_global.mkdir()
+        local_pretty = project_dir / "Local.pretty"
+        local_pretty.mkdir()
+        (local_pretty / "DIP-8_W7.62mm.kicad_mod").write_text("(footprint)")
+
+        (project_dir / "fp-lib-table").write_text(
+            '(fp_lib_table\n'
+            '  (version 7)\n'
+            '  (lib (name "Local")(type "KiCad")(uri "${KIPRJMOD}/Local.pretty")(options "")(descr ""))\n'
+            ')\n'
+        )
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.get_global_config_dir", lambda _v=9: str(empty_global))
+
+        match = find_best_matching_footprint("DIP-8", str(project_dir), kicad_version=9)
+        assert match == "Local:DIP-8_W7.62mm"
+
+    def test_finds_match_from_global_fp_lib_table(self, tmp_path, monkeypatch):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        fp_root = tmp_path / "fp_root"
+        so_pretty = fp_root / "Package_SO.pretty"
+        so_pretty.mkdir(parents=True)
+        (so_pretty / "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod").write_text("(footprint)")
+
+        (config_dir / "fp-lib-table").write_text(
+            '(fp_lib_table\n'
+            '  (version 7)\n'
+            '  (lib (name "Package_SO")(type "KiCad")(uri "${KICAD9_FOOTPRINT_DIR}/Package_SO.pretty")(options "")(descr ""))\n'
+            ')\n'
+        )
+
+        monkeypatch.setenv("KICAD9_FOOTPRINT_DIR", str(fp_root))
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.get_global_config_dir", lambda _v=9: str(config_dir))
+
+        match = find_best_matching_footprint("SOIC-8_3.9x4.9mm_P1.27mm", "", kicad_version=9)
+        assert match == "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+
+    def test_returns_none_when_no_sufficient_match(self, tmp_path, monkeypatch):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "fp-lib-table").write_text("(fp_lib_table\n  (version 7)\n)\n")
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.get_global_config_dir", lambda _v=9: str(config_dir))
+
+        match = find_best_matching_footprint("BGA-100", str(tmp_path), kicad_version=9)
+        assert match is None
+
+    def test_uses_platform_fallback_when_kicad_env_var_missing(self, tmp_path, monkeypatch):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "fp-lib-table").write_text(
+            '(fp_lib_table\n'
+            '  (version 7)\n'
+            '  (lib (name "Diode_SMD")(type "KiCad")(uri "${KICAD9_FOOTPRINT_DIR}/Diode_SMD.pretty")(options "")(descr ""))\n'
+            ')\n'
+        )
+
+        candidate_root = "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints"
+        diode_lib = f"{candidate_root}/Diode_SMD.pretty"
+
+        monkeypatch.delenv("KICAD9_FOOTPRINT_DIR", raising=False)
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.get_global_config_dir", lambda _v=9: str(config_dir))
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.sys.platform", "darwin")
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.library.os.path.isdir",
+            lambda p: p in {candidate_root, diode_lib},
+        )
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.library.os.listdir",
+            lambda p: ["D_SOD-323.kicad_mod"] if p == diode_lib else [],
+        )
+
+        match = find_best_matching_footprint("SOD-323", "", kicad_version=9)
+        assert match == "Diode_SMD:D_SOD-323"
+
+    def test_prefers_qfn_80_over_qfn_40_when_package_is_qfn_80(self, tmp_path, monkeypatch):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        empty_global = tmp_path / "empty_global"
+        empty_global.mkdir()
+        qfn_lib = project_dir / "Package_DFN_QFN.pretty"
+        qfn_lib.mkdir()
+        (qfn_lib / "QFN-40-1EP_5x5mm_P0.4mm_EP3.6x3.6mm.kicad_mod").write_text("(footprint)")
+        (qfn_lib / "QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm.kicad_mod").write_text("(footprint)")
+
+        (project_dir / "fp-lib-table").write_text(
+            '(fp_lib_table\n'
+            '  (version 7)\n'
+            '  (lib (name "Package_DFN_QFN")(type "KiCad")(uri "${KIPRJMOD}/Package_DFN_QFN.pretty")(options "")(descr ""))\n'
+            ')\n'
+        )
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.get_global_config_dir", lambda _v=9: str(empty_global))
+
+        package = "QFN-80_L10.0-W10.0-P0.40-TL-EP3.4"
+        match = find_best_matching_footprint(package, str(project_dir), kicad_version=9)
+        assert match == "Package_DFN_QFN:QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"
 
 
 class TestAddSymbolToLibVersions:

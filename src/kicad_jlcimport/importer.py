@@ -11,6 +11,7 @@ from .kicad.footprint_writer import write_footprint
 from .kicad.library import (
     add_symbol_to_lib,
     ensure_lib_structure,
+    find_best_matching_footprint,
     sanitize_name,
     save_footprint,
     update_global_lib_tables,
@@ -87,6 +88,7 @@ def import_component(
     confirm_overwrite: Callable[[str, list[str]], bool] | None = None,
     component_data: dict | None = None,
     symbol_kwargs: dict | None = None,
+    confirm_reuse_footprint: Callable[[str, str], bool] | None = None,
 ) -> dict | None:
     """Import an LCSC component into a KiCad library or export raw files.
 
@@ -102,8 +104,11 @@ def import_component(
         search_result: Optional search result dict with ``brand``, ``description``,
             and ``datasheet`` fields from the JLCPCB search API.
         confirm_metadata: Optional callback that receives a dict with ``description``,
-            ``keywords``, and ``manufacturer`` keys.  Returns the (possibly edited)
-            dict to use, or ``None`` to cancel the import.
+            ``keywords``, and ``manufacturer`` keys. When a footprint match is
+            available it also includes ``__package_name`` and
+            ``__footprint_candidate_ref``. The callback may set
+            ``__reuse_existing_footprint`` to request reusing that footprint.
+            Returns the (possibly edited) dict to use, or ``None`` to cancel the import.
         confirm_overwrite: Optional callback called when existing files are detected.
             Receives ``(name, existing_items)`` where *existing_items* lists what
             already exists (e.g. ``["footprint", "symbol"]``).  Returns ``True`` to
@@ -113,6 +118,10 @@ def import_component(
             API call to ``fetch_full_component`` is skipped.
         symbol_kwargs: Optional extra keyword arguments forwarded to
             ``write_symbol()`` (e.g. ``include_pin_dots``, ``hide_properties``).
+        confirm_reuse_footprint: Optional callback called when a likely existing
+            footprint match is found. Receives ``(package, footprint_ref)`` and
+            returns ``True`` to reuse the existing footprint reference in the
+            symbol, or ``False`` to generate a new footprint as before.
 
     Returns:
         dict with keys: title, name, fp_content, sym_content; or None if cancelled.
@@ -131,9 +140,23 @@ def import_component(
             comp["description"] = search_result["description"]
         if search_result.get("datasheet"):
             comp["datasheet"] = search_result["datasheet"]
+        # Some EasyEDA payloads omit package while JLC search results include it.
+        if search_result.get("package") and not comp.get("package"):
+            comp["package"] = search_result["package"]
 
     title = comp["title"]
     name = sanitize_name(title)
+    footprint_ref = f"{lib_name}:{name}"
+    package = comp.get("package", "")
+    candidate_ref = None
+    reuse_existing_footprint = False
+    reuse_choice_from_metadata = None
+    if not export_only:
+        candidate_ref = find_best_matching_footprint(
+            package,
+            project_dir=lib_dir if not use_global else "",
+            kicad_version=kicad_version,
+        )
 
     # Check for existing files and ask user to confirm overwrite
     if not export_only and confirm_overwrite:
@@ -149,34 +172,56 @@ def import_component(
         "keywords": _build_keywords(comp),
         "manufacturer": comp.get("manufacturer", ""),
     }
+    if candidate_ref:
+        metadata["__package_name"] = package
+        metadata["__footprint_candidate_ref"] = candidate_ref
     if confirm_metadata:
         metadata = confirm_metadata(metadata)
         if metadata is None:
             return None
+        if "__reuse_existing_footprint" in metadata:
+            reuse_choice_from_metadata = bool(metadata["__reuse_existing_footprint"])
+    metadata.pop("__package_name", None)
+    metadata.pop("__footprint_candidate_ref", None)
+    metadata.pop("__reuse_existing_footprint", None)
+
+    if candidate_ref:
+        if reuse_choice_from_metadata is True:
+            reuse_existing_footprint = True
+        elif reuse_choice_from_metadata is None and confirm_reuse_footprint:
+            reuse_existing_footprint = confirm_reuse_footprint(package, candidate_ref)
+        if reuse_existing_footprint:
+            footprint_ref = candidate_ref
+            log(f"Reusing existing footprint: {footprint_ref}")
     log(f"Component: {title}")
     log(f"Prefix: {comp['prefix']}, Name: {name}")
 
-    # Parse footprint
-    log("Parsing footprint...")
-    fp_shapes = comp["footprint_data"]["dataStr"]["shape"]
-    footprint = parse_footprint_shapes(fp_shapes, comp["fp_origin_x"], comp["fp_origin_y"])
-    log(f"  {len(footprint.pads)} pads, {len(footprint.tracks)} tracks")
+    # Parse footprint unless using an existing KiCad footprint
+    footprint = None
+    if not reuse_existing_footprint:
+        log("Parsing footprint...")
+        fp_shapes = comp["footprint_data"]["dataStr"]["shape"]
+        footprint = parse_footprint_shapes(fp_shapes, comp["fp_origin_x"], comp["fp_origin_y"])
+        log(f"  {len(footprint.pads)} pads, {len(footprint.tracks)} tracks")
+    else:
+        log("Skipping footprint parse (existing footprint selected).")
 
-    # Determine 3D model UUID and transform
+    # Determine 3D model UUID and transform (only when generating a footprint)
     model_offset = (0.0, 0.0, 0.0)
     model_rotation = (0.0, 0.0, 0.0)
     uuid_3d = ""
     wrl_source = None
-    if footprint.model:
-        uuid_3d = footprint.model.uuid
-    if not uuid_3d:
-        uuid_3d = comp.get("uuid_3d", "")
-    if uuid_3d:
-        wrl_source = download_wrl_source(uuid_3d)
-    if footprint.model:
-        model_offset, model_rotation = compute_model_transform(
-            footprint.model, comp["fp_origin_x"], comp["fp_origin_y"], wrl_source
-        )
+    if not reuse_existing_footprint:
+        if footprint.model:
+            uuid_3d = footprint.model.uuid
+        if not uuid_3d:
+            uuid_3d = comp.get("uuid_3d", "")
+        if uuid_3d:
+            wrl_source = download_wrl_source(uuid_3d)
+        if footprint.model:
+            model_offset, model_rotation = compute_model_transform(
+                footprint.model, comp["fp_origin_x"], comp["fp_origin_y"], wrl_source
+            )
 
     # Parse symbol (may have multiple units)
     sym_content = ""
@@ -188,7 +233,6 @@ def import_component(
         if len(sym_data_list) > 1:
             sym_data_list = sym_data_list[1:]
         total_units = len(sym_data_list)
-        footprint_ref = f"{lib_name}:{name}"
         sym_parts = []
         total_pins = 0
         total_rects = 0
@@ -281,6 +325,8 @@ def import_component(
         kicad_version,
         wrl_source,
         metadata,
+        reuse_existing_footprint,
+        footprint_ref,
     )
 
 
@@ -370,6 +416,8 @@ def _import_to_library(
     kicad_version,
     wrl_source=None,
     metadata=None,
+    reuse_existing_footprint=False,
+    footprint_ref="",
 ):
     """Import into KiCad library structure with lib-table updates."""
     log(f"Destination: {lib_dir}")
@@ -378,7 +426,10 @@ def _import_to_library(
 
     # Download 3D models
     model_path = ""
-    if uuid_3d:
+    if reuse_existing_footprint:
+        log(f"Using existing footprint reference: {footprint_ref}")
+        log("Skipping footprint and 3D model file generation.")
+    elif uuid_3d:
         step_dest = os.path.join(paths["models_dir"], f"{name}.step")
         wrl_dest = os.path.join(paths["models_dir"], f"{name}.wrl")
         step_existed = os.path.exists(step_dest)
@@ -408,26 +459,28 @@ def _import_to_library(
     else:
         log("No 3D model available")
 
-    # Write footprint
-    log("Writing footprint...")
-    fp_content = write_footprint(
-        footprint,
-        name,
-        lcsc_id=lcsc_id,
-        description=metadata["description"],
-        keywords=metadata["keywords"],
-        datasheet=comp.get("datasheet", ""),
-        model_path=model_path,
-        model_offset=model_offset,
-        model_rotation=model_rotation,
-        kicad_version=kicad_version,
-    )
-    fp_path = os.path.join(paths["fp_dir"], f"{name}.kicad_mod")
-    fp_saved = save_footprint(paths["fp_dir"], name, fp_content, overwrite)
-    if fp_saved:
-        log(f"  Saved: {fp_path}")
-    else:
-        log(f"  Skipped: {fp_path} (exists, overwrite=off)")
+    fp_content = ""
+    if not reuse_existing_footprint:
+        # Write footprint
+        log("Writing footprint...")
+        fp_content = write_footprint(
+            footprint,
+            name,
+            lcsc_id=lcsc_id,
+            description=metadata["description"],
+            keywords=metadata["keywords"],
+            datasheet=comp.get("datasheet", ""),
+            model_path=model_path,
+            model_offset=model_offset,
+            model_rotation=model_rotation,
+            kicad_version=kicad_version,
+        )
+        fp_path = os.path.join(paths["fp_dir"], f"{name}.kicad_mod")
+        fp_saved = save_footprint(paths["fp_dir"], name, fp_content, overwrite)
+        if fp_saved:
+            log(f"  Saved: {fp_path}")
+        else:
+            log(f"  Skipped: {fp_path} (exists, overwrite=off)")
 
     # Write symbol
     if sym_content:

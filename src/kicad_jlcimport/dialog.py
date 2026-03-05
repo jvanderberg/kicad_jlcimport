@@ -235,8 +235,11 @@ class MetadataEditDialog(wx.Dialog):
     """Modal dialog for editing component metadata before import."""
 
     def __init__(self, parent, metadata: dict):
+        self._package_name = metadata.get("__package_name", "")
+        self._footprint_candidate_ref = metadata.get("__footprint_candidate_ref", "")
+        self._footprint_choice = None
         super().__init__(
-            parent, title="Edit Metadata", size=(450, 280), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
+            parent, title="Edit Metadata", size=(520, 360), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
         )
         self._build_ui(metadata)
         self.Centre()
@@ -261,6 +264,24 @@ class MetadataEditDialog(wx.Dialog):
 
         vbox.Add(grid, 1, wx.EXPAND | wx.ALL, 10)
 
+        if self._footprint_candidate_ref:
+            fp_box = wx.BoxSizer(wx.VERTICAL)
+            fp_msg = (
+                f"Possible existing footprint match for package '{self._package_name}':\n"
+                f"{self._footprint_candidate_ref}"
+            )
+            fp_box.Add(wx.StaticText(self, label=fp_msg), 0, wx.BOTTOM, 6)
+            self._footprint_choice = wx.RadioBox(
+                self,
+                label="",
+                choices=["Import footprint", f"Use {self._footprint_candidate_ref}"],
+                majorDimension=1,
+                style=wx.RA_SPECIFY_COLS,
+            )
+            self._footprint_choice.SetSelection(0)
+            fp_box.Add(self._footprint_choice, 0, wx.EXPAND)
+            vbox.Add(fp_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         btn_sizer = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
         vbox.Add(btn_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
@@ -268,11 +289,14 @@ class MetadataEditDialog(wx.Dialog):
 
     def get_metadata(self) -> dict:
         """Return the edited metadata values."""
-        return {
+        result = {
             "description": self._desc.GetValue(),
             "keywords": self._keywords.GetValue(),
             "manufacturer": self._manufacturer.GetValue(),
         }
+        if self._footprint_choice is not None:
+            result["__reuse_existing_footprint"] = self._footprint_choice.GetSelection() == 1
+        return result
 
 
 class _SpinnerOverlay(wx.Window):

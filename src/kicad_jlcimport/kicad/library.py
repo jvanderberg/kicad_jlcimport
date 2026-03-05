@@ -294,6 +294,278 @@ def _update_lib_table(table_path: str, table_type: str, lib_name: str, lib_type:
 
 
 _WINDOWS_RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$", re.IGNORECASE)
+_LIB_ENTRY_RE = re.compile(
+    r'\(lib\s+\(name\s+"([^"]+)"\)\s*\(type\s+"([^"]+)"\)\s*\(uri\s+"([^"]+)"\)',
+    re.IGNORECASE,
+)
+_ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
+
+
+def _read_fp_lib_entries(table_path: str) -> list[tuple[str, str, str]]:
+    """Return fp-lib-table entries as (name, type, uri)."""
+    if not os.path.exists(table_path):
+        return []
+    try:
+        with open(table_path, encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return []
+    return [(name, lib_type, uri) for name, lib_type, uri in _LIB_ENTRY_RE.findall(content)]
+
+
+def _expand_lib_uri(uri: str, project_dir: str = "") -> str:
+    """Expand common variables in a lib-table URI."""
+
+    def _fallback_var(key: str) -> str:
+        if not re.match(r"^KICAD\d+_FOOTPRINT_DIR$", key):
+            return ""
+
+        candidates: list[str] = []
+        if sys.platform == "darwin":
+            candidates.extend(
+                [
+                    "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints",
+                    "/Applications/KiCad/KiCad Nightly.app/Contents/SharedSupport/footprints",
+                ]
+            )
+        elif sys.platform == "win32":
+            pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+            candidates.extend(
+                [
+                    os.path.join(pf, "KiCad", "share", "kicad", "footprints"),
+                    os.path.join(pf, "KiCad", "9.0", "share", "kicad", "footprints"),
+                    os.path.join(pf, "KiCad", "8.0", "share", "kicad", "footprints"),
+                ]
+            )
+        else:
+            candidates.extend(
+                [
+                    "/usr/share/kicad/footprints",
+                    "/usr/share/kicad-nightly/footprints",
+                    "/usr/local/share/kicad/footprints",
+                ]
+            )
+
+        for candidate in candidates:
+            if os.path.isdir(candidate):
+                return candidate
+        return ""
+
+    def _replace(match) -> str:
+        key = match.group(1)
+        if key == "KIPRJMOD":
+            return project_dir
+        env_val = os.environ.get(key, "")
+        if env_val:
+            return env_val
+        fallback = _fallback_var(key)
+        if fallback:
+            return fallback
+        return match.group(0)
+
+    expanded = _ENV_VAR_RE.sub(_replace, uri)
+    expanded = os.path.expanduser(expanded)
+    if "${" in expanded:
+        return ""
+    if expanded and not os.path.isabs(expanded) and project_dir:
+        expanded = os.path.normpath(os.path.join(project_dir, expanded))
+    return expanded
+
+
+def _iter_footprint_libraries(project_dir: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> list[tuple[str, str]]:
+    """Return existing .pretty directories from project/global fp-lib-table files."""
+    candidates: list[tuple[str, str]] = []
+    tables: list[tuple[str, str]] = []
+
+    if project_dir:
+        tables.append((os.path.join(project_dir, "fp-lib-table"), project_dir))
+    tables.append((os.path.join(get_global_config_dir(kicad_version), "fp-lib-table"), project_dir))
+
+    seen: set[tuple[str, str]] = set()
+    for table_path, table_project_dir in tables:
+        for lib_name, lib_type, uri in _read_fp_lib_entries(table_path):
+            if lib_type.lower() != "kicad":
+                continue
+            path = _expand_lib_uri(uri, table_project_dir)
+            if not path or not path.lower().endswith(".pretty") or not os.path.isdir(path):
+                continue
+            key = (lib_name, os.path.normpath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(key)
+    return candidates
+
+
+def _footprint_match_score(package: str, footprint_name: str) -> int:
+    """Heuristic score for package-to-footprint-name similarity."""
+
+    def _extract_features(text: str) -> dict:
+        t = text.upper()
+        features: dict = {}
+
+        families = (
+            "QFN",
+            "DFN",
+            "LGA",
+            "SON",
+            "SOIC",
+            "SSOP",
+            "TSSOP",
+            "SOP",
+            "QFP",
+            "LQFP",
+            "TQFP",
+            "BGA",
+            "DIP",
+            "SOT",
+            "SOD",
+        )
+        for family in families:
+            if re.search(rf"(^|[^A-Z0-9]){family}([^-_A-Z0-9]|[-_])", t):
+                features["family"] = family
+                count_m = re.search(rf"{family}[-_]?(\d+)\b", t)
+                if count_m:
+                    features["count"] = int(count_m.group(1))
+                break
+
+        pitch_m = re.search(r"P(?:ITCH)?\s*([0-9]+(?:\.[0-9]+)?)", t)
+        if pitch_m:
+            try:
+                features["pitch"] = float(pitch_m.group(1))
+            except ValueError:
+                pass
+
+        body_pairs: list[tuple[float, float]] = []
+        for m in re.finditer(r"(?<![0-9A-Z])(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)(?:MM)?(?![0-9A-Z])", t):
+            try:
+                a, b = float(m.group(1)), float(m.group(2))
+                body_pairs.append((a, b))
+            except ValueError:
+                continue
+        if body_pairs:
+            a, b = max(body_pairs, key=lambda p: p[0] * p[1])
+            features["body"] = tuple(sorted((a, b)))
+        else:
+            body_lw_m = re.search(r"L(\d+(?:\.\d+)?)\b.*?W(\d+(?:\.\d+)?)\b", t)
+            if body_lw_m:
+                try:
+                    a, b = float(body_lw_m.group(1)), float(body_lw_m.group(2))
+                    features["body"] = tuple(sorted((a, b)))
+                except ValueError:
+                    pass
+
+        ep_m = re.search(r"EP(\d+(?:\.\d+)?)(?:X(\d+(?:\.\d+)?))?", t)
+        if ep_m:
+            try:
+                a = float(ep_m.group(1))
+                b = float(ep_m.group(2)) if ep_m.group(2) else a
+                features["ep"] = tuple(sorted((a, b)))
+            except ValueError:
+                pass
+
+        return features
+
+    def _pair_close(a: tuple[float, float], b: tuple[float, float], tol: float) -> bool:
+        return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
+
+    pkg = package.upper()
+    fp = footprint_name.upper()
+    pkg_features = _extract_features(pkg)
+    fp_features = _extract_features(fp)
+
+    # Hard guards to avoid obviously wrong package matches (e.g. QFN-80 -> QFN-40).
+    if pkg_features.get("family") and pkg_features.get("family") == fp_features.get("family"):
+        if "count" in pkg_features and "count" in fp_features and pkg_features["count"] != fp_features["count"]:
+            return 0
+        if "body" in pkg_features and "body" in fp_features and not _pair_close(pkg_features["body"], fp_features["body"], 0.25):
+            return 0
+        if "pitch" in pkg_features and "pitch" in fp_features and abs(pkg_features["pitch"] - fp_features["pitch"]) > 0.05:
+            return 0
+
+    pkg_norm = re.sub(r"[^A-Z0-9]+", "", pkg)
+    fp_norm = re.sub(r"[^A-Z0-9]+", "", fp)
+    if not pkg_norm or not fp_norm:
+        return 0
+    if pkg_norm == fp_norm:
+        return 100
+    if fp_norm.startswith(pkg_norm):
+        return 95
+    if pkg_norm in fp_norm:
+        return 90
+
+    pkg_tokens = [t for t in re.split(r"[^A-Z0-9]+", pkg) if t]
+    fp_tokens = [t for t in re.split(r"[^A-Z0-9]+", fp) if t]
+    if not pkg_tokens or not fp_tokens:
+        return 0
+
+    shared = set(pkg_tokens) & set(fp_tokens)
+    if not shared:
+        return 0
+
+    score = 30 + 10 * len(shared)
+    if pkg_tokens[0] in shared:
+        score += 15
+    pkg_digits = {t for t in pkg_tokens if t.isdigit()}
+    if pkg_digits and pkg_digits.issubset(set(fp_tokens)):
+        score += 10
+
+    # Feature bonuses for high-confidence footprint matches.
+    if pkg_features.get("family") and pkg_features.get("family") == fp_features.get("family"):
+        score += 8
+    if "count" in pkg_features and pkg_features.get("count") == fp_features.get("count"):
+        score += 22
+    if "body" in pkg_features and "body" in fp_features and _pair_close(pkg_features["body"], fp_features["body"], 0.25):
+        score += 20
+    if "pitch" in pkg_features and "pitch" in fp_features and abs(pkg_features["pitch"] - fp_features["pitch"]) <= 0.02:
+        score += 15
+    if "ep" in pkg_features and "ep" in fp_features and _pair_close(pkg_features["ep"], fp_features["ep"], 0.25):
+        score += 12
+
+    return min(score, 100)
+
+
+def find_best_matching_footprint(
+    package: str,
+    project_dir: str = "",
+    kicad_version: int = DEFAULT_KICAD_VERSION,
+    min_score: int = 60,
+) -> str | None:
+    """Find the best existing footprint reference for a package name.
+
+    Returns:
+        Footprint reference like ``Library:Footprint`` or ``None`` when no
+        sufficiently close match is found.
+    """
+    if not package:
+        return None
+
+    best: tuple[int, str, str] | None = None
+    for lib_name, lib_path in _iter_footprint_libraries(project_dir, kicad_version):
+        try:
+            entries = os.listdir(lib_path)
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.lower().endswith(".kicad_mod"):
+                continue
+            fp_name = entry[: -len(".kicad_mod")]
+            score = _footprint_match_score(package, fp_name)
+            if score < min_score:
+                continue
+            if best is None:
+                best = (score, lib_name, fp_name)
+                continue
+            if score > best[0]:
+                best = (score, lib_name, fp_name)
+                continue
+            if score == best[0]:
+                if len(fp_name) < len(best[2]) or (len(fp_name) == len(best[2]) and fp_name < best[2]):
+                    best = (score, lib_name, fp_name)
+
+    if best is None:
+        return None
+    return f"{best[1]}:{best[2]}"
 
 
 def sanitize_name(title: str) -> str:
