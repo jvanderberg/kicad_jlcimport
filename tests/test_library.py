@@ -238,10 +238,10 @@ class TestFindBestMatchingFootprint:
         (local_pretty / "DIP-8_W7.62mm.kicad_mod").write_text("(footprint)")
 
         (project_dir / "fp-lib-table").write_text(
-            '(fp_lib_table\n'
-            '  (version 7)\n'
+            "(fp_lib_table\n"
+            "  (version 7)\n"
             '  (lib (name "Local")(type "KiCad")(uri "${KIPRJMOD}/Local.pretty")(options "")(descr ""))\n'
-            ')\n'
+            ")\n"
         )
         monkeypatch.setattr("kicad_jlcimport.kicad.library.get_global_config_dir", lambda _v=9: str(empty_global))
 
@@ -257,10 +257,10 @@ class TestFindBestMatchingFootprint:
         (so_pretty / "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod").write_text("(footprint)")
 
         (config_dir / "fp-lib-table").write_text(
-            '(fp_lib_table\n'
-            '  (version 7)\n'
+            "(fp_lib_table\n"
+            "  (version 7)\n"
             '  (lib (name "Package_SO")(type "KiCad")(uri "${KICAD9_FOOTPRINT_DIR}/Package_SO.pretty")(options "")(descr ""))\n'
-            ')\n'
+            ")\n"
         )
 
         monkeypatch.setenv("KICAD9_FOOTPRINT_DIR", str(fp_root))
@@ -282,10 +282,10 @@ class TestFindBestMatchingFootprint:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "fp-lib-table").write_text(
-            '(fp_lib_table\n'
-            '  (version 7)\n'
+            "(fp_lib_table\n"
+            "  (version 7)\n"
             '  (lib (name "Diode_SMD")(type "KiCad")(uri "${KICAD9_FOOTPRINT_DIR}/Diode_SMD.pretty")(options "")(descr ""))\n'
-            ')\n'
+            ")\n"
         )
 
         candidate_root = "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints"
@@ -317,10 +317,10 @@ class TestFindBestMatchingFootprint:
         (qfn_lib / "QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm.kicad_mod").write_text("(footprint)")
 
         (project_dir / "fp-lib-table").write_text(
-            '(fp_lib_table\n'
-            '  (version 7)\n'
+            "(fp_lib_table\n"
+            "  (version 7)\n"
             '  (lib (name "Package_DFN_QFN")(type "KiCad")(uri "${KIPRJMOD}/Package_DFN_QFN.pretty")(options "")(descr ""))\n'
-            ')\n'
+            ")\n"
         )
         monkeypatch.setattr("kicad_jlcimport.kicad.library.get_global_config_dir", lambda _v=9: str(empty_global))
 

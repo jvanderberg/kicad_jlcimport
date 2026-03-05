@@ -478,9 +478,17 @@ def _footprint_match_score(package: str, footprint_name: str) -> int:
     if pkg_features.get("family") and pkg_features.get("family") == fp_features.get("family"):
         if "count" in pkg_features and "count" in fp_features and pkg_features["count"] != fp_features["count"]:
             return 0
-        if "body" in pkg_features and "body" in fp_features and not _pair_close(pkg_features["body"], fp_features["body"], 0.25):
+        if (
+            "body" in pkg_features
+            and "body" in fp_features
+            and not _pair_close(pkg_features["body"], fp_features["body"], 0.25)
+        ):
             return 0
-        if "pitch" in pkg_features and "pitch" in fp_features and abs(pkg_features["pitch"] - fp_features["pitch"]) > 0.05:
+        if (
+            "pitch" in pkg_features
+            and "pitch" in fp_features
+            and abs(pkg_features["pitch"] - fp_features["pitch"]) > 0.05
+        ):
             return 0
 
     pkg_norm = re.sub(r"[^A-Z0-9]+", "", pkg)
@@ -515,7 +523,11 @@ def _footprint_match_score(package: str, footprint_name: str) -> int:
         score += 8
     if "count" in pkg_features and pkg_features.get("count") == fp_features.get("count"):
         score += 22
-    if "body" in pkg_features and "body" in fp_features and _pair_close(pkg_features["body"], fp_features["body"], 0.25):
+    if (
+        "body" in pkg_features
+        and "body" in fp_features
+        and _pair_close(pkg_features["body"], fp_features["body"], 0.25)
+    ):
         score += 20
     if "pitch" in pkg_features and "pitch" in fp_features and abs(pkg_features["pitch"] - fp_features["pitch"]) <= 0.02:
         score += 15
