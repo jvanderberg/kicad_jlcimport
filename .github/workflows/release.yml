@@ -118,7 +118,7 @@ jobs:
 
   release:
     needs: [build, pcm]
-    if: needs.build.result == 'success' && needs.pcm.result == 'success'
+    if: always() && needs.pcm.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
