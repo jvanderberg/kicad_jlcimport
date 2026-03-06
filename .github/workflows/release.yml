@@ -92,26 +92,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build PCM ZIP
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
         run: |
-          mkdir -p pcm-staging/plugins pcm-staging/resources
-          cp -r src/kicad_jlcimport/* pcm-staging/plugins/
-          find pcm-staging -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-          cp metadata.json pcm-staging/
-          cp resources/icon.png pcm-staging/resources/
-          cp resources/icon_toolbar.png pcm-staging/plugins/icon.png
-          cd pcm-staging
-          zip -r ../JLCImport-${{ github.ref_name }}.zip metadata.json plugins/ resources/
+          TAG="${GITHUB_REF_NAME}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build PCM ZIP and repository metadata
+        run: |
+          python3 tools/build_pcm.py \
+            --tag "${{ steps.release_meta.outputs.tag }}" \
+            --github-repo "${{ github.repository }}" \
+            --output-dir .
 
       - name: Upload PCM artifact
         uses: actions/upload-artifact@v4
         with:
           name: pcm-zip
-          path: JLCImport-*.zip
+          path: |
+            JLCImport-*.zip
+            resources.zip
+            packages.json
+            repository.json
 
   release:
     needs: [build, pcm]
-    if: always() && needs.pcm.result == 'success'
+    if: needs.build.result == 'success' && needs.pcm.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -125,4 +132,6 @@ jobs:
           files: |
             *.tar.gz
             *.zip
+            packages.json
+            repository.json
           generate_release_notes: true

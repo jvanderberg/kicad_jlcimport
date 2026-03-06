@@ -14,12 +14,13 @@ JLCImport is a KiCad action plugin that imports symbols, footprints, and 3D mode
 
 ## Install
 
-Use the plugin ZIP from [Releases](https://github.com/jvanderberg/kicad_jlcimport/releases), not the auto-generated source ZIP.
+1. Open KiCad and go to **Tools > Plugin and Content Manager**
+2. Open repository settings and add:
+   `https://github.com/jvanderberg/kicad_jlcimport/releases/latest/download/repository.json`
+3. Refresh repositories
+4. Install **JLCImport**
 
-1. Download `JLCImport-vX.X.X.zip`.
-2. In KiCad, open `Tools > Plugin and Content Manager`.
-3. Click `Install from File...` and select the ZIP.
-4. Apply pending changes.
+Fallback: install from ZIP using [Releases](https://github.com/jvanderberg/kicad_jlcimport/releases) (`JLCImport-vX.X.X.zip`, not "Source code" ZIP).
 
 For local development, link `src/kicad_jlcimport` into your KiCad plugin directory and restart KiCad.
 
