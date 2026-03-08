@@ -231,15 +231,882 @@ class _PageIndicator(wx.Control):
                 self._on_page_change(best)
 
 
+
+
+def _extract_blocks(text: str, keyword: str) -> list:
+    """Extract all top-level s-expression blocks starting with (keyword ...}.
+
+    Uses bracket-counting so nested parens inside a block don't confuse the
+    extractor — essential for pad blocks which may contain drill/primitives.
+    """
+    results = []
+    pattern = __import__("re").compile(rf"\({keyword}\b")
+    for m in pattern.finditer(text):
+        start = m.start()
+        depth = 0
+        i = start
+        while i < len(text):
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    results.append(text[start : i + 1])
+                    break
+            i += 1
+    return results
+
+
+def _parse_kicad_mod(path: str) -> dict:
+    """Parse a KiCad 8/9/10 .kicad_mod file into geometry lists for preview rendering.
+
+    Returns a dict with keys:
+      lines   – list of ((x1,y1),(x2,y2), layer, width_mm)
+      rects   – list of (x1,y1, x2,y2, layer, width_mm, corner_r, filled)
+      circles – list of (cx, cy, r, layer, width_mm, filled)
+      arcs    – list of (sx,sy, mx,my, ex,ey, layer, width_mm)
+      polys   – list of ([(x,y),...], layer, filled)
+      pads    – list of (num, x, y, w, h, shape, rotation, pad_type, drill_d)
+      model   – (path_str, exists: bool) or None
+      descr, tags – strings
+      pads_count  – int
+
+    KiCad 8/9/10 format only (quoted layer names, stroke blocks).
+    """
+    import math as _math
+
+    _re = __import__("re")
+    N = r"[\d.eE+\-]+"
+
+    result: dict = {
+        "lines": [], "rects": [], "circles": [], "arcs": [], "polys": [],
+        "pads": [], "model": None, "descr": "", "tags": "", "pads_count": 0,
+    }
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return result
+
+    def _f(s) -> float:
+        try:    return float(s)
+        except: return 0.0
+
+    def _field(name: str) -> str:
+        m = _re.search(rf'\({name}\s+"([^"]*)"\)', text)
+        return m.group(1) if m else ""
+
+    result["descr"] = _field("descr")
+    result["tags"]  = _field("tags")
+
+    def _layer(block: str) -> str:
+        m = _re.search(r'\(layer\s+"([^"]+)"\)', block)
+        return m.group(1) if m else ""
+
+    def _sw(block: str) -> float:
+        m = _re.search(rf'\(stroke\s*\(width\s+({N})\)', block, _re.DOTALL)
+        return _f(m.group(1)) if m else 0.1
+
+    # ── fp_line ─────────────────────────────────────────────────────────
+    for block in _extract_blocks(text, "fp_line"):
+        c = _re.search(
+            rf'\(start\s+({N})\s+({N})\)\s*\(end\s+({N})\s+({N})\)',
+            block, _re.DOTALL,
+        )
+        layer = _layer(block)
+        if c and layer:
+            result["lines"].append((
+                (_f(c.group(1)), _f(c.group(2))),
+                (_f(c.group(3)), _f(c.group(4))),
+                layer, _sw(block),
+            ))
+
+    # ── fp_rect (KiCad 8+) ──────────────────────────────────────────────
+    for block in _extract_blocks(text, "fp_rect"):
+        s = _re.search(rf'\(start\s+({N})\s+({N})\)', block)
+        e = _re.search(rf'\(end\s+({N})\s+({N})\)', block)
+        layer = _layer(block)
+        if s and e and layer:
+            cr = _re.search(rf'\(corner_radius\s+({N})\)', block)
+            result["rects"].append((
+                _f(s.group(1)), _f(s.group(2)),
+                _f(e.group(1)), _f(e.group(2)),
+                layer, _sw(block),
+                _f(cr.group(1)) if cr else 0.0,
+                "(fill solid)" in block,
+            ))
+
+    # ── fp_circle ───────────────────────────────────────────────────────
+    for block in _extract_blocks(text, "fp_circle"):
+        cx_m = _re.search(rf'\(center\s+({N})\s+({N})\)', block)
+        en_m = _re.search(rf'\(end\s+({N})\s+({N})\)', block)
+        layer = _layer(block)
+        if cx_m and en_m and layer:
+            cx, cy = _f(cx_m.group(1)), _f(cx_m.group(2))
+            r = _math.hypot(_f(en_m.group(1)) - cx, _f(en_m.group(2)) - cy)
+            result["circles"].append((cx, cy, r, layer, _sw(block), "(fill solid)" in block))
+
+    # ── fp_arc (start/mid/end, KiCad 8+) ────────────────────────────────
+    for block in _extract_blocks(text, "fp_arc"):
+        layer = _layer(block)
+        if not layer:
+            continue
+        s = _re.search(rf'\(start\s+({N})\s+({N})\)', block)
+        m = _re.search(rf'\(mid\s+({N})\s+({N})\)',   block)
+        e = _re.search(rf'\(end\s+({N})\s+({N})\)',   block)
+        if s and m and e:
+            result["arcs"].append((
+                _f(s.group(1)), _f(s.group(2)),
+                _f(m.group(1)), _f(m.group(2)),
+                _f(e.group(1)), _f(e.group(2)),
+                layer, _sw(block),
+            ))
+
+    # ── fp_poly ─────────────────────────────────────────────────────────
+    for block in _extract_blocks(text, "fp_poly"):
+        pts_m = _re.search(r'\(pts(.*?)\)', block, _re.DOTALL)
+        layer = _layer(block)
+        if pts_m and layer:
+            pts = [
+                (_f(p.group(1)), _f(p.group(2)))
+                for p in _re.finditer(rf'\(xy\s+({N})\s+({N})\)', pts_m.group(1))
+            ]
+            if pts:
+                result["polys"].append((pts, layer, "(fill solid)" in block))
+
+    # ── pads ────────────────────────────────────────────────────────────
+    for block in _extract_blocks(text, "pad"):
+        body = _re.match(
+            rf'\(pad\s+"([^"]*)"\s+(\w+)\s+(\w+)\s+'
+            rf'\(at\s+({N})\s+({N})(?:\s+({N}))?\)\s*\(size\s+({N})\s+({N})\)',
+            block, _re.DOTALL,
+        )
+        if not body:
+            continue
+        drill_m = _re.search(rf'\(drill(?:\s+oval)?\s+({N})', block)
+        result["pads"].append((
+            body.group(1),                                     # num
+            _f(body.group(4)), _f(body.group(5)),              # x, y
+            _f(body.group(7)), _f(body.group(8)),              # w, h
+            body.group(3),                                     # shape
+            _f(body.group(6)) if body.group(6) else 0.0,      # rotation
+            body.group(2),                                     # pad_type
+            _f(drill_m.group(1)) if drill_m else 0.0,         # drill_d
+        ))
+
+    result["pads_count"] = len(result["pads"])
+
+    # ------------------------------------------------------------------ #
+    # 3D model                                                             #
+    # ------------------------------------------------------------------ #
+    m3d = _re.search(r'\(model\s+"([^"]+)"', text)
+    if m3d:
+        raw_path = m3d.group(1).strip()
+        resolved = raw_path
+        for var, val in (
+            ("${KICAD9_3DMODEL_DIR}", os.environ.get("KICAD9_3DMODEL_DIR", "")),
+            ("${KICAD8_3DMODEL_DIR}", os.environ.get("KICAD8_3DMODEL_DIR", "")),
+            ("${KICAD7_3DMODEL_DIR}", os.environ.get("KICAD7_3DMODEL_DIR", "")),
+            ("${KIPRJMOD}",           os.environ.get("KIPRJMOD", "")),
+        ):
+            if val:
+                resolved = resolved.replace(var, val)
+        exists = os.path.isfile(resolved)
+        result["model"] = (raw_path, exists)
+
+    return result
+
+
+# KiCad layer colours — "kicad_default" dark theme, matching the PCB editor exactly.
+_LAYER_COLOURS: dict[str, tuple[int, int, int]] = {
+    "F.Cu":        (200,  52,  52),   # #C83434  red
+    "B.Cu":        ( 77, 127, 196),   # #4D7FC4  blue
+    "F.SilkS":     (242, 237, 161),   # #F2EDA1  pale yellow
+    "B.SilkS":     (232, 178, 167),   # #E8B2A7  salmon
+    "F.Fab":       (175, 175, 175),   # #AFAFAF  light grey
+    "B.Fab":       ( 99,  99,  99),   # #636363  dark grey
+    "F.Courtyard": (255,  38, 226),   # #FF26E2  hot magenta
+    "B.Courtyard": ( 38, 233, 255),   # #26E9FF  sky cyan
+    "F.Paste":     (180,  60, 180),   # #B43CB4  purple
+    "B.Paste":     ( 60, 180, 180),   # #3CB4B4  teal
+    "F.Mask":      (255, 100, 150),   # #FF6496  pink
+    "B.Mask":      ( 70, 140, 255),   # #468CFF  periwinkle
+    "Edge.Cuts":   (255, 241,  52),   # #FFF134  yellow
+    "Cmts.User":   ( 99,  99,  99),   # #636363  dark grey
+    "Eco1.User":   ( 99, 182,  44),   # #63B62C  green
+    "Eco2.User":   (153,  71,  71),   # #994747  dark red
+    "User.1":      (206, 206, 206),   # #CECECE  silver
+    "User.2":      (160, 160, 160),   # #A0A0A0  grey
+}
+_DEFAULT_LAYER_COLOUR = (128, 128, 128)  # #808080  mid grey
+
+# Draw order: back layers first, front on top, pads drawn separately last
+_LAYER_ORDER = [
+    "B.Courtyard", "B.Fab", "B.SilkS", "B.Cu", "B.Paste", "B.Mask",
+    "Edge.Cuts", "Cmts.User", "User.1", "User.2", "Eco1.User", "Eco2.User",
+    "F.Courtyard", "F.Fab", "F.SilkS", "F.Cu", "F.Paste", "F.Mask",
+]
+
+# Minimum rendered stroke in pixels — 1.5px keeps thin courtyard/fab lines crisp
+# and prevents GraphicsContext sub-pixel anti-aliasing from making them invisible.
+_MIN_STROKE_PX = 1.5
+
+
+class _FootprintPreviewPanel(wx.Panel):
+    """Owner-drawn panel that renders a parsed .kicad_mod footprint.
+
+    Renders lines, arcs, circles, polygons and pads using wx.GraphicsContext
+    with KiCad layer colours on a dark background.
+    Supports mouse-wheel zoom and click-drag pan.
+    Right-click or double-click resets zoom to fit.
+    """
+
+    # Pad colours mirror the copper layer colour, exactly as KiCad does.
+    # F.Cu  = red #C83434 → pads on front copper are red.
+    # B.Cu  = blue        → pads on back copper are blue.
+    # np_thru_hole has no copper so rendered as dark grey with just the drill hole.
+    _PAD_FILL = {
+        "smd":          wx.Colour(200,  52,  52, 230),   # F.Cu red, semi-transparent
+        "thru_hole":    wx.Colour(200,  52,  52, 230),   # F.Cu red (annular ring)
+        "np_thru_hole": wx.Colour( 60,  60,  60, 180),   # no copper — dark grey
+    }
+    _PAD_OUTLINE   = wx.Colour(255, 255, 255,  80)   # subtle white edge
+    _DRILL_COLOUR  = wx.Colour( 15,  15,  15)        # near-black drill hole
+    _PIN1_COLOUR   = wx.Colour(255, 255,  80)   # bright yellow pin-1 marker
+    _TEXT_COLOUR   = wx.Colour(200, 200, 200)
+
+    def __init__(self, parent):
+        super().__init__(parent, style=wx.BORDER_SUNKEN)
+        self._fp: dict | None = None
+        self._scale  = 10.0
+        self._offset = wx.Point(0, 0)
+        self._dragging = False
+        self._drag_start       = wx.Point(0, 0)
+        self._drag_offset_start = wx.Point(0, 0)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.SetMinSize((320, 320))
+        self.Bind(wx.EVT_PAINT,      self._on_paint)
+        self.Bind(wx.EVT_SIZE,       self._on_size)
+        self.Bind(wx.EVT_MOUSEWHEEL, self._on_wheel)
+        self.Bind(wx.EVT_LEFT_DOWN,  self._on_ldown)
+        self.Bind(wx.EVT_LEFT_UP,    self._on_lup)
+        self.Bind(wx.EVT_MOTION,     self._on_motion)
+        self.Bind(wx.EVT_RIGHT_DOWN, self._on_rclick)
+        self.Bind(wx.EVT_LEFT_DCLICK, self._on_rclick)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def load(self, fp: dict | None) -> None:
+        self._fp = fp
+        self._fit()
+        self.Refresh()
+
+    # ------------------------------------------------------------------
+    # Geometry helpers
+    # ------------------------------------------------------------------
+
+    def _all_points(self) -> list:
+        if not self._fp:
+            return []
+        pts = []
+        for (x1, y1), (x2, y2), *_ in self._fp["lines"]:
+            pts += [(x1, y1), (x2, y2)]
+        for x1, y1, x2, y2, *_ in self._fp["rects"]:
+            pts += [(x1, y1), (x2, y2)]
+        for cx, cy, r, *_ in self._fp["circles"]:
+            pts += [(cx - r, cy - r), (cx + r, cy + r)]
+        for sx, sy, _mx, _my, ex, ey, *_ in self._fp["arcs"]:
+            pts += [(sx, sy), (ex, ey)]
+        for poly_pts, *_ in self._fp["polys"]:
+            pts += poly_pts
+        for _num, x, y, w, h, *_ in self._fp["pads"]:
+            hw, hh = w / 2 + 0.2, h / 2 + 0.2
+            pts += [(x - hw, y - hh), (x + hw, y + hh)]
+        return pts
+
+    def _fit(self) -> None:
+        pts = self._all_points()
+        w, h = self.GetClientSize()
+        if w < 10:
+            w, h = 320, 320
+        if not pts:
+            self._scale = 10.0
+            self._offset = wx.Point(w // 2, h // 2)
+            return
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        span_x = max(max(xs) - min(xs), 0.5)
+        span_y = max(max(ys) - min(ys), 0.5)
+        self._scale = min(w * 0.82 / span_x, h * 0.82 / span_y)
+        cx = (min(xs) + max(xs)) / 2.0
+        cy = (min(ys) + max(ys)) / 2.0
+        self._offset = wx.Point(
+            int(w / 2 - cx * self._scale),
+            int(h / 2 - cy * self._scale),
+        )
+
+    # ------------------------------------------------------------------
+    # Coordinate helpers
+    # ------------------------------------------------------------------
+
+    def _px(self, x: float, y: float):
+        return (x * self._scale + self._offset.x,
+                y * self._scale + self._offset.y)
+
+    def _pxlen(self, mm: float) -> float:
+        return mm * self._scale
+
+    def _stroke_w(self, mm: float) -> float:
+        return max(_MIN_STROKE_PX, self._pxlen(mm))
+
+    # ------------------------------------------------------------------
+    # Events
+    # ------------------------------------------------------------------
+
+    def _on_size(self, event):
+        self._fit()
+        self.Refresh()
+        event.Skip()
+
+    def _on_rclick(self, event):
+        self._fit()
+        self.Refresh()
+
+    def _on_wheel(self, event):
+        factor = 1.15 if event.GetWheelRotation() > 0 else 1.0 / 1.15
+        mx, my = event.GetX(), event.GetY()
+        self._offset = wx.Point(
+            int(mx + (self._offset.x - mx) * factor),
+            int(my + (self._offset.y - my) * factor),
+        )
+        self._scale *= factor
+        self.Refresh()
+
+    def _on_ldown(self, event):
+        self._dragging = True
+        self._drag_start = event.GetPosition()
+        self._drag_offset_start = wx.Point(self._offset.x, self._offset.y)
+        self.CaptureMouse()
+
+    def _on_lup(self, event):
+        if self._dragging:
+            self._dragging = False
+            if self.HasCapture():
+                self.ReleaseMouse()
+
+    def _on_motion(self, event):
+        if self._dragging:
+            pos = event.GetPosition()
+            self._offset = wx.Point(
+                self._drag_offset_start.x + pos.x - self._drag_start.x,
+                self._drag_offset_start.y + pos.y - self._drag_start.y,
+            )
+            self.Refresh()
+
+    # ------------------------------------------------------------------
+    # Painting
+    # ------------------------------------------------------------------
+
+    def _on_paint(self, event):
+        import math
+
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(wx.Colour(26, 26, 26)))
+        dc.Clear()
+
+        if not self._fp:
+            dc.SetTextForeground(wx.Colour(90, 90, 90))
+            dc.DrawText("No footprint selected", 10, 10)
+            return
+
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+
+        fp = self._fp
+        w_px, h_px = self.GetClientSize()
+
+        # ── Crosshair at origin ──────────────────────────────────────
+        ox, oy = self._px(0, 0)
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(55, 55, 55)).Width(1)))
+        gc.StrokeLine(0, oy, w_px, oy)
+        gc.StrokeLine(ox, 0, ox, h_px)
+
+        # ── Bucket geometry by layer ─────────────────────────────────
+        layer_lines:   dict[str, list] = {}
+        layer_rects:   dict[str, list] = {}
+        layer_circles: dict[str, list] = {}
+        layer_arcs:    dict[str, list] = {}
+        layer_polys:   dict[str, list] = {}
+
+        for seg in fp["lines"]:
+            layer_lines.setdefault(seg[2], []).append(seg)
+        for rect in fp["rects"]:
+            layer_rects.setdefault(rect[4], []).append(rect)
+        for circ in fp["circles"]:
+            layer_circles.setdefault(circ[3], []).append(circ)
+        for arc in fp["arcs"]:
+            layer_arcs.setdefault(arc[6], []).append(arc)
+        for poly in fp["polys"]:
+            layer_polys.setdefault(poly[1], []).append(poly)
+
+        all_layers = (set(layer_lines) | set(layer_rects) | set(layer_circles)
+                      | set(layer_arcs) | set(layer_polys))
+        ordered = [l for l in _LAYER_ORDER if l in all_layers]
+        ordered += sorted(l for l in all_layers if l not in _LAYER_ORDER)
+
+        for layer in ordered:
+            r, g, b = _LAYER_COLOURS.get(layer, _DEFAULT_LAYER_COLOUR)
+            colour = wx.Colour(r, g, b)
+
+            # ── Lines ────────────────────────────────────────────────
+            for (x1, y1), (x2, y2), _layer, w_mm in layer_lines.get(layer, []):
+                gc.SetPen(gc.CreatePen(
+                    wx.GraphicsPenInfo(colour).Width(self._stroke_w(w_mm))
+                ))
+                px1, py1 = self._px(x1, y1)
+                px2, py2 = self._px(x2, y2)
+                gc.StrokeLine(px1, py1, px2, py2)
+
+            # ── Rectangles (fp_rect, KiCad 8+) ───────────────────────
+            for x1, y1, x2, y2, _layer, w_mm, corner_r, filled in layer_rects.get(layer, []):
+                gc.SetPen(gc.CreatePen(
+                    wx.GraphicsPenInfo(colour).Width(self._stroke_w(w_mm))
+                ))
+                gc.SetBrush(gc.CreateBrush(wx.Brush(colour)) if filled
+                            else wx.TRANSPARENT_BRUSH)
+                px1, py1 = self._px(x1, y1)
+                px2, py2 = self._px(x2, y2)
+                pw = abs(px2 - px1)
+                ph = abs(py2 - py1)
+                left  = min(px1, px2)
+                top   = min(py1, py2)
+                corner_px = max(0.0, self._pxlen(corner_r))
+                if corner_px > 0:
+                    path = gc.CreatePath()
+                    path.AddRoundedRectangle(left, top, pw, ph, corner_px)
+                    gc.DrawPath(path)
+                else:
+                    gc.DrawRectangle(left, top, pw, ph)
+
+            # ── Circles ──────────────────────────────────────────────
+            for cx, cy, radius, _layer, w_mm, filled in layer_circles.get(layer, []):
+                gc.SetPen(gc.CreatePen(
+                    wx.GraphicsPenInfo(colour).Width(self._stroke_w(w_mm))
+                ))
+                if filled:
+                    gc.SetBrush(gc.CreateBrush(wx.Brush(colour)))
+                else:
+                    gc.SetBrush(wx.TRANSPARENT_BRUSH)
+                px, py   = self._px(cx - radius, cy - radius)
+                diameter = self._pxlen(radius) * 2
+                gc.DrawEllipse(px, py, diameter, diameter)
+
+            # ── Arcs ─────────────────────────────────────────────────
+            for sx, sy, mx_, my_, ex, ey, _layer, w_mm in layer_arcs.get(layer, []):
+                gc.SetPen(gc.CreatePen(
+                    wx.GraphicsPenInfo(colour).Width(self._stroke_w(w_mm))
+                ))
+                try:
+                    # Circumcircle through start / mid / end
+                    ax, ay = sx, sy
+                    bx, by = mx_, my_
+                    cx2, cy2 = ex, ey
+                    d = 2 * (ax * (by - cy2) + bx * (cy2 - ay) + cx2 * (ay - by))
+                    if abs(d) < 1e-9:
+                        px1, py1 = self._px(sx, sy)
+                        px2, py2 = self._px(ex, ey)
+                        gc.StrokeLine(px1, py1, px2, py2)
+                        continue
+                    ux = ((ax**2 + ay**2) * (by - cy2)
+                          + (bx**2 + by**2) * (cy2 - ay)
+                          + (cx2**2 + cy2**2) * (ay - by)) / d
+                    uy = ((ax**2 + ay**2) * (cx2 - bx)
+                          + (bx**2 + by**2) * (ax - cx2)
+                          + (cx2**2 + cy2**2) * (bx - ax)) / d
+                    radius_arc = math.hypot(ax - ux, ay - uy)
+                    a_start = math.atan2(ay - uy, ax - ux)
+                    a_mid   = math.atan2(by - uy, bx - ux)
+                    a_end   = math.atan2(cy2 - uy, cx2 - ux)
+                    # Determine sweep direction using the midpoint angle
+                    # Normalise to go from a_start in the same direction as mid
+                    def _norm(a, ref):
+                        while a < ref - math.pi: a += 2 * math.pi
+                        while a > ref + math.pi: a -= 2 * math.pi
+                        return a
+                    a_mid_n = _norm(a_mid, a_start)
+                    a_end_n = _norm(a_end, a_start)
+                    if (a_mid_n > a_start) != (a_end_n > a_start):
+                        a_end_n += 2 * math.pi if a_end_n < a_start else -2 * math.pi
+                    steps = max(12, int(abs(a_end_n - a_start) / math.radians(4)))
+                    pts_arc = []
+                    for i in range(steps + 1):
+                        t = a_start + (a_end_n - a_start) * i / steps
+                        pts_arc.append(self._px(
+                            ux + radius_arc * math.cos(t),
+                            uy + radius_arc * math.sin(t),
+                        ))
+                    if len(pts_arc) >= 2:
+                        path = gc.CreatePath()
+                        path.MoveToPoint(*pts_arc[0])
+                        for pt in pts_arc[1:]:
+                            path.AddLineToPoint(*pt)
+                        gc.StrokePath(path)
+                except Exception:
+                    pass
+
+            # ── Polygons ─────────────────────────────────────────────
+            for poly_pts, _layer, filled in layer_polys.get(layer, []):
+                if len(poly_pts) < 2:
+                    continue
+                gc.SetPen(gc.CreatePen(
+                    wx.GraphicsPenInfo(colour).Width(_MIN_STROKE_PX)
+                ))
+                gc.SetBrush(gc.CreateBrush(wx.Brush(colour)) if filled
+                            else wx.TRANSPARENT_BRUSH)
+                path = gc.CreatePath()
+                path.MoveToPoint(*self._px(*poly_pts[0]))
+                for pt in poly_pts[1:]:
+                    path.AddLineToPoint(*self._px(*pt))
+                path.CloseSubpath()
+                gc.DrawPath(path)
+
+        # ── Pads ─────────────────────────────────────────────────────
+        # Drawn last so they appear on top of all copper/silkscreen
+        font = wx.Font(wx.FontInfo(max(6, int(self._scale * 0.6))).AntiAliased())
+        gc.SetFont(font, self._TEXT_COLOUR)
+
+        for num, x, y, pw, ph, shape, rot, pad_type, drill_d in fp["pads"]:
+            fill_col  = self._PAD_FILL.get(pad_type, wx.Colour(160, 160, 160, 200))
+            outline_w = max(0.8, self._scale * 0.04)
+            gc.SetBrush(gc.CreateBrush(wx.Brush(fill_col)))
+            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(self._PAD_OUTLINE).Width(outline_w)))
+
+            px_c, py_c = self._px(x, y)
+            wpx = max(2.0, self._pxlen(pw))
+            hpx = max(2.0, self._pxlen(ph))
+
+            gc.PushState()
+            gc.Translate(px_c, py_c)
+            if rot:
+                gc.Rotate(math.radians(rot))
+
+            s = shape.lower()
+            if s == "circle":
+                r2 = wpx / 2
+                gc.DrawEllipse(-r2, -r2, r2 * 2, r2 * 2)
+            elif s in ("oval", "roundrect"):
+                corner = min(wpx, hpx) / 2 if s == "oval" else min(wpx, hpx) * 0.2
+                path = gc.CreatePath()
+                path.AddRoundedRectangle(-wpx / 2, -hpx / 2, wpx, hpx, corner)
+                gc.DrawPath(path)
+            else:  # rect / trapezoid / custom / default
+                # Pin 1 gets a chamfered corner (top-left notch) to match KiCad
+                if num == "1":
+                    chamfer = min(wpx, hpx) * 0.25
+                    path = gc.CreatePath()
+                    path.MoveToPoint(-wpx / 2 + chamfer, -hpx / 2)
+                    path.AddLineToPoint( wpx / 2,         -hpx / 2)
+                    path.AddLineToPoint( wpx / 2,          hpx / 2)
+                    path.AddLineToPoint(-wpx / 2,          hpx / 2)
+                    path.AddLineToPoint(-wpx / 2,         -hpx / 2 + chamfer)
+                    path.CloseSubpath()
+                    gc.DrawPath(path)
+                else:
+                    gc.DrawRectangle(-wpx / 2, -hpx / 2, wpx, hpx)
+
+            # Drill hole for through-hole pads
+            if pad_type in ("thru_hole", "np_thru_hole") and drill_d > 0:
+                dr_px = max(1.5, self._pxlen(drill_d) / 2)
+                gc.SetBrush(gc.CreateBrush(wx.Brush(self._DRILL_COLOUR)))
+                gc.SetPen(wx.NullGraphicsPen)
+                gc.DrawEllipse(-dr_px, -dr_px, dr_px * 2, dr_px * 2)
+
+            gc.PopState()
+
+            # Pin number label — only draw when pads are large enough
+            if num and self._scale > 6:
+                tw, th = gc.GetTextExtent(num)
+                # draw at pad centre, clipped to pad size
+                if tw < wpx * 1.5 and th < hpx * 1.5:
+                    gc.DrawText(num, px_c - tw / 2, py_c - th / 2)
+
+        # ── Hint ─────────────────────────────────────────────────────
+        hint_font = wx.Font(wx.FontInfo(8))
+        gc.SetFont(hint_font, wx.Colour(70, 70, 70))
+        gc.DrawText("scroll=zoom  drag=pan  dbl-click=fit", 4, h_px - 14)
+
+class FootprintBrowserDialog(wx.Dialog):
+    """Three-pane footprint library browser with live 2D preview.
+
+    Left pane   – library list (from fp-lib-table via _iter_footprint_libraries).
+    Middle pane – footprint list within the selected library.
+    Right pane  – 2D rendered preview of the selected footprint drawn with
+                  KiCad layer colours, plus a 3D model info section below it.
+
+    The preview panel supports mouse-wheel zoom and click-drag pan.
+    Double-clicking a footprint or clicking OK confirms the selection and
+    returns a ``"LibraryName:FootprintName"`` reference via ``get_selection()``.
+    """
+
+    def __init__(self, parent, project_dir: str = "", kicad_version: int = DEFAULT_KICAD_VERSION,
+                 initial_selection: str = ""):
+        super().__init__(
+            parent,
+            title="Select Footprint",
+            size=(1000, 600),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+        from .kicad.library import _iter_footprint_libraries
+
+        self._libs: list[tuple[str, str]] = list(_iter_footprint_libraries(project_dir, kicad_version))
+        self._selection = ""
+        self._current_fp_path = ""
+        self._build_ui()
+        self.Centre()
+        # Pre-navigate to the initial selection (e.g. the auto-matched candidate)
+        if initial_selection:
+            self._navigate_to(initial_selection)
+
+    def _build_ui(self) -> None:
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        # Filter bar
+        filter_row = wx.BoxSizer(wx.HORIZONTAL)
+        filter_row.Add(wx.StaticText(self, label="Filter:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        self._filter = wx.TextCtrl(self)
+        self._filter.SetHint("type to filter libraries and footprints…")
+        self._filter.Bind(wx.EVT_TEXT, self._on_filter)
+        filter_row.Add(self._filter, 1)
+        outer.Add(filter_row, 0, wx.EXPAND | wx.ALL, 6)
+
+        # ── Three-pane splitter ──────────────────────────────────────
+        # outer_split: [lib_list | inner_split]
+        # inner_split: [fp_list  | preview_panel]
+        outer_split = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
+        inner_split = wx.SplitterWindow(outer_split, style=wx.SP_LIVE_UPDATE)
+
+        self._lib_list = wx.ListBox(outer_split, style=wx.LB_SINGLE)
+        self._lib_list.Bind(wx.EVT_LISTBOX, self._on_lib_select)
+
+        self._fp_list = wx.ListBox(inner_split, style=wx.LB_SINGLE)
+        self._fp_list.Bind(wx.EVT_LISTBOX, self._on_fp_select)
+        self._fp_list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_fp_dclick)
+
+        # Right pane: preview + info
+        right_panel = wx.Panel(inner_split)
+        right_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self._preview = _FootprintPreviewPanel(right_panel)
+        right_sizer.Add(self._preview, 1, wx.EXPAND)
+
+        # Info bar below preview: description, pad count, 3D model
+        info_panel = wx.Panel(right_panel)
+        info_sizer = wx.FlexGridSizer(cols=2, hgap=8, vgap=2)
+        info_sizer.AddGrowableCol(1)
+        bold = info_panel.GetFont().Bold()
+
+        info_sizer.Add(wx.StaticText(info_panel, label="Description:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._info_descr = wx.StaticText(info_panel, label="", style=wx.ST_NO_AUTORESIZE | wx.ST_ELLIPSIZE_END)
+        info_sizer.Add(self._info_descr, 1, wx.EXPAND)
+
+        info_sizer.Add(wx.StaticText(info_panel, label="Tags:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._info_tags = wx.StaticText(info_panel, label="", style=wx.ST_NO_AUTORESIZE | wx.ST_ELLIPSIZE_END)
+        info_sizer.Add(self._info_tags, 1, wx.EXPAND)
+
+        info_sizer.Add(wx.StaticText(info_panel, label="Pads:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._info_pads = wx.StaticText(info_panel, label="")
+        self._info_pads.SetFont(bold)
+        info_sizer.Add(self._info_pads, 0)
+
+        info_sizer.Add(wx.StaticText(info_panel, label="3D Model:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._info_model = wx.StaticText(info_panel, label="", style=wx.ST_NO_AUTORESIZE | wx.ST_ELLIPSIZE_START)
+        info_sizer.Add(self._info_model, 1, wx.EXPAND)
+
+        info_panel.SetSizer(info_sizer)
+        right_sizer.Add(info_panel, 0, wx.EXPAND | wx.ALL, 4)
+        right_panel.SetSizer(right_sizer)
+
+        inner_split.SplitVertically(self._fp_list, right_panel, 220)
+        outer_split.SplitVertically(self._lib_list, inner_split, 200)
+        outer.Add(outer_split, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
+
+        # Current selection label
+        self._sel_label = wx.StaticText(self, label="", style=wx.ST_NO_AUTORESIZE)
+        outer.Add(self._sel_label, 0, wx.ALL, 6)
+
+        btn_sizer = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
+        self.FindWindowById(wx.ID_OK).Disable()
+        outer.Add(btn_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+        self.SetSizer(outer)
+        self._populate_lib_list("")
+
+    # ------------------------------------------------------------------
+    # Library / footprint list population
+    # ------------------------------------------------------------------
+
+    def _populate_lib_list(self, filt: str) -> None:
+        """Fill the library list, including libraries that contain matching footprints."""
+        filt_up = filt.strip().upper()
+        self._lib_list.Clear()
+        self._filtered_libs: list[tuple[str, str]] = []
+        for lib_name, lib_path in self._libs:
+            if not filt_up or filt_up in lib_name.upper():
+                self._filtered_libs.append((lib_name, lib_path))
+            else:
+                try:
+                    if any(filt_up in e.upper() for e in os.listdir(lib_path) if e.lower().endswith(".kicad_mod")):
+                        self._filtered_libs.append((lib_name, lib_path))
+                except OSError:
+                    pass
+        for lib_name, _ in self._filtered_libs:
+            self._lib_list.Append(lib_name)
+        self._fp_list.Clear()
+        self._selection = ""
+        self._sel_label.SetLabel("")
+        self._clear_preview()
+        self.FindWindowById(wx.ID_OK).Disable()
+
+    def _on_filter(self, event) -> None:
+        filt = self._filter.GetValue()
+        self._populate_lib_list(filt)
+        if self._lib_list.GetCount() > 0:
+            self._lib_list.SetSelection(0)
+            self._on_lib_select(None)
+
+    def _on_lib_select(self, event) -> None:
+        idx = self._lib_list.GetSelection()
+        if idx == wx.NOT_FOUND or idx >= len(self._filtered_libs):
+            return
+        _, lib_path = self._filtered_libs[idx]
+        filt_up = self._filter.GetValue().strip().upper()
+        self._fp_list.Clear()
+        try:
+            names = sorted(
+                e[: -len(".kicad_mod")]
+                for e in os.listdir(lib_path)
+                if e.lower().endswith(".kicad_mod") and (not filt_up or filt_up in e.upper())
+            )
+        except OSError:
+            names = []
+        for name in names:
+            self._fp_list.Append(name)
+        self._selection = ""
+        self._sel_label.SetLabel("")
+        self._clear_preview()
+        self.FindWindowById(wx.ID_OK).Disable()
+
+    def _on_fp_select(self, event) -> None:
+        lib_idx = self._lib_list.GetSelection()
+        fp_idx = self._fp_list.GetSelection()
+        if lib_idx == wx.NOT_FOUND or lib_idx >= len(self._filtered_libs) or fp_idx == wx.NOT_FOUND:
+            return
+        lib_name, lib_path = self._filtered_libs[lib_idx]
+        fp_name = self._fp_list.GetString(fp_idx)
+        self._selection = f"{lib_name}:{fp_name}"
+        self._sel_label.SetLabel(self._selection)
+        self.FindWindowById(wx.ID_OK).Enable()
+        # Load and render preview in a background thread to keep UI responsive
+        fp_path = os.path.join(lib_path, f"{fp_name}.kicad_mod")
+        self._current_fp_path = fp_path
+        threading.Thread(target=self._load_preview, args=(fp_path,), daemon=True).start()
+
+    def _on_fp_dclick(self, event) -> None:
+        self._on_fp_select(event)
+        if self._selection:
+            self.EndModal(wx.ID_OK)
+
+    # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+
+    def _clear_preview(self) -> None:
+        self._preview.load(None)
+        self._info_descr.SetLabel("")
+        self._info_tags.SetLabel("")
+        self._info_pads.SetLabel("")
+        self._info_model.SetLabel("")
+        self._info_model.SetForegroundColour(wx.NullColour)
+
+    def _load_preview(self, fp_path: str) -> None:
+        """Parse the .kicad_mod on a background thread, then update UI."""
+        fp = _parse_kicad_mod(fp_path)
+        if not wx.IsMainThread():
+            wx.CallAfter(self._apply_preview, fp_path, fp)
+        else:
+            self._apply_preview(fp_path, fp)
+
+    def _apply_preview(self, fp_path: str, fp: dict) -> None:
+        """Apply parsed footprint data to the preview panel (main thread)."""
+        # Guard against a newer selection having arrived
+        if fp_path != self._current_fp_path:
+            return
+        self._preview.load(fp)
+        self._info_descr.SetLabel(fp.get("descr", "") or "—")
+        self._info_tags.SetLabel(fp.get("tags", "") or "—")
+        self._info_pads.SetLabel(str(fp.get("pads_count", 0)))
+
+        model = fp.get("model")
+        if model:
+            raw_path, exists = model
+            # Show just the filename portion for brevity; full path in tooltip
+            model_name = os.path.basename(raw_path)
+            self._info_model.SetLabel(model_name)
+            self._info_model.SetToolTip(raw_path)
+            if exists:
+                self._info_model.SetForegroundColour(wx.Colour(80, 200, 80))   # green = found
+            else:
+                self._info_model.SetForegroundColour(wx.Colour(200, 120, 50))  # orange = missing
+        else:
+            self._info_model.SetLabel("(none)")
+            self._info_model.SetForegroundColour(wx.Colour(120, 120, 120))
+
+        self.Layout()
+
+    def _navigate_to(self, ref: str) -> None:
+        """Pre-select a ``"LibraryName:FootprintName"`` reference in both list panes.
+
+        Called after the UI is built so the user opens the dialog already
+        positioned at the previously matched or chosen footprint.
+        """
+        if ":" not in ref:
+            return
+        lib_name, fp_name = ref.split(":", 1)
+        # Find the library in the filtered list
+        for i, (name, _) in enumerate(self._filtered_libs):
+            if name == lib_name:
+                self._lib_list.SetSelection(i)
+                self._on_lib_select(None)
+                # Now find the footprint in the right pane
+                for j in range(self._fp_list.GetCount()):
+                    if self._fp_list.GetString(j) == fp_name:
+                        self._fp_list.SetSelection(j)
+                        self._fp_list.EnsureVisible(j)
+                        self._on_fp_select(None)
+                        break
+                break
+
+    def get_selection(self) -> str:
+        """Return the selected ``"LibraryName:FootprintName"`` reference, or ``""``."""
+        return self._selection
+
+
 class MetadataEditDialog(wx.Dialog):
     """Modal dialog for editing component metadata before import."""
 
     def __init__(self, parent, metadata: dict):
         self._package_name = metadata.get("__package_name", "")
         self._footprint_candidate_ref = metadata.get("__footprint_candidate_ref", "")
-        self._footprint_choice = None
+        # Start with the auto-matched candidate pre-selected (may be overridden by Browse)
+        self._kicad_footprint_ref = self._footprint_candidate_ref
+        self._kicad_version = getattr(parent, "_kicad_version", DEFAULT_KICAD_VERSION)
+        self._project_dir   = getattr(parent, "_project_dir", "") or ""
         super().__init__(
-            parent, title="Edit Metadata", size=(520, 360), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
+            parent, title="Edit Metadata", size=(520, 340),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
         self._build_ui(metadata)
         self.Centre()
@@ -251,7 +1118,8 @@ class MetadataEditDialog(wx.Dialog):
         grid.AddGrowableCol(1)
 
         grid.Add(wx.StaticText(self, label="Description"), 0, wx.ALIGN_TOP)
-        self._desc = wx.TextCtrl(self, value=metadata.get("description", ""), style=wx.TE_MULTILINE, size=(-1, 60))
+        self._desc = wx.TextCtrl(self, value=metadata.get("description", ""),
+                                 style=wx.TE_MULTILINE, size=(-1, 60))
         grid.Add(self._desc, 1, wx.EXPAND)
 
         grid.Add(wx.StaticText(self, label="Keywords"), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -264,38 +1132,72 @@ class MetadataEditDialog(wx.Dialog):
 
         vbox.Add(grid, 1, wx.EXPAND | wx.ALL, 10)
 
+        # ── Footprint selection ──────────────────────────────────────
+        fp_box = wx.BoxSizer(wx.VERTICAL)
+
+        # Radio 1: import from EasyEDA
+        self._rb_import = wx.RadioButton(self, label="Import footprint from EasyEDA",
+                                         style=wx.RB_GROUP)
+        fp_box.Add(self._rb_import, 0, wx.BOTTOM, 6)
+
+        # Radio 2: use a KiCad footprint — auto-matched ref shown as the label,
+        # Browse… button lets the user pick a different one from the library browser.
+        kicad_row = wx.BoxSizer(wx.HORIZONTAL)
+        self._rb_kicad = wx.RadioButton(self, label="Use KiCad footprint:")
+        self._kicad_ref_label = wx.StaticText(
+            self, label=self._kicad_footprint_ref or "(none selected)",
+            style=wx.ST_NO_AUTORESIZE | wx.ST_ELLIPSIZE_START,
+        )
+        self._browse_btn = wx.Button(self, label="Browse…", style=wx.BU_EXACTFIT)
+        self._browse_btn.Bind(wx.EVT_BUTTON, self._on_browse_footprint)
+        kicad_row.Add(self._rb_kicad, 0, wx.ALIGN_CENTER_VERTICAL)
+        kicad_row.Add(self._kicad_ref_label, 1,
+                      wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, 6)
+        kicad_row.Add(self._browse_btn, 0, wx.ALIGN_CENTER_VERTICAL)
+        fp_box.Add(kicad_row, 0, wx.EXPAND)
+
+        vbox.Add(fp_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # Default selection: pre-select "Use KiCad footprint" when a candidate exists
         if self._footprint_candidate_ref:
-            fp_box = wx.BoxSizer(wx.VERTICAL)
-            fp_msg = (
-                f"Possible existing footprint match for package '{self._package_name}':\n"
-                f"{self._footprint_candidate_ref}"
-            )
-            fp_box.Add(wx.StaticText(self, label=fp_msg), 0, wx.BOTTOM, 6)
-            self._footprint_choice = wx.RadioBox(
-                self,
-                label="",
-                choices=["Import footprint", f"Use {self._footprint_candidate_ref}"],
-                majorDimension=1,
-                style=wx.RA_SPECIFY_COLS,
-            )
-            self._footprint_choice.SetSelection(0)
-            fp_box.Add(self._footprint_choice, 0, wx.EXPAND)
-            vbox.Add(fp_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+            self._rb_kicad.SetValue(True)
+        else:
+            self._rb_import.SetValue(True)
 
         btn_sizer = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
         vbox.Add(btn_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         self.SetSizer(vbox)
 
+    def _on_browse_footprint(self, event) -> None:
+        """Open the footprint library browser, pre-navigating to the current ref."""
+        dlg = FootprintBrowserDialog(
+            self,
+            project_dir=self._project_dir,
+            kicad_version=self._kicad_version,
+            initial_selection=self._kicad_footprint_ref,
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            chosen = dlg.get_selection()
+            if chosen:
+                self._kicad_footprint_ref = chosen
+                self._kicad_ref_label.SetLabel(chosen)
+                self._rb_kicad.SetValue(True)
+                self.Layout()
+        dlg.Destroy()
+
     def get_metadata(self) -> dict:
-        """Return the edited metadata values."""
+        """Return the edited metadata dict."""
         result = {
-            "description": self._desc.GetValue(),
-            "keywords": self._keywords.GetValue(),
+            "description":  self._desc.GetValue(),
+            "keywords":     self._keywords.GetValue(),
             "manufacturer": self._manufacturer.GetValue(),
         }
-        if self._footprint_choice is not None:
-            result["__reuse_existing_footprint"] = self._footprint_choice.GetSelection() == 1
+        if self._rb_kicad.GetValue() and self._kicad_footprint_ref:
+            result["__reuse_existing_footprint"]  = True
+            result["__manually_chosen_footprint"] = self._kicad_footprint_ref
+        else:
+            result["__reuse_existing_footprint"] = False
         return result
 
 

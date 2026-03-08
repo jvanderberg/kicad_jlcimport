@@ -179,11 +179,17 @@ def import_component(
         metadata = confirm_metadata(metadata)
         if metadata is None:
             return None
-        if "__reuse_existing_footprint" in metadata:
+        if metadata.get("__manually_chosen_footprint"):
+            # User browsed and picked a specific footprint — override candidate_ref
+            # so the existing reuse logic below routes it correctly.
+            candidate_ref = metadata["__manually_chosen_footprint"]
+            reuse_choice_from_metadata = True
+        elif "__reuse_existing_footprint" in metadata:
             reuse_choice_from_metadata = bool(metadata["__reuse_existing_footprint"])
     metadata.pop("__package_name", None)
     metadata.pop("__footprint_candidate_ref", None)
     metadata.pop("__reuse_existing_footprint", None)
+    metadata.pop("__manually_chosen_footprint", None)
 
     if candidate_ref:
         if reuse_choice_from_metadata is True:
