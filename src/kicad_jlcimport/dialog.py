@@ -9,6 +9,7 @@ import threading
 import traceback
 import webbrowser
 
+import math
 import wx
 
 from .categories import CATEGORIES
@@ -240,7 +241,7 @@ def _extract_blocks(text: str, keyword: str) -> list:
     extractor — essential for pad blocks which may contain drill/primitives.
     """
     results = []
-    pattern = __import__("re").compile(rf"\({keyword}\b")
+    pattern = re.compile(rf"\({keyword}\b")
     for m in pattern.finditer(text):
         start = m.start()
         depth = 0
@@ -273,9 +274,6 @@ def _parse_kicad_mod(path: str) -> dict:
 
     KiCad 8/9/10 format only (quoted layer names, stroke blocks).
     """
-    import math as _math
-
-    _re = __import__("re")
     N = r"[\d.eE+\-]+"
 
     result: dict = {
@@ -293,25 +291,25 @@ def _parse_kicad_mod(path: str) -> dict:
         except: return 0.0
 
     def _field(name: str) -> str:
-        m = _re.search(rf'\({name}\s+"([^"]*)"\)', text)
+        m = re.search(rf'\({name}\s+"([^"]*)"\)', text)
         return m.group(1) if m else ""
 
     result["descr"] = _field("descr")
     result["tags"]  = _field("tags")
 
     def _layer(block: str) -> str:
-        m = _re.search(r'\(layer\s+"([^"]+)"\)', block)
+        m = re.search(r'\(layer\s+"([^"]+)"\)', block)
         return m.group(1) if m else ""
 
     def _sw(block: str) -> float:
-        m = _re.search(rf'\(stroke\s*\(width\s+({N})\)', block, _re.DOTALL)
+        m = re.search(rf'\(stroke\s*\(width\s+({N})\)', block, re.DOTALL)
         return _f(m.group(1)) if m else 0.1
 
     # ── fp_line ─────────────────────────────────────────────────────────
     for block in _extract_blocks(text, "fp_line"):
-        c = _re.search(
+        c = re.search(
             rf'\(start\s+({N})\s+({N})\)\s*\(end\s+({N})\s+({N})\)',
-            block, _re.DOTALL,
+            block, re.DOTALL,
         )
         layer = _layer(block)
         if c and layer:
@@ -323,37 +321,37 @@ def _parse_kicad_mod(path: str) -> dict:
 
     # ── fp_rect (KiCad 8+) ──────────────────────────────────────────────
     for block in _extract_blocks(text, "fp_rect"):
-        s = _re.search(rf'\(start\s+({N})\s+({N})\)', block)
-        e = _re.search(rf'\(end\s+({N})\s+({N})\)', block)
+        s = re.search(rf'\(start\s+({N})\s+({N})\)', block)
+        e = re.search(rf'\(end\s+({N})\s+({N})\)', block)
         layer = _layer(block)
         if s and e and layer:
-            cr = _re.search(rf'\(corner_radius\s+({N})\)', block)
+            cr = re.search(rf'\(corner_radius\s+({N})\)', block)
             result["rects"].append((
                 _f(s.group(1)), _f(s.group(2)),
                 _f(e.group(1)), _f(e.group(2)),
                 layer, _sw(block),
                 _f(cr.group(1)) if cr else 0.0,
-                "(fill solid)" in block,
+                "(fill solid)" in block or "(fill yes)" in block,
             ))
 
     # ── fp_circle ───────────────────────────────────────────────────────
     for block in _extract_blocks(text, "fp_circle"):
-        cx_m = _re.search(rf'\(center\s+({N})\s+({N})\)', block)
-        en_m = _re.search(rf'\(end\s+({N})\s+({N})\)', block)
+        cx_m = re.search(rf'\(center\s+({N})\s+({N})\)', block)
+        en_m = re.search(rf'\(end\s+({N})\s+({N})\)', block)
         layer = _layer(block)
         if cx_m and en_m and layer:
             cx, cy = _f(cx_m.group(1)), _f(cx_m.group(2))
-            r = _math.hypot(_f(en_m.group(1)) - cx, _f(en_m.group(2)) - cy)
-            result["circles"].append((cx, cy, r, layer, _sw(block), "(fill solid)" in block))
+            r = math.hypot(_f(en_m.group(1)) - cx, _f(en_m.group(2)) - cy)
+            result["circles"].append((cx, cy, r, layer, _sw(block), "(fill solid)" in block or "(fill yes)" in block))
 
     # ── fp_arc (start/mid/end, KiCad 8+) ────────────────────────────────
     for block in _extract_blocks(text, "fp_arc"):
         layer = _layer(block)
         if not layer:
             continue
-        s = _re.search(rf'\(start\s+({N})\s+({N})\)', block)
-        m = _re.search(rf'\(mid\s+({N})\s+({N})\)',   block)
-        e = _re.search(rf'\(end\s+({N})\s+({N})\)',   block)
+        s = re.search(rf'\(start\s+({N})\s+({N})\)', block)
+        m = re.search(rf'\(mid\s+({N})\s+({N})\)',   block)
+        e = re.search(rf'\(end\s+({N})\s+({N})\)',   block)
         if s and m and e:
             result["arcs"].append((
                 _f(s.group(1)), _f(s.group(2)),
@@ -364,34 +362,45 @@ def _parse_kicad_mod(path: str) -> dict:
 
     # ── fp_poly ─────────────────────────────────────────────────────────
     for block in _extract_blocks(text, "fp_poly"):
-        pts_m = _re.search(r'\(pts(.*?)\)', block, _re.DOTALL)
         layer = _layer(block)
-        if pts_m and layer:
-            pts = [
-                (_f(p.group(1)), _f(p.group(2)))
-                for p in _re.finditer(rf'\(xy\s+({N})\s+({N})\)', pts_m.group(1))
-            ]
-            if pts:
-                result["polys"].append((pts, layer, "(fill solid)" in block))
+        if not layer:
+            continue
+        # Extract the (pts ...) sub-block with bracket counting to handle
+        # nested (xy ...) parens correctly — a lazy regex stops too early.
+        pts_blocks = _extract_blocks(block, "pts")
+        if not pts_blocks:
+            continue
+        pts = [
+            (_f(p.group(1)), _f(p.group(2)))
+            for p in re.finditer(rf"\(xy\s+({N})\s+({N})\)", pts_blocks[0])
+        ]
+        if pts:
+            filled = "(fill solid)" in block or "(fill yes)" in block
+            result["polys"].append((pts, layer, filled))
 
     # ── pads ────────────────────────────────────────────────────────────
+    # Use independent re.search calls so attribute order inside a pad block
+    # doesn't matter — (drill ...) often appears before (size ...) in
+    # ThermalVias footprints, which breaks a single re.match pattern.
+    _head_pat  = re.compile(rf'\(pad\s+"([^"]*)"\s+(\w+)\s+(\w+)', re.DOTALL)
+    _at_pat    = re.compile(rf'\(at\s+({N})\s+({N})(?:\s+({N}))?\)', re.DOTALL)
+    _size_pat  = re.compile(rf'\(size\s+({N})\s+({N})\)', re.DOTALL)
+    _drill_pat = re.compile(rf'\(drill(?:\s+oval)?\s+({N})', re.DOTALL)
     for block in _extract_blocks(text, "pad"):
-        body = _re.match(
-            rf'\(pad\s+"([^"]*)"\s+(\w+)\s+(\w+)\s+'
-            rf'\(at\s+({N})\s+({N})(?:\s+({N}))?\)\s*\(size\s+({N})\s+({N})\)',
-            block, _re.DOTALL,
-        )
-        if not body:
+        h = _head_pat.search(block)
+        a = _at_pat.search(block)
+        s = _size_pat.search(block)
+        if not (h and a and s):
             continue
-        drill_m = _re.search(rf'\(drill(?:\s+oval)?\s+({N})', block)
+        d = _drill_pat.search(block)
         result["pads"].append((
-            body.group(1),                                     # num
-            _f(body.group(4)), _f(body.group(5)),              # x, y
-            _f(body.group(7)), _f(body.group(8)),              # w, h
-            body.group(3),                                     # shape
-            _f(body.group(6)) if body.group(6) else 0.0,      # rotation
-            body.group(2),                                     # pad_type
-            _f(drill_m.group(1)) if drill_m else 0.0,         # drill_d
+            h.group(1),                               # num
+            _f(a.group(1)), _f(a.group(2)),           # x, y
+            _f(s.group(1)), _f(s.group(2)),           # w, h
+            h.group(3),                               # shape
+            _f(a.group(3)) if a.group(3) else 0.0,   # rotation
+            h.group(2),                               # pad_type
+            _f(d.group(1)) if d else 0.0,             # drill_d
         ))
 
     result["pads_count"] = len(result["pads"])
@@ -399,7 +408,7 @@ def _parse_kicad_mod(path: str) -> dict:
     # ------------------------------------------------------------------ #
     # 3D model                                                             #
     # ------------------------------------------------------------------ #
-    m3d = _re.search(r'\(model\s+"([^"]+)"', text)
+    m3d = re.search(r'\(model\s+"([^"]+)"', text)
     if m3d:
         raw_path = m3d.group(1).strip()
         resolved = raw_path
@@ -425,8 +434,12 @@ _LAYER_COLOURS: dict[str, tuple[int, int, int]] = {
     "B.SilkS":     (232, 178, 167),   # #E8B2A7  salmon
     "F.Fab":       (175, 175, 175),   # #AFAFAF  light grey
     "B.Fab":       ( 99,  99,  99),   # #636363  dark grey
+    # KiCad 8+ names (new canonical names)
     "F.Courtyard": (255,  38, 226),   # #FF26E2  hot magenta
     "B.Courtyard": ( 38, 233, 255),   # #26E9FF  sky cyan
+    # KiCad ≤7 / standard-library names (alias — same colours)
+    "F.CrtYd":     (255,  38, 226),   # #FF26E2  hot magenta
+    "B.CrtYd":     ( 38, 233, 255),   # #26E9FF  sky cyan
     "F.Paste":     (180,  60, 180),   # #B43CB4  purple
     "B.Paste":     ( 60, 180, 180),   # #3CB4B4  teal
     "F.Mask":      (255, 100, 150),   # #FF6496  pink
@@ -442,9 +455,9 @@ _DEFAULT_LAYER_COLOUR = (128, 128, 128)  # #808080  mid grey
 
 # Draw order: back layers first, front on top, pads drawn separately last
 _LAYER_ORDER = [
-    "B.Courtyard", "B.Fab", "B.SilkS", "B.Cu", "B.Paste", "B.Mask",
+    "B.CrtYd", "B.Courtyard", "B.Fab", "B.SilkS", "B.Cu", "B.Paste", "B.Mask",
     "Edge.Cuts", "Cmts.User", "User.1", "User.2", "Eco1.User", "Eco2.User",
-    "F.Courtyard", "F.Fab", "F.SilkS", "F.Cu", "F.Paste", "F.Mask",
+    "F.CrtYd", "F.Courtyard", "F.Fab", "F.SilkS", "F.Cu", "F.Paste", "F.Mask",
 ]
 
 # Minimum rendered stroke in pixels — 1.5px keeps thin courtyard/fab lines crisp
@@ -610,7 +623,6 @@ class _FootprintPreviewPanel(wx.Panel):
     # ------------------------------------------------------------------
 
     def _on_paint(self, event):
-        import math
 
         dc = wx.AutoBufferedPaintDC(self)
         dc.SetBackground(wx.Brush(wx.Colour(26, 26, 26)))
@@ -630,7 +642,7 @@ class _FootprintPreviewPanel(wx.Panel):
 
         # ── Crosshair at origin ──────────────────────────────────────
         ox, oy = self._px(0, 0)
-        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(55, 55, 55)).Width(1)))
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo().Colour(wx.Colour(55, 55, 55)).Width(1)))
         gc.StrokeLine(0, oy, w_px, oy)
         gc.StrokeLine(ox, 0, ox, h_px)
 
@@ -659,22 +671,22 @@ class _FootprintPreviewPanel(wx.Panel):
 
         for layer in ordered:
             r, g, b = _LAYER_COLOURS.get(layer, _DEFAULT_LAYER_COLOUR)
-            colour = wx.Colour(r, g, b)
+            colour = wx.Colour(r, g, b, 255)  # explicit alpha=255 for all backends
+
+            def _pen(w_mm):
+                # Use .Colour() chain: more reliable than constructor arg on GTK/macOS
+                return gc.CreatePen(wx.GraphicsPenInfo().Colour(colour).Width(self._stroke_w(w_mm)))
 
             # ── Lines ────────────────────────────────────────────────
             for (x1, y1), (x2, y2), _layer, w_mm in layer_lines.get(layer, []):
-                gc.SetPen(gc.CreatePen(
-                    wx.GraphicsPenInfo(colour).Width(self._stroke_w(w_mm))
-                ))
+                gc.SetPen(_pen(w_mm))
                 px1, py1 = self._px(x1, y1)
                 px2, py2 = self._px(x2, y2)
                 gc.StrokeLine(px1, py1, px2, py2)
 
             # ── Rectangles (fp_rect, KiCad 8+) ───────────────────────
             for x1, y1, x2, y2, _layer, w_mm, corner_r, filled in layer_rects.get(layer, []):
-                gc.SetPen(gc.CreatePen(
-                    wx.GraphicsPenInfo(colour).Width(self._stroke_w(w_mm))
-                ))
+                gc.SetPen(_pen(w_mm))
                 gc.SetBrush(gc.CreateBrush(wx.Brush(colour)) if filled
                             else wx.TRANSPARENT_BRUSH)
                 px1, py1 = self._px(x1, y1)
@@ -693,9 +705,7 @@ class _FootprintPreviewPanel(wx.Panel):
 
             # ── Circles ──────────────────────────────────────────────
             for cx, cy, radius, _layer, w_mm, filled in layer_circles.get(layer, []):
-                gc.SetPen(gc.CreatePen(
-                    wx.GraphicsPenInfo(colour).Width(self._stroke_w(w_mm))
-                ))
+                gc.SetPen(_pen(w_mm))
                 if filled:
                     gc.SetBrush(gc.CreateBrush(wx.Brush(colour)))
                 else:
@@ -706,9 +716,7 @@ class _FootprintPreviewPanel(wx.Panel):
 
             # ── Arcs ─────────────────────────────────────────────────
             for sx, sy, mx_, my_, ex, ey, _layer, w_mm in layer_arcs.get(layer, []):
-                gc.SetPen(gc.CreatePen(
-                    wx.GraphicsPenInfo(colour).Width(self._stroke_w(w_mm))
-                ))
+                gc.SetPen(_pen(w_mm))
                 try:
                     # Circumcircle through start / mid / end
                     ax, ay = sx, sy
@@ -741,13 +749,11 @@ class _FootprintPreviewPanel(wx.Panel):
                     if (a_mid_n > a_start) != (a_end_n > a_start):
                         a_end_n += 2 * math.pi if a_end_n < a_start else -2 * math.pi
                     steps = max(12, int(abs(a_end_n - a_start) / math.radians(4)))
-                    pts_arc = []
-                    for i in range(steps + 1):
-                        t = a_start + (a_end_n - a_start) * i / steps
-                        pts_arc.append(self._px(
-                            ux + radius_arc * math.cos(t),
-                            uy + radius_arc * math.sin(t),
-                        ))
+                    pts_arc = [
+                        self._px(ux + radius_arc * math.cos(a_start + (a_end_n - a_start) * i / steps),
+                                 uy + radius_arc * math.sin(a_start + (a_end_n - a_start) * i / steps))
+                        for i in range(steps + 1)
+                    ]
                     if len(pts_arc) >= 2:
                         path = gc.CreatePath()
                         path.MoveToPoint(*pts_arc[0])
@@ -761,9 +767,7 @@ class _FootprintPreviewPanel(wx.Panel):
             for poly_pts, _layer, filled in layer_polys.get(layer, []):
                 if len(poly_pts) < 2:
                     continue
-                gc.SetPen(gc.CreatePen(
-                    wx.GraphicsPenInfo(colour).Width(_MIN_STROKE_PX)
-                ))
+                gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo().Colour(colour).Width(_MIN_STROKE_PX)))
                 gc.SetBrush(gc.CreateBrush(wx.Brush(colour)) if filled
                             else wx.TRANSPARENT_BRUSH)
                 path = gc.CreatePath()
@@ -774,25 +778,11 @@ class _FootprintPreviewPanel(wx.Panel):
                 gc.DrawPath(path)
 
         # ── Pads ─────────────────────────────────────────────────────
-        # Drawn last so they appear on top of all copper/silkscreen
-        font = wx.Font(wx.FontInfo(max(6, int(self._scale * 0.6))).AntiAliased())
-        gc.SetFont(font, self._TEXT_COLOUR)
-
-        for num, x, y, pw, ph, shape, rot, pad_type, drill_d in fp["pads"]:
-            fill_col  = self._PAD_FILL.get(pad_type, wx.Colour(160, 160, 160, 200))
-            outline_w = max(0.8, self._scale * 0.04)
-            gc.SetBrush(gc.CreateBrush(wx.Brush(fill_col)))
-            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(self._PAD_OUTLINE).Width(outline_w)))
-
-            px_c, py_c = self._px(x, y)
-            wpx = max(2.0, self._pxlen(pw))
-            hpx = max(2.0, self._pxlen(ph))
-
-            gc.PushState()
-            gc.Translate(px_c, py_c)
-            if rot:
-                gc.Rotate(math.radians(rot))
-
+        # Two-pass rendering so thru-hole vias always appear on top of SMD pads:
+        #   Pass 1 — SMD / np_thru_hole copper (fills, annular rings, labels)
+        #   Pass 2 — thru_hole pads + drill holes on top of everything
+        # Within each pass larger pads are drawn first so smaller ones sit on top.
+        def _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d):
             s = shape.lower()
             if s == "circle":
                 r2 = wpx / 2
@@ -803,7 +793,6 @@ class _FootprintPreviewPanel(wx.Panel):
                 path.AddRoundedRectangle(-wpx / 2, -hpx / 2, wpx, hpx, corner)
                 gc.DrawPath(path)
             else:  # rect / trapezoid / custom / default
-                # Pin 1 gets a chamfered corner (top-left notch) to match KiCad
                 if num == "1":
                     chamfer = min(wpx, hpx) * 0.25
                     path = gc.CreatePath()
@@ -816,22 +805,52 @@ class _FootprintPreviewPanel(wx.Panel):
                     gc.DrawPath(path)
                 else:
                     gc.DrawRectangle(-wpx / 2, -hpx / 2, wpx, hpx)
-
-            # Drill hole for through-hole pads
             if pad_type in ("thru_hole", "np_thru_hole") and drill_d > 0:
                 dr_px = max(1.5, self._pxlen(drill_d) / 2)
                 gc.SetBrush(gc.CreateBrush(wx.Brush(self._DRILL_COLOUR)))
                 gc.SetPen(wx.NullGraphicsPen)
                 gc.DrawEllipse(-dr_px, -dr_px, dr_px * 2, dr_px * 2)
 
-            gc.PopState()
-
-            # Pin number label — only draw when pads are large enough
-            if num and self._scale > 6:
+        def _draw_pad_label(gc, num, wpx, hpx):
+            if not num:
+                return
+            min_side = min(wpx, hpx)
+            if min_side < 4:
+                return
+            # Scale font to fit the pad — no minimum pt floor so text shrinks
+            # as the view zooms out rather than disappearing entirely.
+            # Try progressively smaller sizes until the label fits, or give up
+            # if it would be unreadably tiny (< 4px tall).
+            for pt in range(min(22, int(min_side * 0.7)), 2, -1):
+                gc.SetFont(wx.Font(wx.FontInfo(pt).AntiAliased()), self._TEXT_COLOUR)
                 tw, th = gc.GetTextExtent(num)
-                # draw at pad centre, clipped to pad size
-                if tw < wpx * 1.5 and th < hpx * 1.5:
-                    gc.DrawText(num, px_c - tw / 2, py_c - th / 2)
+                if tw <= wpx * 0.88 and th <= hpx * 0.88:
+                    if th >= 4:
+                        gc.DrawText(num, -tw / 2, -th / 2)
+                    return
+
+        outline_w = max(0.8, self._scale * 0.04)
+        smd_pads  = sorted([p for p in fp["pads"] if p[7] != "thru_hole"],
+                           key=lambda p: p[3] * p[4], reverse=True)
+        thru_pads = sorted([p for p in fp["pads"] if p[7] == "thru_hole"],
+                           key=lambda p: p[3] * p[4], reverse=True)
+
+        for pass_pads in (smd_pads, thru_pads):
+            for num, x, y, pw, ph, shape, rot, pad_type, drill_d in pass_pads:
+                fill_col = self._PAD_FILL.get(pad_type, wx.Colour(160, 160, 160, 200))
+                gc.SetBrush(gc.CreateBrush(wx.Brush(fill_col)))
+                gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(self._PAD_OUTLINE).Width(outline_w)))
+                px_c, py_c = self._px(x, y)
+                wpx = max(2.0, self._pxlen(pw))
+                hpx = max(2.0, self._pxlen(ph))
+                gc.PushState()
+                gc.Translate(px_c, py_c)
+                if rot:
+                    gc.Rotate(math.radians(rot))
+                _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d)
+                _draw_pad_label(gc, num, wpx, hpx)
+                gc.PopState()
+
 
         # ── Hint ─────────────────────────────────────────────────────
         hint_font = wx.Font(wx.FontInfo(8))
@@ -1250,7 +1269,6 @@ class _SpinnerOverlay(wx.Window):
         self.Refresh()
 
     def _on_paint(self, event):
-        import math
 
         dc = wx.PaintDC(self)
         w, h = self.GetClientSize()
@@ -1437,8 +1455,6 @@ class JLCImportDialog(wx.Dialog):
         detail_grid = wx.FlexGridSizer(cols=4, hgap=10, vgap=4)
         detail_grid.AddGrowableCol(1)
         detail_grid.AddGrowableCol(3)
-
-        bold_font = wx.Font(wx.FontInfo().Bold())
 
         bold_font = panel.GetFont().Bold()
 
@@ -1933,7 +1949,6 @@ class JLCImportDialog(wx.Dialog):
 
     def _refresh_imported_ids(self):
         """Scan the symbol library for the currently selected destination."""
-        import re
 
         self._imported_ids = set()
         lib_name = self._lib_name
@@ -2174,7 +2189,6 @@ class JLCImportDialog(wx.Dialog):
 
     def _draw_skeleton_frame(self):
         """Draw one frame of the skeleton shimmer over a rounded rect."""
-        import math
 
         bmp = wx.Bitmap(160, 160)
         dc = wx.MemoryDC(bmp)
@@ -2308,7 +2322,6 @@ class JLCImportDialog(wx.Dialog):
 
     def _draw_gallery_skeleton_frame(self):
         """Draw one frame of the gallery skeleton shimmer."""
-        import math
 
         size = self._get_gallery_image_size()
         bmp = wx.Bitmap(size, size)
