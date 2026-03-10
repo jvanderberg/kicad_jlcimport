@@ -125,6 +125,13 @@ def write_symbol(
             lines.append("      (effects (font (size 1.27 1.27)) hide)")
             lines.append("    )")
 
+    # KiCad multi-unit symbols require a shared sub-symbol block named "NAME_0_1"
+    # to exist even when it is empty.  Without it KiCad crashes when the symbol
+    # is opened in the symbol editor.  Emit it once, on the first unit call.
+    if total_units > 1 and unit_index == 0:
+        lines.append(f'    (symbol "{name}_0_1"')
+        lines.append("    )")
+
     # Unit sub-symbol for graphics
     unit_num = (unit_index + 1) if total_units > 1 else 0
     lines.append(f'    (symbol "{name}_{unit_num}_1"')
