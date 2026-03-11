@@ -356,7 +356,10 @@ def _expand_lib_uri(uri: str, project_dir: str = "") -> str:
     def _replace(match) -> str:
         key = match.group(1)
         if key == "KIPRJMOD":
-            return project_dir
+            # Return the raw token when project_dir is unknown so the
+            # downstream "${" guard discards this entry rather than
+            # producing a bogus root-relative path like "/JLCImport.pretty".
+            return project_dir if project_dir else match.group(0)
         env_val = os.environ.get(key, "")
         if env_val:
             return env_val
@@ -374,8 +377,21 @@ def _expand_lib_uri(uri: str, project_dir: str = "") -> str:
     return expanded
 
 
-def _iter_footprint_libraries(project_dir: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> list[tuple[str, str]]:
-    """Return existing .pretty directories from project/global fp-lib-table files."""
+def _iter_footprint_libraries(
+    project_dir: str,
+    kicad_version: int = DEFAULT_KICAD_VERSION,
+    jlc_lib_name: str = "JLCImport",
+    jlc_global_lib_dir: str = "",
+) -> list[tuple[str, str]]:
+    """Return existing .pretty directories from project/global fp-lib-table files.
+
+    Also injects any JLCImport .pretty directories that exist on disk but are
+    not yet registered in a lib-table (e.g. immediately after a first import,
+    before KiCad has been restarted to pick up the new lib-table entry).
+
+    jlc_lib_name:       The configured JLCImport library name (default "JLCImport").
+    jlc_global_lib_dir: The global JLCImport output directory, if known.
+    """
     candidates: list[tuple[str, str]] = []
     tables: list[tuple[str, str]] = []
 
@@ -396,6 +412,28 @@ def _iter_footprint_libraries(project_dir: str, kicad_version: int = DEFAULT_KIC
                 continue
             seen.add(key)
             candidates.append(key)
+
+    # Inject JLCImport .pretty directories that exist on disk but are missing
+    # from the lib-tables.  This covers the window between the first import
+    # (which writes the lib-table) and the next KiCad restart (which reads it).
+    # Two candidate locations are checked: the project directory and the
+    # configured global output directory.
+    jlc_pretty = f"{jlc_lib_name}.pretty"
+    jlc_search_dirs = []
+    if project_dir:
+        jlc_search_dirs.append((jlc_lib_name, os.path.join(project_dir, jlc_pretty)))
+    if jlc_global_lib_dir:
+        jlc_search_dirs.append((jlc_lib_name, os.path.join(jlc_global_lib_dir, jlc_pretty)))
+
+    for lib_name, path in jlc_search_dirs:
+        if not os.path.isdir(path):
+            continue
+        key = (lib_name, os.path.normpath(path))
+        if key in seen:
+            continue  # already in lib-table, nothing to do
+        seen.add(key)
+        candidates.append(key)
+
     return candidates
 
 

@@ -393,6 +393,16 @@ def _parse_kicad_mod(path: str) -> dict:
         if not (h and a and s):
             continue
         d = _drill_pat.search(block)
+        # For custom-shape pads the (size) is a tiny anchor placeholder (0.1×0.1).
+        # Extract the actual polygon from the (primitives (gr_poly (pts ...))) block.
+        poly_pts: list[tuple[float, float]] = []
+        if h.group(3).lower() == "custom":
+            prims = _extract_blocks(block, "primitives")
+            if prims:
+                poly_pts = [
+                    (_f(m.group(1)), _f(m.group(2)))
+                    for m in re.finditer(rf"\(xy\s+({N})\s+({N})\)", prims[0])
+                ]
         result["pads"].append((
             h.group(1),                               # num
             _f(a.group(1)), _f(a.group(2)),           # x, y
@@ -401,6 +411,7 @@ def _parse_kicad_mod(path: str) -> dict:
             _f(a.group(3)) if a.group(3) else 0.0,   # rotation
             h.group(2),                               # pad_type
             _f(d.group(1)) if d else 0.0,             # drill_d
+            poly_pts,                                 # custom polygon (may be empty)
         ))
 
     result["pads_count"] = len(result["pads"])
@@ -782,9 +793,20 @@ class _FootprintPreviewPanel(wx.Panel):
         #   Pass 1 — SMD / np_thru_hole copper (fills, annular rings, labels)
         #   Pass 2 — thru_hole pads + drill holes on top of everything
         # Within each pass larger pads are drawn first so smaller ones sit on top.
-        def _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d):
+        def _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d, poly_pts):
             s = shape.lower()
-            if s == "circle":
+            if s == "custom" and poly_pts:
+                # Render the actual polygon primitive (already in pad-local mm coords).
+                # Scale each vertex the same way as other geometry.
+                scaled = [self._pxlen(c) for pt in poly_pts for c in pt]
+                pts_px = [(scaled[i], scaled[i + 1]) for i in range(0, len(scaled), 2)]
+                path = gc.CreatePath()
+                path.MoveToPoint(*pts_px[0])
+                for pt in pts_px[1:]:
+                    path.AddLineToPoint(*pt)
+                path.CloseSubpath()
+                gc.DrawPath(path)
+            elif s == "circle":
                 r2 = wpx / 2
                 gc.DrawEllipse(-r2, -r2, r2 * 2, r2 * 2)
             elif s in ("oval", "roundrect"):
@@ -792,7 +814,7 @@ class _FootprintPreviewPanel(wx.Panel):
                 path = gc.CreatePath()
                 path.AddRoundedRectangle(-wpx / 2, -hpx / 2, wpx, hpx, corner)
                 gc.DrawPath(path)
-            else:  # rect / trapezoid / custom / default
+            else:  # rect / trapezoid / custom-without-poly / default
                 if num == "1":
                     chamfer = min(wpx, hpx) * 0.25
                     path = gc.CreatePath()
@@ -836,7 +858,7 @@ class _FootprintPreviewPanel(wx.Panel):
                            key=lambda p: p[3] * p[4], reverse=True)
 
         for pass_pads in (smd_pads, thru_pads):
-            for num, x, y, pw, ph, shape, rot, pad_type, drill_d in pass_pads:
+            for num, x, y, pw, ph, shape, rot, pad_type, drill_d, poly_pts in pass_pads:
                 fill_col = self._PAD_FILL.get(pad_type, wx.Colour(160, 160, 160, 200))
                 gc.SetBrush(gc.CreateBrush(wx.Brush(fill_col)))
                 gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(self._PAD_OUTLINE).Width(outline_w)))
@@ -847,7 +869,7 @@ class _FootprintPreviewPanel(wx.Panel):
                 gc.Translate(px_c, py_c)
                 if rot:
                     gc.Rotate(math.radians(rot))
-                _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d)
+                _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d, poly_pts)
                 _draw_pad_label(gc, num, wpx, hpx)
                 gc.PopState()
 
@@ -871,7 +893,8 @@ class FootprintBrowserDialog(wx.Dialog):
     """
 
     def __init__(self, parent, project_dir: str = "", kicad_version: int = DEFAULT_KICAD_VERSION,
-                 initial_selection: str = ""):
+                 initial_selection: str = "", jlc_lib_name: str = "JLCImport",
+                 jlc_global_lib_dir: str = ""):
         super().__init__(
             parent,
             title="Select Footprint",
@@ -880,7 +903,11 @@ class FootprintBrowserDialog(wx.Dialog):
         )
         from .kicad.library import _iter_footprint_libraries
 
-        self._libs: list[tuple[str, str]] = list(_iter_footprint_libraries(project_dir, kicad_version))
+        self._libs: list[tuple[str, str]] = list(_iter_footprint_libraries(
+            project_dir, kicad_version,
+            jlc_lib_name=jlc_lib_name,
+            jlc_global_lib_dir=jlc_global_lib_dir,
+        ))
         self._selection = ""
         self._current_fp_path = ""
         self._build_ui()
@@ -1120,8 +1147,12 @@ class MetadataEditDialog(wx.Dialog):
         self._footprint_candidate_ref = metadata.get("__footprint_candidate_ref", "")
         # Start with the auto-matched candidate pre-selected (may be overridden by Browse)
         self._kicad_footprint_ref = self._footprint_candidate_ref
-        self._kicad_version = getattr(parent, "_kicad_version", DEFAULT_KICAD_VERSION)
-        self._project_dir   = getattr(parent, "_project_dir", "") or ""
+        self._kicad_version      = getattr(parent, "_kicad_version",  DEFAULT_KICAD_VERSION)
+        self._project_dir        = getattr(parent, "_project_dir",    "") or ""
+        # Used to make JLCImport-managed .pretty dirs visible in the browser even
+        # when the lib-table hasn't been reloaded by KiCad yet.
+        self._jlc_lib_name       = getattr(parent, "_lib_name",       "JLCImport")
+        self._jlc_global_lib_dir = getattr(parent, "_global_lib_dir", "") or ""
         super().__init__(
             parent, title="Edit Metadata", size=(540, 460),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
@@ -1236,6 +1267,8 @@ class MetadataEditDialog(wx.Dialog):
             project_dir=self._project_dir,
             kicad_version=self._kicad_version,
             initial_selection=self._kicad_footprint_ref,
+            jlc_lib_name=self._jlc_lib_name,
+            jlc_global_lib_dir=self._jlc_global_lib_dir,
         )
         if dlg.ShowModal() == wx.ID_OK:
             chosen = dlg.get_selection()
