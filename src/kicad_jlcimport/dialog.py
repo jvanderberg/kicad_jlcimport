@@ -1148,7 +1148,10 @@ class MetadataEditDialog(wx.Dialog):
         # Start with the auto-matched candidate pre-selected (may be overridden by Browse)
         self._kicad_footprint_ref = self._footprint_candidate_ref
         self._kicad_version      = getattr(parent, "_kicad_version",  DEFAULT_KICAD_VERSION)
-        self._project_dir        = getattr(parent, "_project_dir",    "") or ""
+        # Use _get_project_dir() when available (KiCad plugin resolves path via
+        # board object); fall back to _project_dir for standalone GUI/TUI.
+        _get_proj = getattr(parent, "_get_project_dir", None)
+        self._project_dir        = _get_proj() if callable(_get_proj) else (getattr(parent, "_project_dir", "") or "")
         # Used to make JLCImport-managed .pretty dirs visible in the browser even
         # when the lib-table hasn't been reloaded by KiCad yet.
         self._jlc_lib_name       = getattr(parent, "_lib_name",       "JLCImport")

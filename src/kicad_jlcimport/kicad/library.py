@@ -397,7 +397,7 @@ def _iter_footprint_libraries(
 
     if project_dir:
         tables.append((os.path.join(project_dir, "fp-lib-table"), project_dir))
-    tables.append((os.path.join(get_global_config_dir(kicad_version), "fp-lib-table"), project_dir))
+    tables.append((os.path.join(get_global_config_dir(kicad_version), "fp-lib-table"), ""))
 
     seen: set[tuple[str, str]] = set()
     for table_path, table_project_dir in tables:
