@@ -393,16 +393,30 @@ def _parse_kicad_mod(path: str) -> dict:
         if not (h and a and s):
             continue
         d = _drill_pat.search(block)
-        # For custom-shape pads the (size) is a tiny anchor placeholder (0.1×0.1).
-        # Extract the actual polygon from the (primitives (gr_poly (pts ...))) block.
-        poly_pts: list[tuple[float, float]] = []
+        # Custom-shape pads: the (size) field is the ANCHOR shape size (meaningful,
+        # not a placeholder). Primitives contain one or more gr_poly blocks, each a
+        # separate filled shape. KiCad renders: anchor_shape UNION all primitives.
+        # Store as list-of-polygon-point-lists; anchor is drawn separately in renderer.
+        poly_list: list[list[tuple[float, float]]] = []
         if h.group(3).lower() == "custom":
             prims = _extract_blocks(block, "primitives")
             if prims:
-                poly_pts = [
-                    (_f(m.group(1)), _f(m.group(2)))
-                    for m in re.finditer(rf"\(xy\s+({N})\s+({N})\)", prims[0])
-                ]
+                for gp in _extract_blocks(prims[0], "gr_poly"):
+                    pts_blks = _extract_blocks(gp, "pts")
+                    src = pts_blks[0] if pts_blks else gp
+                    pts = [
+                        (_f(m.group(1)), _f(m.group(2)))
+                        for m in re.finditer(rf"\(xy\s+({N})\s+({N})\)", src)
+                    ]
+                    if len(pts) >= 2:
+                        poly_list.append(pts)
+                if not poly_list:
+                    pts = [
+                        (_f(m.group(1)), _f(m.group(2)))
+                        for m in re.finditer(rf"\(xy\s+({N})\s+({N})\)", prims[0])
+                    ]
+                    if len(pts) >= 2:
+                        poly_list.append(pts)
         result["pads"].append((
             h.group(1),                               # num
             _f(a.group(1)), _f(a.group(2)),           # x, y
@@ -411,7 +425,7 @@ def _parse_kicad_mod(path: str) -> dict:
             _f(a.group(3)) if a.group(3) else 0.0,   # rotation
             h.group(2),                               # pad_type
             _f(d.group(1)) if d else 0.0,             # drill_d
-            poly_pts,                                 # custom polygon (may be empty)
+            poly_list,                                # list of polygons (custom pads)
         ))
 
     result["pads_count"] = len(result["pads"])
@@ -465,10 +479,14 @@ _LAYER_COLOURS: dict[str, tuple[int, int, int]] = {
 _DEFAULT_LAYER_COLOUR = (128, 128, 128)  # #808080  mid grey
 
 # Draw order: back layers first, front on top, pads drawn separately last
+# Draw order matches KiCad's layer stack:
+#   Courtyard → Paste → Mask → Cu → Fab → Silkscreen
+# Fab and Silkscreen are drawn AFTER copper so component body outlines and
+# reference markers are visible on top of the copper pads.
 _LAYER_ORDER = [
-    "B.CrtYd", "B.Courtyard", "B.Fab", "B.SilkS", "B.Cu", "B.Paste", "B.Mask",
+    "B.CrtYd", "B.Courtyard", "B.Paste", "B.Mask", "B.Cu", "B.Fab", "B.SilkS",
     "Edge.Cuts", "Cmts.User", "User.1", "User.2", "Eco1.User", "Eco2.User",
-    "F.CrtYd", "F.Courtyard", "F.Fab", "F.SilkS", "F.Cu", "F.Paste", "F.Mask",
+    "F.CrtYd", "F.Courtyard", "F.Paste", "F.Mask", "F.Cu", "F.Fab", "F.SilkS",
 ]
 
 # Minimum rendered stroke in pixels — 1.5px keeps thin courtyard/fab lines crisp
@@ -545,9 +563,18 @@ class _FootprintPreviewPanel(wx.Panel):
             pts += [(sx, sy), (ex, ey)]
         for poly_pts, *_ in self._fp["polys"]:
             pts += poly_pts
-        for _num, x, y, w, h, *_ in self._fp["pads"]:
-            hw, hh = w / 2 + 0.2, h / 2 + 0.2
-            pts += [(x - hw, y - hh), (x + hw, y + hh)]
+        for pad in self._fp["pads"]:
+            _num, x, y, w, h = pad[0], pad[1], pad[2], pad[3], pad[4]
+            poly_list = pad[9] if len(pad) > 9 else []
+            if poly_list:
+                # Custom pad: bounds come from the actual polygon vertices (pad-local
+                # coords) translated by the pad centre position.
+                for pts_local in poly_list:
+                    for lx, ly in pts_local:
+                        pts.append((x + lx, y + ly))
+            else:
+                hw, hh = w / 2 + 0.2, h / 2 + 0.2
+                pts += [(x - hw, y - hh), (x + hw, y + hh)]
         return pts
 
     def _fit(self) -> None:
@@ -682,7 +709,8 @@ class _FootprintPreviewPanel(wx.Panel):
 
         for layer in ordered:
             r, g, b = _LAYER_COLOURS.get(layer, _DEFAULT_LAYER_COLOUR)
-            colour = wx.Colour(r, g, b, 255)  # explicit alpha=255 for all backends
+            alpha = 100 if layer in ("F.Paste", "B.Paste", "F.Mask", "B.Mask") else 255
+            colour = wx.Colour(r, g, b, alpha)
 
             def _pen(w_mm):
                 # Use .Colour() chain: more reliable than constructor arg on GTK/macOS
@@ -793,19 +821,20 @@ class _FootprintPreviewPanel(wx.Panel):
         #   Pass 1 — SMD / np_thru_hole copper (fills, annular rings, labels)
         #   Pass 2 — thru_hole pads + drill holes on top of everything
         # Within each pass larger pads are drawn first so smaller ones sit on top.
-        def _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d, poly_pts):
+        def _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d, poly_list):
             s = shape.lower()
-            if s == "custom" and poly_pts:
-                # Render the actual polygon primitive (already in pad-local mm coords).
-                # Scale each vertex the same way as other geometry.
-                scaled = [self._pxlen(c) for pt in poly_pts for c in pt]
-                pts_px = [(scaled[i], scaled[i + 1]) for i in range(0, len(scaled), 2)]
-                path = gc.CreatePath()
-                path.MoveToPoint(*pts_px[0])
-                for pt in pts_px[1:]:
-                    path.AddLineToPoint(*pt)
-                path.CloseSubpath()
-                gc.DrawPath(path)
+            if s == "custom":
+                # KiCad custom pad copper = anchor_shape UNION all gr_poly primitives.
+                # Draw the anchor rect first (wpx/hpx = anchor size in pixels),
+                # then each gr_poly on top with the same fill brush already set.
+                gc.DrawRectangle(-wpx / 2, -hpx / 2, wpx, hpx)
+                for poly_pts in poly_list:
+                    path = gc.CreatePath()
+                    path.MoveToPoint(self._pxlen(poly_pts[0][0]), self._pxlen(poly_pts[0][1]))
+                    for pt in poly_pts[1:]:
+                        path.AddLineToPoint(self._pxlen(pt[0]), self._pxlen(pt[1]))
+                    path.CloseSubpath()
+                    gc.DrawPath(path)
             elif s == "circle":
                 r2 = wpx / 2
                 gc.DrawEllipse(-r2, -r2, r2 * 2, r2 * 2)
@@ -814,21 +843,13 @@ class _FootprintPreviewPanel(wx.Panel):
                 path = gc.CreatePath()
                 path.AddRoundedRectangle(-wpx / 2, -hpx / 2, wpx, hpx, corner)
                 gc.DrawPath(path)
-            else:  # rect / trapezoid / custom-without-poly / default
-                if num == "1":
-                    chamfer = min(wpx, hpx) * 0.25
-                    path = gc.CreatePath()
-                    path.MoveToPoint(-wpx / 2 + chamfer, -hpx / 2)
-                    path.AddLineToPoint( wpx / 2,         -hpx / 2)
-                    path.AddLineToPoint( wpx / 2,          hpx / 2)
-                    path.AddLineToPoint(-wpx / 2,          hpx / 2)
-                    path.AddLineToPoint(-wpx / 2,         -hpx / 2 + chamfer)
-                    path.CloseSubpath()
-                    gc.DrawPath(path)
-                else:
-                    gc.DrawRectangle(-wpx / 2, -hpx / 2, wpx, hpx)
+            else:  # rect / trapezoid / default
+                gc.DrawRectangle(-wpx / 2, -hpx / 2, wpx, hpx)
             if pad_type in ("thru_hole", "np_thru_hole") and drill_d > 0:
-                dr_px = max(1.5, self._pxlen(drill_d) / 2)
+                # drill_d is diameter in mm; _pxlen gives pixels for that diameter.
+                # Clamp so the drill never visually exceeds the copper pad.
+                dr_px = min(self._pxlen(drill_d) / 2, min(wpx, hpx) * 0.45)
+                dr_px = max(0.5, dr_px)
                 gc.SetBrush(gc.CreateBrush(wx.Brush(self._DRILL_COLOUR)))
                 gc.SetPen(wx.NullGraphicsPen)
                 gc.DrawEllipse(-dr_px, -dr_px, dr_px * 2, dr_px * 2)
@@ -852,13 +873,13 @@ class _FootprintPreviewPanel(wx.Panel):
                     return
 
         outline_w = max(0.8, self._scale * 0.04)
-        smd_pads  = sorted([p for p in fp["pads"] if p[7] != "thru_hole"],
+        smd_pads  = sorted([p for p in fp["pads"] if p[7] == "smd"],
                            key=lambda p: p[3] * p[4], reverse=True)
-        thru_pads = sorted([p for p in fp["pads"] if p[7] == "thru_hole"],
+        thru_pads = sorted([p for p in fp["pads"] if p[7] in ("thru_hole", "np_thru_hole")],
                            key=lambda p: p[3] * p[4], reverse=True)
 
         for pass_pads in (smd_pads, thru_pads):
-            for num, x, y, pw, ph, shape, rot, pad_type, drill_d, poly_pts in pass_pads:
+            for num, x, y, pw, ph, shape, rot, pad_type, drill_d, poly_list in pass_pads:
                 fill_col = self._PAD_FILL.get(pad_type, wx.Colour(160, 160, 160, 200))
                 gc.SetBrush(gc.CreateBrush(wx.Brush(fill_col)))
                 gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(self._PAD_OUTLINE).Width(outline_w)))
@@ -869,7 +890,7 @@ class _FootprintPreviewPanel(wx.Panel):
                 gc.Translate(px_c, py_c)
                 if rot:
                     gc.Rotate(math.radians(rot))
-                _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d, poly_pts)
+                _draw_pad_shape(gc, num, wpx, hpx, shape, pad_type, drill_d, poly_list)
                 _draw_pad_label(gc, num, wpx, hpx)
                 gc.PopState()
 
@@ -1148,10 +1169,7 @@ class MetadataEditDialog(wx.Dialog):
         # Start with the auto-matched candidate pre-selected (may be overridden by Browse)
         self._kicad_footprint_ref = self._footprint_candidate_ref
         self._kicad_version      = getattr(parent, "_kicad_version",  DEFAULT_KICAD_VERSION)
-        # Use _get_project_dir() when available (KiCad plugin resolves path via
-        # board object); fall back to _project_dir for standalone GUI/TUI.
-        _get_proj = getattr(parent, "_get_project_dir", None)
-        self._project_dir        = _get_proj() if callable(_get_proj) else (getattr(parent, "_project_dir", "") or "")
+        self._project_dir        = getattr(parent, "_project_dir",    "") or ""
         # Used to make JLCImport-managed .pretty dirs visible in the browser even
         # when the lib-table hasn't been reloaded by KiCad yet.
         self._jlc_lib_name       = getattr(parent, "_lib_name",       "JLCImport")
