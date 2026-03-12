@@ -709,12 +709,17 @@ class _FootprintPreviewPanel(wx.Panel):
 
         for layer in ordered:
             r, g, b = _LAYER_COLOURS.get(layer, _DEFAULT_LAYER_COLOUR)
-            alpha = 100 if layer in ("F.Paste", "B.Paste", "F.Mask", "B.Mask") else 255
+            # Paste and mask are rendered as thin outlines only so they don't
+            # obscure the copper beneath them — just a subtle aperture indicator.
+            _is_paste_mask = layer in ("F.Paste", "B.Paste", "F.Mask", "B.Mask")
+            alpha = 140 if _is_paste_mask else 255
             colour = wx.Colour(r, g, b, alpha)
 
             def _pen(w_mm):
-                # Use .Colour() chain: more reliable than constructor arg on GTK/macOS
-                return gc.CreatePen(wx.GraphicsPenInfo().Colour(colour).Width(self._stroke_w(w_mm)))
+                # Use .Colour() chain: more reliable than constructor arg on GTK/macOS.
+                # Paste/mask use a fixed thin stroke so aperture outlines stay subtle.
+                w_px = _MIN_STROKE_PX if _is_paste_mask else self._stroke_w(w_mm)
+                return gc.CreatePen(wx.GraphicsPenInfo().Colour(colour).Width(w_px))
 
             # ── Lines ────────────────────────────────────────────────
             for (x1, y1), (x2, y2), _layer, w_mm in layer_lines.get(layer, []):
@@ -726,7 +731,8 @@ class _FootprintPreviewPanel(wx.Panel):
             # ── Rectangles (fp_rect, KiCad 8+) ───────────────────────
             for x1, y1, x2, y2, _layer, w_mm, corner_r, filled in layer_rects.get(layer, []):
                 gc.SetPen(_pen(w_mm))
-                gc.SetBrush(gc.CreateBrush(wx.Brush(colour)) if filled
+                # Paste/mask: outline only — filled would obscure pad copper
+                gc.SetBrush(gc.CreateBrush(wx.Brush(colour)) if (filled and not _is_paste_mask)
                             else wx.TRANSPARENT_BRUSH)
                 px1, py1 = self._px(x1, y1)
                 px2, py2 = self._px(x2, y2)
@@ -807,7 +813,7 @@ class _FootprintPreviewPanel(wx.Panel):
                 if len(poly_pts) < 2:
                     continue
                 gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo().Colour(colour).Width(_MIN_STROKE_PX)))
-                gc.SetBrush(gc.CreateBrush(wx.Brush(colour)) if filled
+                gc.SetBrush(gc.CreateBrush(wx.Brush(colour)) if (filled and not _is_paste_mask)
                             else wx.TRANSPARENT_BRUSH)
                 path = gc.CreatePath()
                 path.MoveToPoint(*self._px(*poly_pts[0]))
@@ -1524,9 +1530,10 @@ class JLCImportDialog(wx.Dialog):
         self.results_list.InsertColumn(1, "Type", width=55)
         self.results_list.InsertColumn(2, "Price", width=60)
         self.results_list.InsertColumn(3, "Stock", width=75)
-        self.results_list.InsertColumn(4, "Part", width=200)
-        self.results_list.InsertColumn(5, "Package", width=80)
-        self.results_list.InsertColumn(6, "Description", width=300)
+        self.results_list.InsertColumn(4, "Brand", width=100)
+        self.results_list.InsertColumn(5, "Part", width=180)
+        self.results_list.InsertColumn(6, "Package", width=80)
+        self.results_list.InsertColumn(7, "Description", width=280)
         self.results_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_result_select)
         self.results_list.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
         self._sort_col = -1
@@ -2015,9 +2022,10 @@ class JLCImportDialog(wx.Dialog):
             1: lambda r: r.get("type", ""),
             2: lambda r: r.get("price") or 0,
             3: lambda r: r.get("stock") or 0,
-            4: lambda r: r.get("model", "").lower(),
-            5: lambda r: r.get("package", "").lower(),
-            6: lambda r: r.get("description", "").lower(),
+            4: lambda r: r.get("brand", "").lower(),
+            5: lambda r: r.get("model", "").lower(),
+            6: lambda r: r.get("package", "").lower(),
+            7: lambda r: r.get("description", "").lower(),
         }
         key_fn = key_map.get(col)
         if key_fn:
@@ -2025,7 +2033,7 @@ class JLCImportDialog(wx.Dialog):
             self._update_col_headers()
             self._repopulate_results()
 
-    _col_names = ["LCSC", "Type", "Price", "Stock", "Part", "Package", "Description"]
+    _col_names = ["LCSC", "Type", "Price", "Stock", "Brand", "Part", "Package", "Description"]
 
     def _update_col_headers(self):
         """Update column headers with sort indicator."""
@@ -2129,9 +2137,10 @@ class JLCImportDialog(wx.Dialog):
             self.results_list.SetItem(i, 2, price_str)
             stock_str = f"{r['stock']:,}" if r["stock"] else "N/A"
             self.results_list.SetItem(i, 3, stock_str)
-            self.results_list.SetItem(i, 4, r["model"])
-            self.results_list.SetItem(i, 5, r.get("package", ""))
-            self.results_list.SetItem(i, 6, r.get("description", ""))
+            self.results_list.SetItem(i, 4, r.get("brand", ""))
+            self.results_list.SetItem(i, 5, r["model"])
+            self.results_list.SetItem(i, 6, r.get("package", ""))
+            self.results_list.SetItem(i, 7, r.get("description", ""))
         self._update_results_count()
         if reselect_idx >= 0:
             self.results_list.Select(reselect_idx)
