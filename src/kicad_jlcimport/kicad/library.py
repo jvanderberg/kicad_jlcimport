@@ -315,6 +315,28 @@ def _read_fp_lib_entries(table_path: str) -> list[tuple[str, str, str]]:
     return [(name, lib_type, uri) for name, lib_type, uri in _LIB_ENTRY_RE.findall(content)]
 
 
+def _iter_kicad_config_versions() -> list[str]:
+    """Return all versioned KiCad config directories that exist on disk.
+
+    Yields the newest version first so callers find the most relevant config
+    without knowing the installed KiCad version in advance.
+    """
+    base = _kicad_config_base()
+    dirs: list[tuple[float, str]] = []
+    try:
+        for entry in os.listdir(base):
+            full = os.path.join(base, entry)
+            if os.path.isdir(full):
+                try:
+                    dirs.append((float(entry), full))
+                except ValueError:
+                    pass
+    except OSError:
+        pass
+    dirs.sort(reverse=True)
+    return [d for _, d in dirs]
+
+
 def _expand_lib_uri(uri: str, project_dir: str = "") -> str:
     """Expand common variables in a lib-table URI."""
 
@@ -322,35 +344,20 @@ def _expand_lib_uri(uri: str, project_dir: str = "") -> str:
         if not re.match(r"^KICAD\d+_FOOTPRINT_DIR$", key):
             return ""
 
-        candidates: list[str] = []
-        if sys.platform == "darwin":
-            candidates.extend(
-                [
-                    "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints",
-                    "/Applications/KiCad/KiCad Nightly.app/Contents/SharedSupport/footprints",
-                ]
-            )
-        elif sys.platform == "win32":
-            pf = os.environ.get("ProgramFiles", r"C:\Program Files")
-            candidates.extend(
-                [
-                    os.path.join(pf, "KiCad", "share", "kicad", "footprints"),
-                    os.path.join(pf, "KiCad", "9.0", "share", "kicad", "footprints"),
-                    os.path.join(pf, "KiCad", "8.0", "share", "kicad", "footprints"),
-                ]
-            )
-        else:
-            candidates.extend(
-                [
-                    "/usr/share/kicad/footprints",
-                    "/usr/share/kicad-nightly/footprints",
-                    "/usr/local/share/kicad/footprints",
-                ]
-            )
+        # Primary: read the variable from KiCad's own kicad_common.json.
+        # KiCad stores user-configured environment variables (including custom
+        # library paths) there, so this works on all platforms and custom installs.
+        for ver_dir in _iter_kicad_config_versions():
+            common = os.path.join(ver_dir, "kicad_common.json")
+            try:
+                with open(common, encoding="utf-8") as f:
+                    data = json.load(f)
+                val = data.get("environment", {}).get("vars", {}).get(key, "")
+                if val and os.path.isdir(val):
+                    return val
+            except (OSError, ValueError, KeyError):
+                continue
 
-        for candidate in candidates:
-            if os.path.isdir(candidate):
-                return candidate
         return ""
 
     def _replace(match) -> str:
