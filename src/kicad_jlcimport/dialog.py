@@ -1339,6 +1339,7 @@ class _SpinnerOverlay(wx.Window):
     _ARC_WIDTH = 3
     _SEGMENTS = 30
     _ARC_SWEEP = 300
+    _TICK_MS = 50  # 20 fps — fast enough visually, slow enough not to starve CallAfter
 
     def __init__(self, parent, target=None):
         super().__init__(parent, style=wx.TRANSPARENT_WINDOW)
@@ -1350,16 +1351,21 @@ class _SpinnerOverlay(wx.Window):
         self.Hide()
 
     def show(self):
-        """Show the spinner and start animation."""
+        """Show the spinner and start animation. Safe to call from main thread only."""
+        if not self or not self.GetParent():
+            return
         self._sync_position()
         self.Show()
         self.Raise()
-        self._timer.Start(25)
+        # Use _TICK_MS — a 25 ms timer fires 40×/sec and floods the event queue,
+        # starving wx.CallAfter callbacks posted from background threads.
+        self._timer.Start(self._TICK_MS)
 
     def dismiss(self):
-        """Hide the spinner and stop animation."""
+        """Hide the spinner and stop animation. Safe to call from main thread only."""
         self._timer.Stop()
-        self.Hide()
+        if self and self.IsShown():
+            self.Hide()
 
     def _sync_position(self):
         if self._target:
@@ -1371,12 +1377,13 @@ class _SpinnerOverlay(wx.Window):
             self.SetSize(self.GetParent().GetClientSize())
 
     def _on_tick(self, event):
-        self._angle = (self._angle + 8) % 360
-        self._sync_position()
+        self._angle = (self._angle + 12) % 360  # faster apparent spin at lower fps
+        # Only re-sync position if we have a target (cheap check avoids layout churn)
+        if self._target:
+            self._sync_position()
         self.Refresh()
 
     def _on_paint(self, event):
-
         dc = wx.PaintDC(self)
         w, h = self.GetClientSize()
 
@@ -1856,7 +1863,6 @@ class JLCImportDialog(wx.Dialog):
         if self._closing:
             return
         self.status_text.AppendText(msg + "\n")
-        self.status_text.Update()
 
     def _handle_ssl_cert_error(self):
         """Show a one-time SSL warning and enable unverified HTTPS."""
@@ -2754,6 +2760,7 @@ class JLCImportDialog(wx.Dialog):
 
     def _import_worker(self, lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version):
         """Background thread: run the import."""
+        _dispatched = False
         try:
             try:
                 result = self._do_import(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version)
@@ -2761,13 +2768,21 @@ class JLCImportDialog(wx.Dialog):
                 self._handle_ssl_cert_error()
                 result = self._do_import(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version)
             if not self._closing:
+                _dispatched = True
                 wx.CallAfter(self._on_import_complete, result)
         except APIError as e:
             if not self._closing:
+                _dispatched = True
                 wx.CallAfter(self._on_import_error, f"API Error: {e}")
         except Exception as e:
             if not self._closing:
+                _dispatched = True
                 wx.CallAfter(self._on_import_error, f"Error: {e}\n{traceback.format_exc()}")
+        finally:
+            # Guarantee the overlay is always dismissed even if an unexpected
+            # exception bypassed all the error handlers above.
+            if not _dispatched and not self._closing:
+                wx.CallAfter(self._on_import_error, "Import failed unexpectedly.")
 
     def _on_import_complete(self, result):
         """Main thread: handle successful import completion."""
@@ -2840,8 +2855,8 @@ class JLCImportDialog(wx.Dialog):
                 finally:
                     done.set()
 
-            # Stop the spinner timer BEFORE posting CallAfter — the 25 ms EVT_TIMER
-            # + EVT_PAINT flood starves the event queue and CallAfter never runs.
+            # Stop the timer BEFORE posting — the 25 ms EVT_TIMER/EVT_PAINT flood
+            # (and status_text.Update() reentrancy) can starve CallAfter callbacks.
             self._busy_overlay._timer.Stop()
             wx.CallAfter(_ask)
             done.wait()
@@ -2864,7 +2879,6 @@ class JLCImportDialog(wx.Dialog):
                 finally:
                     done.set()
 
-            # Same fix — stop the timer before posting so CallAfter can be dispatched.
             self._busy_overlay._timer.Stop()
             wx.CallAfter(_ask)
             done.wait()
