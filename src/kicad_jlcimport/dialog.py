@@ -2828,16 +2828,21 @@ class JLCImportDialog(wx.Dialog):
             done = threading.Event()
 
             def _ask():
-                if self._closing:
+                try:
+                    if self._closing:
+                        return
+                    self._main_panel.Enable()
+                    self._busy_overlay.dismiss()
+                    result[0] = self._confirm_metadata(metadata)
+                    if not self._closing:
+                        self._main_panel.Disable()
+                        self._busy_overlay.show()
+                finally:
                     done.set()
-                    return
-                self._main_panel.Enable()
-                self._busy_overlay.dismiss()
-                result[0] = self._confirm_metadata(metadata)
-                self._main_panel.Disable()
-                self._busy_overlay.show()
-                done.set()
 
+            # Stop the spinner timer BEFORE posting CallAfter — the 25 ms EVT_TIMER
+            # + EVT_PAINT flood starves the event queue and CallAfter never runs.
+            self._busy_overlay._timer.Stop()
             wx.CallAfter(_ask)
             done.wait()
             return result[0]
@@ -2847,16 +2852,20 @@ class JLCImportDialog(wx.Dialog):
             done = threading.Event()
 
             def _ask():
-                if self._closing:
+                try:
+                    if self._closing:
+                        return
+                    self._main_panel.Enable()
+                    self._busy_overlay.dismiss()
+                    result[0] = self._confirm_overwrite(name, existing)
+                    if not self._closing:
+                        self._main_panel.Disable()
+                        self._busy_overlay.show()
+                finally:
                     done.set()
-                    return
-                self._main_panel.Enable()
-                self._busy_overlay.dismiss()
-                result[0] = self._confirm_overwrite(name, existing)
-                self._main_panel.Disable()
-                self._busy_overlay.show()
-                done.set()
 
+            # Same fix — stop the timer before posting so CallAfter can be dispatched.
+            self._busy_overlay._timer.Stop()
             wx.CallAfter(_ask)
             done.wait()
             return result[0]
