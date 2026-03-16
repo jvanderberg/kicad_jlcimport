@@ -58,3 +58,65 @@ NEVER run `git stash` without asking the user first. Stashing someone's in-progr
 - **Never modify production code just to make a test pass.** If a test fails, first determine whether the test or the production code is wrong. Read the production code's docstrings, comments, and recent commit history before deciding.
 - **Treat merged/reviewed production code as intentional.** If code is deliberately designed a certain way (especially error handling, security boundaries, or API contracts), fix the tests to match the design — not the other way around.
 - **Mock external dependencies.** When tests fail because they make real network, filesystem, or OS calls, mock the external dependency. Don't weaken production error handling to tolerate environment differences.
+
+## RELEASING — `/release`
+
+When the user says `/release` or asks to cut a release, follow these steps exactly.
+
+### 1. Determine the new version
+
+Ask the user for the version bump type (patch, minor, or major) if not specified. Parse the current version from `pyproject.toml` and compute the new version.
+
+### 2. Run all checks
+
+```bash
+source install.sh
+ruff check .
+ruff format --check .
+pytest tests/ -q --cov=kicad_jlcimport --cov-fail-under=80
+```
+
+All three must pass. Do not proceed if any fail.
+
+### 3. Merge to main if on a feature branch
+
+If currently on a feature branch:
+1. Ensure all changes are committed and pushed.
+2. Check if an open PR exists for this branch (`gh pr list --head <branch>`). If not, create one.
+3. Merge the PR: `gh pr merge --squash --delete-branch`
+4. Switch to main and pull: `git checkout main && git pull`
+
+If already on main, just ensure it's up to date: `git pull`
+
+### 4. Update version in these files
+
+| File | Field |
+|---|---|
+| `pyproject.toml` | `version = "X.Y.Z"` |
+| `metadata.json` | `"version": "X.Y.Z"` in the `versions[0]` object |
+
+### 5. Add a changelog entry to README.md
+
+Add a line to the **Recent Updates** section at the top of the list:
+
+```
+- `vX.Y.Z`: <short summary of changes since last release>
+```
+
+Build the summary from `git log` since the last tag.
+
+### 6. Commit, push, and tag
+
+```bash
+git add pyproject.toml metadata.json README.md
+git commit -m "Release vX.Y.Z"
+git push
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+The `v*` tag push triggers `.github/workflows/release.yml` which builds binaries, PCM package, and creates the GitHub release automatically.
+
+### 7. Verify
+
+Confirm the release workflow started: `gh run list --workflow=release.yml --limit=1`
