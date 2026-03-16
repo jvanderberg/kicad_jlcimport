@@ -1639,9 +1639,9 @@ class JLCImportDialog(wx.Dialog):
             return ctrl
 
         self.detail_part = _info_field("Part", expand=True)
-        self.detail_lcsc = _info_field("LCSC")
+        self.detail_lcsc = _info_field("LCSC", expand=True)
         self.detail_brand = _info_field("Brand", expand=True)
-        self.detail_package = _info_field("Package")
+        self.detail_package = _info_field("Package", expand=True)
         self.detail_price = _info_field("Price")
         self.detail_stock = _info_field("Stock")
 
