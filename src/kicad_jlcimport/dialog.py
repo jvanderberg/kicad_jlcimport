@@ -2724,6 +2724,8 @@ class JLCImportDialog(wx.Dialog):
         if self._image_request_id != request_id:
             return  # User selected a different item
         self._stop_skeleton()
+        if not self._has_easyeda_data:
+            return  # placeholder already showing
         if not img_data:
             self._full_image_data = None
             self._photo_bitmap = None
@@ -2793,11 +2795,11 @@ class JLCImportDialog(wx.Dialog):
             return
         self._has_easyeda_data = False
         self.detail_import_btn.Disable()
-        # Show a clear message on the footprint preview page
+        self._stop_skeleton()
         bmp = _no_easyeda_placeholder(160)
+        self._photo_bitmap = bmp
         self._symbol_bitmap = bmp
-        if self._detail_page == 1:
-            self.detail_image.SetBitmap(bmp)
+        self.detail_image.SetBitmap(bmp)
 
     def _on_page_change(self, page):
         """Handle page indicator click to switch between photo and symbol."""
