@@ -712,7 +712,6 @@ class _FootprintPreviewPanel(wx.Panel):
     # ------------------------------------------------------------------
 
     def _on_paint(self, event):
-
         dc = wx.AutoBufferedPaintDC(self)
         dc.SetBackground(wx.Brush(wx.Colour(26, 26, 26)))
         dc.Clear()
