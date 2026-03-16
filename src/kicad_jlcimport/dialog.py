@@ -163,6 +163,23 @@ def _no_footprint_placeholder(size: int, svg_unsupported: bool) -> wx.Bitmap:
     return bmp
 
 
+def _no_easyeda_placeholder(size: int) -> wx.Bitmap:
+    """Create a placeholder bitmap indicating no EasyEDA data is available."""
+    bmp = wx.Bitmap(size, size)
+    dc = wx.MemoryDC(bmp)
+    dc.SetBackground(wx.Brush(wx.Colour(248, 248, 248)))
+    dc.Clear()
+    dc.SetTextForeground(wx.Colour(160, 100, 100))
+    font = dc.GetFont()
+    font.SetPointSize(max(8, size // 16))
+    dc.SetFont(font)
+    msg = "No EasyEDA data\navailable for\nthis part"
+    tw, th = dc.GetMultiLineTextExtent(msg)[:2]
+    dc.DrawText(msg, (size - tw) // 2, (size - th) // 2)
+    dc.SelectObject(wx.NullBitmap)
+    return bmp
+
+
 class _PageIndicator(wx.Control):
     """Owner-drawn two-dot page indicator for switching between photo and symbol views."""
 
@@ -1488,6 +1505,7 @@ class JLCImportDialog(wx.Dialog):
 
         self._ssl_warning_shown = False
         self._selected_result = None
+        self._has_easyeda_data = True  # cleared when API returns no data
         self._photo_bitmap = None
         self._symbol_bitmap = None
         self._symbol_svg_string = None  # raw SVG for re-rendering at gallery size
@@ -2254,6 +2272,7 @@ class JLCImportDialog(wx.Dialog):
         if self._selected_result and r["lcsc"] == self._selected_result["lcsc"]:
             return  # same item already displayed
         self._selected_result = r
+        self._has_easyeda_data = True  # assume yes until the API says otherwise
 
         # Clear cached bitmaps but keep current page selection
         self._photo_bitmap = None
@@ -2564,6 +2583,9 @@ class JLCImportDialog(wx.Dialog):
             svg_string = uuids[-1].get("svg", "") if uuids else ""
             if not self._closing and self._gallery_svg_request_id == request_id and svg_string:
                 wx.CallAfter(self._set_gallery_svg, svg_string, request_id)
+        except APIError:
+            if not self._closing and self._gallery_svg_request_id == request_id:
+                wx.CallAfter(self._on_no_easyeda_data, self._symbol_request_id)
         except Exception:
             pass  # Footprint preview is best-effort
 
@@ -2747,6 +2769,9 @@ class JLCImportDialog(wx.Dialog):
 
             if not self._closing and self._symbol_request_id == request_id and svg_string:
                 wx.CallAfter(self._set_footprint_svg, svg_string, request_id)
+        except APIError:
+            if not self._closing and self._symbol_request_id == request_id:
+                wx.CallAfter(self._on_no_easyeda_data, request_id)
         except Exception:
             pass  # Footprint preview is best-effort
 
@@ -2761,6 +2786,18 @@ class JLCImportDialog(wx.Dialog):
                 self.detail_image.SetBitmap(self._symbol_bitmap)
             else:
                 self._show_no_footprint()
+
+    def _on_no_easyeda_data(self, request_id):
+        """Main thread: the API has no schematic/footprint for this part."""
+        if self._symbol_request_id != request_id:
+            return
+        self._has_easyeda_data = False
+        self.detail_import_btn.Disable()
+        # Show a clear message on the footprint preview page
+        bmp = _no_easyeda_placeholder(160)
+        self._symbol_bitmap = bmp
+        if self._detail_page == 1:
+            self.detail_image.SetBitmap(bmp)
 
     def _on_page_change(self, page):
         """Handle page indicator click to switch between photo and symbol."""
