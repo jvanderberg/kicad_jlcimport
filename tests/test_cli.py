@@ -368,6 +368,7 @@ def test_cli_global_lib_dir_argparse(monkeypatch):
     """--global-lib-dir is parsed correctly by argparse."""
     import kicad_jlcimport.cli as cli
 
+    monkeypatch.setattr("kicad_jlcimport.kicad.library.save_config", lambda _: None)
     monkeypatch.setattr("sys.argv", ["prog", "import", "C123", "--global", "--global-lib-dir", "/some/path"])
     # Patch main to capture args instead of running cmd_import
     captured = {}

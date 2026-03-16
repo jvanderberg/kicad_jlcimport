@@ -49,26 +49,14 @@ PIN_TYPES = {
 _SOLID_REGION_LAYERS = {"3", "4", "12"}
 
 
-
 # EasyEDA stores coordinates in 10-mil units (1 unit = 10 mils = 0.254 mm).
 # Dividing by 3.937 converts EasyEDA units to millimeters (3.937 ≈ 1/0.254).
 MILS_TO_MM_DIVISOR = 3.937
-
-# Snap grid in mm. After unit conversion, coordinates land at non-round values
-# (e.g. 0.970282 mm) because EasyEDA's 0.254 mm unit doesn't divide evenly
-# into KiCad's metric grid. Snapping to 0.005 mm keeps footprints grid-aligned
-# with a worst-case error of 2.5 µm — negligible for PCB fabrication.
-_SNAP_GRID = 0.005
 
 
 def mil_to_mm(mil: float) -> float:
     """Convert EasyEDA units (10-mil) to millimeters."""
     return mil / MILS_TO_MM_DIVISOR
-
-
-def _snap(v: float) -> float:
-    """Snap a coordinate or dimension to the 0.005 mm grid."""
-    return round(v / _SNAP_GRID) * _SNAP_GRID
 
 
 _SVG_ARC_RE = re.compile(
@@ -152,27 +140,26 @@ def parse_footprint_shapes(shapes: List[str], origin_x: float, origin_y: float) 
             if track:
                 fp.tracks.extend(track)
 
-    # Apply origin offset to all coordinates and snap to 0.005 mm grid
+    # Apply origin offset to all coordinates
     ox = mil_to_mm(origin_x)
     oy = mil_to_mm(origin_y)
 
     for pad in fp.pads:
-        pad.x = _snap(pad.x - ox)
-        pad.y = _snap(pad.y - oy)
+        pad.x -= ox
+        pad.y -= oy
     for track in fp.tracks:
-        track.points = [(_snap(x - ox), _snap(y - oy)) for x, y in track.points]
+        track.points = [(x - ox, y - oy) for x, y in track.points]
     for arc in fp.arcs:
-        arc.start = (_snap(arc.start[0] - ox), _snap(arc.start[1] - oy))
-        arc.end = (_snap(arc.end[0] - ox), _snap(arc.end[1] - oy))
+        arc.start = (arc.start[0] - ox, arc.start[1] - oy)
+        arc.end = (arc.end[0] - ox, arc.end[1] - oy)
     for circle in fp.circles:
-        circle.cx = _snap(circle.cx - ox)
-        circle.cy = _snap(circle.cy - oy)
+        circle.cx -= ox
+        circle.cy -= oy
     for hole in fp.holes:
-        hole.x = _snap(hole.x - ox)
-        hole.y = _snap(hole.y - oy)
-        hole.radius = _snap(hole.radius)
+        hole.x -= ox
+        hole.y -= oy
     for region in fp.regions:
-        region.points = [(_snap(x - ox), _snap(y - oy)) for x, y in region.points]
+        region.points = [(x - ox, y - oy) for x, y in region.points]
 
     return fp
 
@@ -259,16 +246,16 @@ def _parse_pad(parts: List[str]) -> EEPad:
 
     return EEPad(
         shape=shape,
-        x=_snap(mil_to_mm(x)),
-        y=_snap(mil_to_mm(y)),
-        width=_snap(mil_to_mm(sx)),
-        height=_snap(mil_to_mm(sy)),
+        x=mil_to_mm(x),
+        y=mil_to_mm(y),
+        width=mil_to_mm(sx),
+        height=mil_to_mm(sy),
         layer=layer,
         number=number,
-        drill=_snap(mil_to_mm(drill * 2)),  # Convert radius to diameter, then to mm
+        drill=mil_to_mm(drill * 2),  # Convert radius to diameter, then to mm
         rotation=rotation,
         polygon_points=poly_points,
-        slot_length=_snap(mil_to_mm(slot_length_mil)),
+        slot_length=mil_to_mm(slot_length_mil),
     )
 
 

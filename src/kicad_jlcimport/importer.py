@@ -52,23 +52,32 @@ def _build_keywords(comp: dict) -> str:
     return " ".join(sorted(terms))
 
 
-def _check_existing_files(lib_dir: str, lib_name: str, name: str) -> list[str]:
-    """Return a list of existing file types (e.g. ["footprint", "symbol", "3D model"])."""
+def _check_existing_files(
+    lib_dir: str, lib_name: str, fp_name: str, sym_name: str = "", model_name: str = ""
+) -> list[str]:
+    """Return a list of existing file types (e.g. ["footprint", "symbol", "3D model"]).
+
+    *fp_name* is the footprint filename.
+    *sym_name* is the symbol name inside the .kicad_sym (defaults to *fp_name*).
+    *model_name* is the 3D model filename (defaults to *fp_name*).
+    """
+    sym_name = sym_name or fp_name
+    model_name = model_name or fp_name
     existing: list[str] = []
-    fp_path = os.path.join(lib_dir, f"{lib_name}.pretty", f"{name}.kicad_mod")
+    fp_path = os.path.join(lib_dir, f"{lib_name}.pretty", f"{fp_name}.kicad_mod")
     if os.path.exists(fp_path):
         existing.append("footprint")
     sym_path = os.path.join(lib_dir, f"{lib_name}.kicad_sym")
     if os.path.exists(sym_path):
         try:
             with open(sym_path, encoding="utf-8") as f:
-                if f'(symbol "{name}"' in f.read():
+                if f'(symbol "{sym_name}"' in f.read():
                     existing.append("symbol")
         except (PermissionError, OSError):
             pass
     models_dir = os.path.join(lib_dir, f"{lib_name}.3dshapes")
-    step_path = os.path.join(models_dir, f"{name}.step")
-    wrl_path = os.path.join(models_dir, f"{name}.wrl")
+    step_path = os.path.join(models_dir, f"{model_name}.step")
+    wrl_path = os.path.join(models_dir, f"{model_name}.wrl")
     if os.path.exists(step_path) or os.path.exists(wrl_path):
         existing.append("3D model")
     return existing
@@ -146,7 +155,6 @@ def import_component(
 
     title = comp["title"]
     name = sanitize_name(title)
-    footprint_ref = f"{lib_name}:{name}"
     package = comp.get("package", "")
     candidate_ref = None
     reuse_existing_footprint = False
@@ -158,21 +166,13 @@ def import_component(
             kicad_version=kicad_version,
         )
 
-    # Check for existing files and ask user to confirm overwrite
-    if not export_only and confirm_overwrite:
-        existing = _check_existing_files(lib_dir, lib_name, name)
-        if existing:
-            if not confirm_overwrite(name, existing):
-                return None
-            overwrite = True
-
     # Compute metadata that will be written to KiCad files
     metadata = {
         "description": _build_description(comp),
         "keywords": _build_keywords(comp),
         "manufacturer": comp.get("manufacturer", ""),
     }
-    metadata["__component_name"] = name   # shown/editable in dialog as footprint & 3D name
+    metadata["__component_name"] = name  # shown/editable in dialog as footprint & 3D name
     if candidate_ref:
         metadata["__package_name"] = package
         metadata["__footprint_candidate_ref"] = candidate_ref
@@ -194,11 +194,20 @@ def import_component(
     # Apply user-edited footprint / 3D-model name overrides (EasyEDA import only).
     # Check for empty strings BEFORE sanitize_name — sanitize_name("") returns
     # "unnamed" which is truthy, so the `or name` fallback would never trigger.
-    raw_fp_name    = metadata.pop("__footprint_name", "").strip()
-    raw_model_name = metadata.pop("__model_name",    "").strip()
-    fp_name    = sanitize_name(raw_fp_name)    if raw_fp_name    else name
+    raw_fp_name = metadata.pop("__footprint_name", "").strip()
+    raw_model_name = metadata.pop("__model_name", "").strip()
+    fp_name = sanitize_name(raw_fp_name) if raw_fp_name else name
     model_name = sanitize_name(raw_model_name) if raw_model_name else fp_name
     metadata.pop("__component_name", None)
+
+    # Check for existing files and ask user to confirm overwrite.
+    # This runs after metadata editing so fp_name reflects any user rename.
+    if not export_only and confirm_overwrite:
+        existing = _check_existing_files(lib_dir, lib_name, fp_name, sym_name=name, model_name=model_name)
+        if existing:
+            if not confirm_overwrite(fp_name, existing):
+                return None
+            overwrite = True
 
     # footprint_ref defaults to lib:fp_name (respects any user rename).
     # This is overwritten below by candidate_ref if the user chose a KiCad
@@ -376,7 +385,7 @@ def _export_only(
     """Write raw .kicad_mod, .kicad_sym, and 3D models to a flat directory."""
     # fp_name: filename for .kicad_mod (defaults to component name)
     # model_name: filename for .step/.wrl (defaults to fp_name)
-    fp_name    = fp_name    or name
+    fp_name = fp_name or name
     model_name = model_name or fp_name
     os.makedirs(out_dir, exist_ok=True)
 
@@ -459,7 +468,7 @@ def _import_to_library(
     property ``Footprint`` can reference it consistently.
     """
     # fp_name / model_name default to the component name when not overridden
-    fp_name    = fp_name    or name
+    fp_name = fp_name or name
     model_name = model_name or fp_name
     log(f"Destination: {lib_dir}")
 

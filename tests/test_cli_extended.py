@@ -644,12 +644,14 @@ class TestMain:
     """Tests for main function."""
 
     def test_main_no_command_shows_help(self, monkeypatch, capsys):
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.save_config", lambda _: None)
         monkeypatch.setattr(sys, "argv", ["jlcimport"])
         cli.main()
         out = capsys.readouterr().out
         assert "JLCImport CLI" in out or "usage" in out.lower()
 
     def test_main_search_command(self, monkeypatch, capsys):
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.save_config", lambda _: None)
         mock_results = {"total": 0, "results": []}
         monkeypatch.setattr(cli, "search_components", lambda *a, **k: mock_results)
         monkeypatch.setattr(sys, "argv", ["jlcimport", "search", "test"])
