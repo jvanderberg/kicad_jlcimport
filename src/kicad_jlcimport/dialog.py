@@ -274,7 +274,7 @@ def _extract_blocks(text: str, keyword: str) -> list:
     return results
 
 
-def _parse_kicad_mod(path: str, project_dir: str = "") -> dict:
+def _parse_kicad_mod(path: str, project_dir: str = "", kicad_version: int = DEFAULT_KICAD_VERSION) -> dict:
     """Parse a KiCad 8/9/10 .kicad_mod file into geometry lists for preview rendering.
 
     Returns a dict with keys:
@@ -477,7 +477,7 @@ def _parse_kicad_mod(path: str, project_dir: str = "") -> dict:
             key = m.group(1)
             if key == "KIPRJMOD" and project_dir:
                 return project_dir
-            return resolve_kicad_var(key) or m.group(0)
+            return resolve_kicad_var(key, kicad_version) or m.group(0)
 
         resolved = re.sub(r"\$\{([^}]+)\}", _resolve_var, raw_path)
         exists = os.path.isfile(resolved)
@@ -1006,6 +1006,7 @@ class FootprintBrowserDialog(wx.Dialog):
         self._selection = ""
         self._current_fp_path = ""
         self._project_dir = project_dir
+        self._kicad_version = kicad_version
         self._build_ui()
         self.Centre()
         # Pre-navigate to the initial selection (e.g. the auto-matched candidate)
@@ -1175,7 +1176,7 @@ class FootprintBrowserDialog(wx.Dialog):
 
     def _load_preview(self, fp_path: str) -> None:
         """Parse the .kicad_mod on a background thread, then update UI."""
-        fp = _parse_kicad_mod(fp_path, project_dir=self._project_dir)
+        fp = _parse_kicad_mod(fp_path, project_dir=self._project_dir, kicad_version=self._kicad_version)
         if not wx.IsMainThread():
             wx.CallAfter(self._apply_preview, fp_path, fp)
         else:

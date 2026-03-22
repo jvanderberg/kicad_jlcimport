@@ -45,29 +45,7 @@ fi
 
 cd "${ROOT_DIR}"
 
-INSTALL_DIR="$("${PYTHON_BIN}" - <<'PY'
-import os
-import sys
-
-if sys.platform == "darwin":
-    base = os.path.expanduser("~/Documents/KiCad")
-elif sys.platform == "win32":
-    base = os.path.join(os.environ.get("APPDATA", ""), "kicad")
-else:
-    base = os.path.expanduser("~/.local/share/kicad")
-
-best = "9.0"
-if os.path.isdir(base):
-    for d in os.listdir(base):
-        try:
-            if float(d) > float(best):
-                best = d
-        except ValueError:
-            continue
-
-print(os.path.join(base, best, "3rdparty", "plugins", "com_github_jvanderberg_kicad-jlcimport"))
-PY
-)"
+INSTALL_DIR="$("${PYTHON_BIN}" tools/build_pcm.py --print-install-dir)"
 
 if [[ "${CLEAN_INSTALL}" == "1" ]]; then
   case "${INSTALL_DIR}" in
@@ -86,6 +64,9 @@ if [[ "${CLEAN_INSTALL}" == "1" ]]; then
     echo "No existing KiCad install found at: ${INSTALL_DIR}"
   fi
 fi
+
+# Remove stale dev ZIPs so the HTTP server only has the fresh build
+rm -f dist/JLCImport-dev-*.zip dist/packages.json dist/repository.json dist/resources.zip
 
 "${PYTHON_BIN}" tools/build_pcm.py \
   --zip-name "${ZIP_NAME}" \

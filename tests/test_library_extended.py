@@ -145,7 +145,7 @@ class TestDetectKicadVersion:
         monkeypatch.setattr(library, "_kicad_data_base", lambda: str(tmp_path))
 
         result = library._detect_kicad_version()
-        assert result == "9.0"  # Default
+        assert result == "10.0"  # Default
 
     def test_detect_version_ignores_non_numeric_dirs(self, tmp_path, monkeypatch):
         # Ensure pcbnew is not available

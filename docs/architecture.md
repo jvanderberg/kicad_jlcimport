@@ -4,7 +4,7 @@ This document describes how JLCImport works: the system architecture, data flow,
 
 ## Overview
 
-JLCImport bridges the JLCPCB/LCSC component catalog with KiCad 8 and 9. It fetches component data from EasyEDA's public APIs, parses their proprietary shape format, and writes native KiCad file formats (`.kicad_sym`, `.kicad_mod`, `.step`, `.wrl`). The plugin auto-detects the running KiCad version; the standalone CLI, GUI, and TUI allow selecting the target version. The plugin runs entirely within KiCad's bundled Python environment with no external dependencies. A standalone TUI provides the same functionality in the terminal.
+JLCImport bridges the JLCPCB/LCSC component catalog with KiCad 8, 9, and 10. It fetches component data from EasyEDA's public APIs, parses their proprietary shape format, and writes native KiCad file formats (`.kicad_sym`, `.kicad_mod`, `.step`, `.wrl`). The plugin auto-detects the running KiCad version; the standalone CLI, GUI, and TUI allow selecting the target version. The plugin runs entirely within KiCad's bundled Python environment with no external dependencies. A standalone TUI provides the same functionality in the terminal.
 
 ## Source Layout
 
@@ -70,7 +70,7 @@ The codebase is organized in layers from top to bottom:
 - **`kicad/footprint_writer.py`** — Generates KiCad footprint files in S-expression format. Writes pads, tracks, arcs, circles, holes, zones, and 3D model references. Auto-detects SMD vs through-hole placement. Output format adapts to the selected KiCad version.
 - **`kicad/model3d.py`** — Computes 3D model transforms (offset, rotation, scale), saves STEP files, and converts OBJ-like mesh data to VRML 2.0 format. Downloads are handled by `importer.py` via `easyeda/api.py`.
 - **`kicad/library.py`** — Manages the on-disk library structure. Creates directories, appends symbols to `.kicad_sym` files, saves `.kicad_mod` footprints, and updates `sym-lib-table` / `fp-lib-table` so KiCad can find imported parts. Handles cross-platform path differences. Also manages persistent configuration (library name preference) via `jlcimport.json`.
-- **`kicad/version.py`** — Central version management. Defines supported KiCad versions (8, 9), format version constants, feature flags (`has_generator_version`, `has_embedded_fonts`), and directory name mapping. Auto-detection from `pcbnew` for plugin use; explicit selection for standalone tools.
+- **`kicad/version.py`** — Central version management. Defines supported KiCad versions (8, 9, 10), format version constants, feature flags (`has_generator_version`, `has_embedded_fonts`), and directory name mapping. Auto-detection from `pcbnew` for plugin use; explicit selection for standalone tools.
 - **`kicad/_format.py`** — Small helpers for float formatting, S-expression string escaping, and UUID generation.
 
 ## Data Flow
@@ -185,8 +185,8 @@ tests/
 ├── test_api_extended.py     # SSL fallback, cert handling (easyeda/api.py)
 ├── test_parser.py           # Shape parsing, coordinate math (easyeda/parser.py)
 ├── test_parser_extended.py  # Extended parser edge cases (easyeda/parser.py)
-├── test_footprint_writer.py # Footprint S-expression output, v8/v9 (kicad/footprint_writer.py)
-├── test_symbol_writer.py    # Symbol S-expression output, v8/v9 (kicad/symbol_writer.py)
+├── test_footprint_writer.py # Footprint S-expression output, v8/v9/v10 (kicad/footprint_writer.py)
+├── test_symbol_writer.py    # Symbol S-expression output, v8/v9/v10 (kicad/symbol_writer.py)
 ├── test_model3d.py          # 3D model transforms (kicad/model3d.py)
 ├── test_kicad_format.py     # Float formatting, UUID generation (kicad/format.py)
 ├── test_kicad_version.py    # Version constants, feature flags (kicad/version.py)

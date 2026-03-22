@@ -1,14 +1,14 @@
 """KiCad version constants and format helpers.
 
-Encapsulates the differences between KiCad 8 and KiCad 9 file formats so that
-writers and library management code can target either version cleanly.
+Encapsulates the differences between KiCad 8, 9, and 10 file formats so that
+writers and library management code can target any supported version cleanly.
 """
 
 # Supported major versions
 KICAD_V8 = 8
 KICAD_V9 = 9
 KICAD_V10 = 10
-DEFAULT_KICAD_VERSION = KICAD_V9
+DEFAULT_KICAD_VERSION = KICAD_V10
 SUPPORTED_VERSIONS = (KICAD_V8, KICAD_V9, KICAD_V10)
 
 # S-expression version stamps per major KiCad version
@@ -71,8 +71,8 @@ def version_dir_name(kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
 def detect_kicad_version_from_pcbnew() -> int:
     """Try to detect the KiCad major version from the pcbnew module.
 
-    Returns the major version number (8 or 9), or DEFAULT_KICAD_VERSION
-    if detection fails.
+    Returns the major version number, or DEFAULT_KICAD_VERSION if detection
+    fails.
     """
     try:
         import pcbnew

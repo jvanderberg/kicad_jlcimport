@@ -21,7 +21,7 @@ from kicad_jlcimport.easyeda.api import fetch_component_uuids, fetch_full_compon
 from kicad_jlcimport.importer import import_component
 from kicad_jlcimport.kicad.library import sanitize_name
 
-KICAD_CLI = shutil.which("kicad-cli") or "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"
+KICAD_CLI = shutil.which("kicad-cli") or ""
 
 
 def fetch_easyeda_svgs(lcsc_id: str) -> dict:

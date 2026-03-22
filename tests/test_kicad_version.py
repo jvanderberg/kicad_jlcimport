@@ -25,7 +25,7 @@ class TestConstants:
         assert KICAD_V9 == 9
 
     def test_default_version(self):
-        assert DEFAULT_KICAD_VERSION == KICAD_V9
+        assert DEFAULT_KICAD_VERSION == KICAD_V10
 
     def test_kicad_v10(self):
         assert KICAD_V10 == 10

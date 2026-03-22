@@ -51,7 +51,7 @@ Examples:
     parser.add_argument(
         "--kicad-version",
         type=int,
-        choices=[8, 9],
+        choices=[8, 9, 10],
         default=None,
         help="Target KiCad version (default: 9)",
     )

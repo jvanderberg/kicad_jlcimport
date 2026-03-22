@@ -7,7 +7,7 @@ JLCImport is a KiCad action plugin that imports symbols, footprints, and 3D mode
 - Imports symbol, footprint, and 3D model data in one step.
 - Works with project libraries or global KiCad libraries.
 - Includes searchable part lookup with stock and type filtering.
-- Handles modern KiCad formats (8/9, with conversion support for 10 paths).
+- Handles modern KiCad formats (8/9/10).
 - Ships with plugin, CLI, GUI, and TUI workflows.
 
 ![Search and details](images/search_results.png)
@@ -75,7 +75,7 @@ The plugin stores settings in `jlcimport.json` in your KiCad config directory. R
 
 ## Compatibility
 
-The project targets KiCad 8 and 9, and includes format support for KiCad 10 in the conversion code paths.
+The project targets KiCad 8, 9, and 10.
 
 For the plugin inside KiCad, no extra Python packages are required.
 

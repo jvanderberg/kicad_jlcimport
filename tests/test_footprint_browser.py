@@ -207,7 +207,7 @@ class TestParseKicadMod:
 
         monkeypatch.setattr(
             "kicad_jlcimport.dialog.resolve_kicad_var",
-            lambda key: str(model_dir) if "3DMODEL" in key else "",
+            lambda key, kicad_version=10: str(model_dir) if "3DMODEL" in key else "",
         )
 
         fp_file = tmp_path / "test.kicad_mod"
@@ -221,7 +221,7 @@ class TestParseKicadMod:
     def test_3d_model_unresolvable(self, tmp_path, monkeypatch):
         from kicad_jlcimport.dialog import _parse_kicad_mod
 
-        monkeypatch.setattr("kicad_jlcimport.dialog.resolve_kicad_var", lambda key: "")
+        monkeypatch.setattr("kicad_jlcimport.dialog.resolve_kicad_var", lambda key, kicad_version=10: "")
 
         fp_file = tmp_path / "test.kicad_mod"
         fp_file.write_text('(footprint "X"\n  (model "${KICAD9_3DMODEL_DIR}/missing.wrl")\n)\n')
@@ -233,7 +233,7 @@ class TestParseKicadMod:
         """KIPRJMOD should be resolved via project_dir parameter."""
         from kicad_jlcimport.dialog import _parse_kicad_mod
 
-        monkeypatch.setattr("kicad_jlcimport.dialog.resolve_kicad_var", lambda key: "")
+        monkeypatch.setattr("kicad_jlcimport.dialog.resolve_kicad_var", lambda key, kicad_version=10: "")
 
         proj_dir = tmp_path / "project"
         proj_dir.mkdir()
@@ -250,7 +250,7 @@ class TestParseKicadMod:
         """Without project_dir, KIPRJMOD stays unresolved."""
         from kicad_jlcimport.dialog import _parse_kicad_mod
 
-        monkeypatch.setattr("kicad_jlcimport.dialog.resolve_kicad_var", lambda key: "")
+        monkeypatch.setattr("kicad_jlcimport.dialog.resolve_kicad_var", lambda key, kicad_version=10: "")
 
         fp_file = tmp_path / "test.kicad_mod"
         fp_file.write_text('(footprint "X"\n  (model "${KIPRJMOD}/model.wrl")\n)\n')
@@ -339,6 +339,114 @@ class TestResolveKicadVar:
         result = library.resolve_kicad_var("KICAD9_3DMODEL_DIR")
         # It may find a real install or return ""
         assert isinstance(result, str)
+
+    def test_kicad_version_selects_target_install(self, tmp_path, monkeypatch):
+        """resolve_kicad_var should use the kicad_version param, not the variable name version."""
+        monkeypatch.delenv("KICAD9_FOOTPRINT_DIR", raising=False)
+        monkeypatch.setattr(library, "_iter_kicad_config_versions", lambda: [])
+
+        data10 = tmp_path / "kicad10_data"
+        (data10 / "footprints").mkdir(parents=True)
+        monkeypatch.setattr(library, "_find_kicad_data_dir", lambda major: str(data10) if major == 10 else "")
+
+        # Variable says KICAD9, but target version is 10
+        result = library.resolve_kicad_var("KICAD9_FOOTPRINT_DIR", kicad_version=10)
+        assert result == str(data10 / "footprints")
+
+    def test_kicad_version_default_used_when_omitted(self, tmp_path, monkeypatch):
+        """Without explicit kicad_version, DEFAULT_KICAD_VERSION is used."""
+        monkeypatch.delenv("KICAD10_3DMODEL_DIR", raising=False)
+        monkeypatch.setattr(library, "_iter_kicad_config_versions", lambda: [])
+
+        data = tmp_path / "data"
+        (data / "3dmodels").mkdir(parents=True)
+        monkeypatch.setattr(library, "_find_kicad_data_dir", lambda major: str(data) if major == 10 else "")
+
+        result = library.resolve_kicad_var("KICAD10_3DMODEL_DIR")
+        assert result == str(data / "3dmodels")
+
+
+# ===================================================================
+# _find_kicad_data_dir
+# ===================================================================
+
+
+class TestFindKicadDataDir:
+    """Tests for _find_kicad_data_dir."""
+
+    def test_macos_finds_versioned_dir(self, monkeypatch):
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.sys.platform", "darwin")
+        expected = "/Applications/KiCad 10/KiCad.app/Contents/SharedSupport"
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.library.os.listdir",
+            lambda p: ["KiCad 10"] if p == "/Applications" else [],
+        )
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.library.os.path.isdir",
+            lambda p: p == expected,
+        )
+        result = library._find_kicad_data_dir(10)
+        assert result == expected
+
+    def test_macos_plain_kicad_dir(self, tmp_path, monkeypatch):
+        """Plain 'KiCad' dir (no version number) should match any major."""
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.sys.platform", "darwin")
+        shared = "/Applications/KiCad/KiCad.app/Contents/SharedSupport"
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.library.os.listdir",
+            lambda p: ["KiCad"] if p == "/Applications" else [],
+        )
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.library.os.path.isdir",
+            lambda p: p == shared,
+        )
+        result = library._find_kicad_data_dir(10)
+        assert result == shared
+
+    def test_macos_wrong_version_skipped(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.sys.platform", "darwin")
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.library.os.listdir",
+            lambda p: ["KiCad 9"] if p == "/Applications" else [],
+        )
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.os.path.isdir", lambda p: True)
+        result = library._find_kicad_data_dir(10)
+        assert result == ""
+
+    def test_windows_scans_versioned_dirs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.sys.platform", "win32")
+        kicad_base = tmp_path / "KiCad"
+        data = kicad_base / "10.0" / "share" / "kicad"
+        data.mkdir(parents=True)
+        monkeypatch.setenv("ProgramFiles", str(tmp_path))
+        result = library._find_kicad_data_dir(10)
+        assert result == str(data)
+
+    def test_windows_ignores_wrong_version(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.sys.platform", "win32")
+        kicad_base = tmp_path / "KiCad"
+        (kicad_base / "9.0" / "share" / "kicad").mkdir(parents=True)
+        monkeypatch.setenv("ProgramFiles", str(tmp_path))
+        result = library._find_kicad_data_dir(10)
+        assert result == ""
+
+    def test_linux_versioned_path(self, monkeypatch):
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.sys.platform", "linux")
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.library.os.path.isdir",
+            lambda p: p == "/usr/share/kicad-10",
+        )
+        result = library._find_kicad_data_dir(10)
+        assert result == "/usr/share/kicad-10"
+
+    def test_returns_empty_when_not_installed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kicad_jlcimport.kicad.library.sys.platform", "darwin")
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.library.os.listdir",
+            lambda p: [] if p == "/Applications" else [],
+        )
+        result = library._find_kicad_data_dir(10)
+        assert result == ""
 
 
 # ===================================================================

@@ -6,7 +6,7 @@ The `tools/compare_part.py` script fetches EasyEDA preview SVGs and renders the 
 
 ### Prerequisites
 
-- KiCad installed at `/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli`
+- `kicad-cli` on `$PATH` (installed with KiCad)
 - Virtual environment activated: `source install.sh`
 
 ### Running

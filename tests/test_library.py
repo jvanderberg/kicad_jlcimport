@@ -288,20 +288,15 @@ class TestFindBestMatchingFootprint:
             ")\n"
         )
 
-        candidate_root = "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints"
-        diode_lib = f"{candidate_root}/Diode_SMD.pretty"
+        fake_data_root = tmp_path / "kicad_data"
+        fp_root = fake_data_root / "footprints"
+        diode_lib = fp_root / "Diode_SMD.pretty"
+        diode_lib.mkdir(parents=True)
+        (diode_lib / "D_SOD-323.kicad_mod").write_text("(footprint)")
 
         monkeypatch.delenv("KICAD9_FOOTPRINT_DIR", raising=False)
         monkeypatch.setattr("kicad_jlcimport.kicad.library.get_global_config_dir", lambda _v=9: str(config_dir))
-        monkeypatch.setattr("kicad_jlcimport.kicad.library.sys.platform", "darwin")
-        monkeypatch.setattr(
-            "kicad_jlcimport.kicad.library.os.path.isdir",
-            lambda p: p in {candidate_root, diode_lib},
-        )
-        monkeypatch.setattr(
-            "kicad_jlcimport.kicad.library.os.listdir",
-            lambda p: ["D_SOD-323.kicad_mod"] if p == diode_lib else [],
-        )
+        monkeypatch.setattr("kicad_jlcimport.kicad.library._find_kicad_data_dir", lambda _major: str(fake_data_root))
 
         match = find_best_matching_footprint("SOD-323", "", kicad_version=9)
         assert match == "Diode_SMD:D_SOD-323"

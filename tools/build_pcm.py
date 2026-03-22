@@ -15,7 +15,6 @@ import hashlib
 import json
 import os
 import shutil
-import sys
 import time
 import zipfile
 from typing import Dict, Iterable, Optional, Tuple
@@ -76,24 +75,17 @@ def _iter_source_files(src_dir: str) -> Iterable[Tuple[str, str]]:
 
 
 def _kicad_3rdparty_plugins() -> str:
-    """Return the KiCad 3rdparty plugins directory for the current platform."""
-    if sys.platform == "darwin":
-        base = os.path.expanduser("~/Documents/KiCad")
-    elif sys.platform == "win32":
-        base = os.path.join(os.environ.get("APPDATA", ""), "kicad")
-    else:
-        base = os.path.expanduser("~/.local/share/kicad")
+    """Return the KiCad 3rdparty plugins directory for the current platform.
 
-    best = "9.0"
-    if os.path.isdir(base):
-        for directory in os.listdir(base):
-            try:
-                if float(directory) > float(best):
-                    best = directory
-            except ValueError:
-                continue
+    Reuses the canonical path discovery from the main package (available when
+    the venv is active).  Only called by ``--install`` / ``--print-install-dir``
+    which are local-dev operations.
+    """
+    from kicad_jlcimport.kicad.library import _detect_kicad_version, _kicad_data_base
 
-    return os.path.join(base, best, "3rdparty", "plugins", "com_github_jvanderberg_kicad-jlcimport")
+    base = _kicad_data_base()
+    ver = _detect_kicad_version()
+    return os.path.join(base, ver, "3rdparty", "plugins", "com_github_jvanderberg_kicad-jlcimport")
 
 
 def _release_metadata(template: Dict, version: str) -> Dict:
@@ -222,7 +214,14 @@ def main() -> None:
     parser.add_argument("--output-dir", default=DIST_DIR, help="Directory for generated assets")
     parser.add_argument("--metadata", default=METADATA_PATH, help="Path to metadata.json template")
     parser.add_argument("--install", action="store_true", help="Install generated ZIP into KiCad's 3rdparty dir")
+    parser.add_argument(
+        "--print-install-dir", action="store_true", help="Print KiCad plugin install directory and exit"
+    )
     args = parser.parse_args()
+
+    if args.print_install_dir:
+        print(_kicad_3rdparty_plugins())
+        return
 
     tag = _normalize_tag(args.tag) if args.tag else None
     template_metadata = _read_metadata(args.metadata)

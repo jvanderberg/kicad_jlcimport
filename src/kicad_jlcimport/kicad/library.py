@@ -208,7 +208,7 @@ def _detect_kicad_version() -> str:
     except OSError:
         pass
 
-    return "9.0"
+    return "10.0"
 
 
 def _kicad_data_base() -> str:
@@ -337,13 +337,75 @@ def _iter_kicad_config_versions() -> list[str]:
     return [d for _, d in dirs]
 
 
-def resolve_kicad_var(key: str) -> str:
+def _find_kicad_data_dir(major: int) -> str:
+    """Find the KiCad data directory for a specific major version.
+
+    Scans standard installation locations on macOS, Windows, and Linux for the
+    KiCad application matching *major* and returns its data root (the directory
+    containing ``footprints/``, ``3dmodels/``, ``symbols/``, etc.).
+
+    Returns ``""`` if not found.
+    """
+    if sys.platform == "darwin":
+        base = "/Applications"
+        try:
+            entries = os.listdir(base)
+        except OSError:
+            entries = []
+        # Reverse-sort so e.g. "KiCad 9.0.7" is tried before "KiCad 9.0.3".
+        for entry in sorted(entries, reverse=True):
+            if not entry.startswith("KiCad"):
+                continue
+            m = re.search(r"(\d+)", entry)
+            # Match versioned dirs ("KiCad 10") and plain "KiCad" (no digits).
+            if m and int(m.group(1)) != major:
+                continue
+            for app in ("KiCad.app", "KiCad Nightly.app"):
+                data = os.path.join(base, entry, app, "Contents", "SharedSupport")
+                if os.path.isdir(data):
+                    return data
+    elif sys.platform == "win32":
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        kicad_base = os.path.join(pf, "KiCad")
+        # Scan for versioned subdirs matching major (e.g. "10.0", "10.1")
+        try:
+            for entry in sorted(os.listdir(kicad_base), reverse=True):
+                try:
+                    if int(float(entry)) == major:
+                        data = os.path.join(kicad_base, entry, "share", "kicad")
+                        if os.path.isdir(data):
+                            return data
+                except ValueError:
+                    continue
+        except OSError:
+            pass
+        # Unversioned fallback: "KiCad\share\kicad"
+        data = os.path.join(kicad_base, "share", "kicad")
+        if os.path.isdir(data):
+            return data
+    else:
+        # Linux: versioned installs, standard paths, and nightly
+        for prefix in (
+            f"/usr/share/kicad-{major}",
+            "/usr/share/kicad",
+            "/usr/share/kicad-nightly",
+            f"/usr/local/share/kicad-{major}",
+            "/usr/local/share/kicad",
+        ):
+            if os.path.isdir(prefix):
+                return prefix
+    return ""
+
+
+def resolve_kicad_var(key: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
     """Resolve a KiCad environment variable (e.g. ``KICAD9_3DMODEL_DIR``).
 
     Checks, in order:
     1. The process environment (``os.environ``).
     2. ``kicad_common.json`` from the newest installed KiCad version.
-    3. Hardcoded platform-specific fallback paths (3D model dirs only).
+    3. The installed KiCad application directory for *kicad_version* (the
+       target version we are running against, which may differ from the
+       version number embedded in the variable name).
 
     Returns the resolved directory path, or ``""`` if not found.
     """
@@ -363,71 +425,26 @@ def resolve_kicad_var(key: str) -> str:
         except (OSError, ValueError, KeyError):
             continue
 
-    # Hardcoded fallbacks for standard KiCad installs
-    if re.match(r"^KICAD\d+_3DMODEL_DIR$", key):
-        candidates: list[str] = []
-        if sys.platform == "darwin":
-            candidates.extend(
-                [
-                    "/Applications/KiCad/KiCad.app/Contents/SharedSupport/3dmodels",
-                    "/Applications/KiCad/KiCad Nightly.app/Contents/SharedSupport/3dmodels",
-                ]
-            )
-        elif sys.platform == "win32":
-            pf = os.environ.get("ProgramFiles", r"C:\Program Files")
-            candidates.extend(
-                [
-                    os.path.join(pf, "KiCad", "share", "kicad", "3dmodels"),
-                    os.path.join(pf, "KiCad", "9.0", "share", "kicad", "3dmodels"),
-                    os.path.join(pf, "KiCad", "8.0", "share", "kicad", "3dmodels"),
-                ]
-            )
-        else:
-            candidates.extend(
-                [
-                    "/usr/share/kicad/3dmodels",
-                    "/usr/share/kicad-nightly/3dmodels",
-                    "/usr/local/share/kicad/3dmodels",
-                ]
-            )
-        for candidate in candidates:
-            if os.path.isdir(candidate):
-                return candidate
-
-    if re.match(r"^KICAD\d+_FOOTPRINT_DIR$", key):
-        candidates = []
-        if sys.platform == "darwin":
-            candidates.extend(
-                [
-                    "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints",
-                    "/Applications/KiCad/KiCad Nightly.app/Contents/SharedSupport/footprints",
-                ]
-            )
-        elif sys.platform == "win32":
-            pf = os.environ.get("ProgramFiles", r"C:\Program Files")
-            candidates.extend(
-                [
-                    os.path.join(pf, "KiCad", "share", "kicad", "footprints"),
-                    os.path.join(pf, "KiCad", "9.0", "share", "kicad", "footprints"),
-                    os.path.join(pf, "KiCad", "8.0", "share", "kicad", "footprints"),
-                ]
-            )
-        else:
-            candidates.extend(
-                [
-                    "/usr/share/kicad/footprints",
-                    "/usr/share/kicad-nightly/footprints",
-                    "/usr/local/share/kicad/footprints",
-                ]
-            )
-        for candidate in candidates:
-            if os.path.isdir(candidate):
-                return candidate
+    # Derive the subdir from the variable name (e.g. KICAD9_FOOTPRINT_DIR)
+    m = re.match(r"^KICAD\d+_(\w+)_DIR$", key)
+    if m:
+        resource = m.group(1).lower()
+        subdir_map = {"footprint": "footprints", "3dmodel": "3dmodels", "symbol": "symbols", "template": "template"}
+        subdir = subdir_map.get(resource, "")
+        if subdir:
+            # Use the target kicad_version, not the version in the variable
+            # name — KiCad 10 may reference KICAD9_FOOTPRINT_DIR but the
+            # actual data lives in KiCad 10's install directory.
+            data_root = _find_kicad_data_dir(kicad_version)
+            if data_root:
+                candidate = os.path.join(data_root, subdir)
+                if os.path.isdir(candidate):
+                    return candidate
 
     return ""
 
 
-def _expand_lib_uri(uri: str, project_dir: str = "") -> str:
+def _expand_lib_uri(uri: str, project_dir: str = "", kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
     """Expand common variables in a lib-table URI."""
 
     def _replace(match) -> str:
@@ -437,7 +454,7 @@ def _expand_lib_uri(uri: str, project_dir: str = "") -> str:
             # downstream "${" guard discards this entry rather than
             # producing a bogus root-relative path like "/JLCImport.pretty".
             return project_dir if project_dir else match.group(0)
-        resolved = resolve_kicad_var(key)
+        resolved = resolve_kicad_var(key, kicad_version)
         if resolved:
             return resolved
         return match.group(0)
@@ -478,7 +495,7 @@ def _iter_footprint_libraries(
         for lib_name, lib_type, uri in _read_fp_lib_entries(table_path):
             if lib_type.lower() != "kicad":
                 continue
-            path = _expand_lib_uri(uri, table_project_dir)
+            path = _expand_lib_uri(uri, table_project_dir, kicad_version)
             if not path or not path.lower().endswith(".pretty") or not os.path.isdir(path):
                 continue
             key = (lib_name, os.path.normpath(path))
