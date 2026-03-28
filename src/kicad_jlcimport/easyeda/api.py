@@ -5,8 +5,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import socket
-import ssl
+import subprocess
 import sys
 import urllib.request
 import warnings
@@ -111,6 +112,8 @@ def _make_ssl_context():
 
     Returns None only if no certificate source is usable.
     """
+    import ssl
+
     # 1. Bundled endpoint-specific CAs — preferred, works in KiCad's Python
     if os.path.isfile(_CACERTS_PEM):
         try:
@@ -145,7 +148,115 @@ def _make_ssl_context():
     return None
 
 
-_SSL_CTX = _make_ssl_context()
+_SSL_CTX = None
+_SSL_CTX_INITIALIZED = False
+_SSL_AVAILABLE = None  # None = not yet checked
+
+
+def _check_ssl_available():
+    """Check whether the ssl module can actually be imported."""
+    global _SSL_AVAILABLE
+    if _SSL_AVAILABLE is None:
+        try:
+            import ssl as _ssl_test  # noqa: F811,F401
+            _SSL_AVAILABLE = True
+        except ImportError:
+            _SSL_AVAILABLE = False
+            logger.debug("ssl module unavailable — will use curl fallback")
+    return _SSL_AVAILABLE
+
+
+def _get_ssl_ctx():
+    global _SSL_CTX, _SSL_CTX_INITIALIZED
+    if not _SSL_CTX_INITIALIZED:
+        if _check_ssl_available():
+            _SSL_CTX = _make_ssl_context()
+        _SSL_CTX_INITIALIZED = True
+    return _SSL_CTX
+
+
+# ---------------------------------------------------------------------------
+# curl subprocess fallback — used when the ssl module cannot be loaded
+# (e.g. OpenSSL version mismatch inside an AppImage).
+# ---------------------------------------------------------------------------
+_CURL_PATH = shutil.which("curl")
+
+
+class _CurlResponse:
+    """Minimal file-like response wrapper around curl output."""
+
+    def __init__(self, data: bytes, status: int = 200, url: str = ""):
+        self._data = data
+        self.status = status
+        self.url = url
+
+    def read(self):
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+
+def _curl_fetch(url: str, headers: dict = None, data: bytes = None,
+                timeout: int = 30, insecure: bool = False) -> _CurlResponse:
+    """Fetch a URL using the system curl binary.
+
+    Raises APIError on failure.
+    """
+    if not _CURL_PATH:
+        raise APIError(
+            "SSL module unavailable and curl not found on this system. "
+            "Cannot make HTTPS requests."
+        )
+    cmd = [_CURL_PATH, "-sS", "--max-time", str(timeout), "-o", "-", "-w", "\n%{http_code}"]
+    if insecure:
+        cmd.append("-k")
+    if headers:
+        for k, v in headers.items():
+            cmd.extend(["-H", f"{k}: {v}"])
+    if data is not None:
+        cmd.extend(["-X", "POST", "--data-binary", "@-"])
+    cmd.append("--")
+    cmd.append(url)
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=data,
+            capture_output=True,
+            timeout=timeout + 5,
+        )
+    except FileNotFoundError:
+        raise APIError("curl binary not found")
+    except subprocess.TimeoutExpired:
+        raise APIError(f"curl timed out fetching {url}")
+
+    # Last line of combined output is the HTTP status code
+    raw = proc.stdout
+    # Find the status code at the very end (after a newline written by -w)
+    last_nl = raw.rfind(b"\n")
+    if last_nl >= 0:
+        status_str = raw[last_nl + 1:].strip()
+        body = raw[:last_nl]
+    else:
+        status_str = b""
+        body = raw
+
+    try:
+        status = int(status_str)
+    except ValueError:
+        status = 0
+
+    if proc.returncode != 0 or status == 0:
+        stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise APIError(f"curl error fetching {url}: {stderr}")
+
+    if status >= 400:
+        raise APIError(f"HTTP {status} fetching {url}")
+
+    return _CurlResponse(body, status=status, url=url)
 
 
 def validate_lcsc_id(lcsc_id: str) -> str:
@@ -215,6 +326,9 @@ def _urlopen(req, timeout=30):
     system store).  Falls back to unverified HTTPS **only** when no CA source
     could be loaded at all, and emits a warning each time this happens.
 
+    When the ssl module is entirely unusable (e.g. OpenSSL version mismatch
+    in an AppImage), falls back to the system curl binary.
+
     When a verified context *is* available but the remote certificate cannot
     be validated, raises ``SSLCertError`` so the UI layer can decide how to
     handle it (e.g. prompt the user or accept ``--insecure``).
@@ -222,12 +336,25 @@ def _urlopen(req, timeout=30):
     If ``allow_unverified_ssl()`` has been called, all requests use an
     unverified context regardless of ``_SSL_CTX``.
     """
+    if not _check_ssl_available():
+        # ssl module broken — use curl fallback
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        headers = dict(getattr(req, "headers", {})) if hasattr(req, "headers") else {}
+        if hasattr(req, "unredirected_hdrs"):
+            headers.update(req.unredirected_hdrs)
+        data = getattr(req, "data", None)
+        return _curl_fetch(url, headers=headers, data=data,
+                           timeout=timeout, insecure=_allow_unverified)
+
+    import ssl
+
     if _allow_unverified:
         return urllib.request.urlopen(req, timeout=timeout, context=ssl._create_unverified_context())
 
-    if _SSL_CTX is not None:
+    ctx = _get_ssl_ctx()
+    if ctx is not None:
         try:
-            return urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX)
+            return urllib.request.urlopen(req, timeout=timeout, context=ctx)
         except urllib.error.URLError as e:
             if isinstance(e.reason, ssl.SSLCertVerificationError):
                 raise SSLCertError(
