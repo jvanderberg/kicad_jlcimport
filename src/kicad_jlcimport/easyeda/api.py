@@ -179,7 +179,15 @@ def _get_ssl_ctx():
 # curl subprocess fallback — used when the ssl module cannot be loaded
 # (e.g. OpenSSL version mismatch inside an AppImage).
 # ---------------------------------------------------------------------------
-_CURL_PATH = shutil.which("curl")
+_CURL_PATH: str | None = None
+
+
+def _get_curl_path() -> str | None:
+    """Lazily resolve and cache the path to the curl binary."""
+    global _CURL_PATH
+    if _CURL_PATH is None:
+        _CURL_PATH = shutil.which("curl") or ""
+    return _CURL_PATH or None
 
 
 class _CurlResponse:
@@ -206,12 +214,16 @@ def _curl_fetch(url: str, headers: dict = None, data: bytes = None,
 
     Raises APIError on failure.
     """
-    if not _CURL_PATH:
+    curl = _get_curl_path()
+    if not curl:
         raise APIError(
             "SSL module unavailable and curl not found on this system. "
             "Cannot make HTTPS requests."
         )
-    cmd = [_CURL_PATH, "-sS", "--max-time", str(timeout), "-o", "-", "-w", "\n%{http_code}"]
+    # Write the HTTP status code to stderr via -w so it never gets
+    # conflated with the response body on stdout.
+    cmd = [curl, "-sS", "-L", "--max-time", str(timeout),
+           "-o", "-", "-w", "%{stderr}%{http_code}"]
     if insecure:
         cmd.append("-k")
     if headers:
@@ -233,24 +245,16 @@ def _curl_fetch(url: str, headers: dict = None, data: bytes = None,
     except subprocess.TimeoutExpired:
         raise APIError(f"curl timed out fetching {url}")
 
-    # Last line of combined output is the HTTP status code
-    raw = proc.stdout
-    # Find the status code at the very end (after a newline written by -w)
-    last_nl = raw.rfind(b"\n")
-    if last_nl >= 0:
-        status_str = raw[last_nl + 1:].strip()
-        body = raw[:last_nl]
-    else:
-        status_str = b""
-        body = raw
+    body = proc.stdout
+    stderr = proc.stderr.decode("utf-8", errors="replace").strip()
 
+    # -w wrote the status code as the last token on stderr
     try:
-        status = int(status_str)
-    except ValueError:
+        status = int(stderr.rsplit(None, 1)[-1]) if stderr else 0
+    except (ValueError, IndexError):
         status = 0
 
     if proc.returncode != 0 or status == 0:
-        stderr = proc.stderr.decode("utf-8", errors="replace").strip()
         raise APIError(f"curl error fetching {url}: {stderr}")
 
     if status >= 400:
@@ -340,6 +344,7 @@ def _urlopen(req, timeout=30):
         # ssl module broken — use curl fallback
         url = req.full_url if hasattr(req, "full_url") else str(req)
         headers = dict(getattr(req, "headers", {})) if hasattr(req, "headers") else {}
+        # Also include unredirected headers (set via add_header / add_unredirected_header)
         if hasattr(req, "unredirected_hdrs"):
             headers.update(req.unredirected_hdrs)
         data = getattr(req, "data", None)
@@ -446,6 +451,8 @@ def search_components(
     try:
         with _urlopen(req, timeout=15) as resp:
             raw = json.loads(resp.read().decode("utf-8"))
+    except APIError:
+        raise  # curl fallback already wraps errors as APIError
     except (urllib.error.HTTPError, urllib.error.URLError) as e:
         raise APIError(f"Search failed: {e}") from e
 
@@ -522,7 +529,7 @@ def fetch_product_image(lcsc_url: str) -> Optional[bytes]:
             return None
         if parsed.scheme not in ("http", "https"):
             return None
-    except Exception:
+    except Exception:  # pragma: no cover — urlparse never raises on malformed input
         return None
 
     req = urllib.request.Request(
@@ -536,7 +543,7 @@ def fetch_product_image(lcsc_url: str) -> Optional[bytes]:
     try:
         with _urlopen(req, timeout=10) as resp:
             html = resp.read().decode("utf-8")
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, APIError):
         return None
 
     # Find product image URL
@@ -545,7 +552,7 @@ def fetch_product_image(lcsc_url: str) -> Optional[bytes]:
         return None
 
     img_url = match.group(0)
-    if not img_url.startswith("https://assets.lcsc.com/"):
+    if not img_url.startswith("https://assets.lcsc.com/"):  # pragma: no cover — the regex above guarantees this prefix
         return None
     req2 = urllib.request.Request(
         img_url,
@@ -559,7 +566,7 @@ def fetch_product_image(lcsc_url: str) -> Optional[bytes]:
     try:
         with _urlopen(req2, timeout=10) as resp:
             return resp.read()
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, APIError):
         return None
 
 
@@ -573,7 +580,7 @@ def download_step(uuid_3d: str) -> Optional[bytes]:
             if data[:2] == b"\x1f\x8b":
                 data = gzip.decompress(data)
             return data
-    except (urllib.error.HTTPError, urllib.error.URLError):
+    except (urllib.error.HTTPError, urllib.error.URLError, APIError):
         return None
 
 
@@ -587,7 +594,7 @@ def download_wrl_source(uuid_3d: str) -> Optional[str]:
             if data[:2] == b"\x1f\x8b":
                 data = gzip.decompress(data)
             return data.decode("utf-8")
-    except (urllib.error.HTTPError, urllib.error.URLError):
+    except (urllib.error.HTTPError, urllib.error.URLError, APIError):
         return None
 
 
