@@ -383,6 +383,8 @@ def _get_json(url: str) -> Any:
     try:
         with _urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+    except APIError:
+        raise  # curl fallback already wraps errors as APIError
     except urllib.error.HTTPError as e:
         raise APIError(f"HTTP {e.code} fetching {url}") from e
     except urllib.error.URLError as e:

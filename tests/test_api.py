@@ -622,6 +622,12 @@ class TestGetJson:
             with pytest.raises(APIError, match="Network error"):
                 api._get_json("https://example.com/api")
 
+    def test_api_error_passthrough(self):
+        """APIError from curl fallback propagates without being re-wrapped."""
+        with mock.patch.object(api, "_urlopen", side_effect=APIError("HTTP 502 fetching url")):
+            with pytest.raises(APIError, match="HTTP 502"):
+                api._get_json("https://example.com/api")
+
 
 class TestFetchComponentUuids:
     def test_success(self):

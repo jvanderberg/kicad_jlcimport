@@ -15,10 +15,11 @@ class TestMakeSslContext:
     """Tests for _make_ssl_context."""
 
     def test_creates_verified_context(self):
-        # The function is called at module import; verify the global is usable
-        assert api._SSL_CTX is not None
-        assert api._SSL_CTX.check_hostname is True
-        assert api._SSL_CTX.verify_mode == ssl.CERT_REQUIRED
+        # SSL context is lazily initialized; trigger it via _get_ssl_ctx()
+        ctx = api._get_ssl_ctx()
+        assert ctx is not None
+        assert ctx.check_hostname is True
+        assert ctx.verify_mode == ssl.CERT_REQUIRED
 
     def test_prefers_bundled_cacerts(self, monkeypatch, tmp_path):
         """When cacerts.pem exists and is valid, it should be used."""
@@ -36,11 +37,30 @@ class TestMakeSslContext:
         assert ctx is not None
         assert ctx.check_hostname is True
 
-    def test_falls_back_to_certifi(self, monkeypatch):
+    def test_falls_back_to_certifi(self, monkeypatch, tmp_path):
         """When no cacerts.pem exists, certifi should be tried."""
+        import os
+
         monkeypatch.setattr(api, "_CACERTS_PEM", "/nonexistent/cacerts.pem")
+
+        # certifi may not be installed; provide a fake module using the project's real CA bundle
+        project_pem = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "src", "kicad_jlcimport", "easyeda", "cacerts.pem"
+        )
+        fake_certifi = MagicMock()
+        fake_certifi.where.return_value = project_pem
+
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "certifi":
+                return fake_certifi
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
         ctx = api._make_ssl_context()
-        # certifi is installed in the test environment, so this should succeed
         assert ctx is not None
         assert ctx.verify_mode == ssl.CERT_REQUIRED
 
@@ -63,6 +83,31 @@ class TestMakeSslContext:
 
         ctx = api._make_ssl_context()
         assert ctx is None
+
+    def test_certifi_load_failure_falls_through(self, monkeypatch, tmp_path):
+        """When certifi is importable but load_verify_locations fails, fall through to system store."""
+        monkeypatch.setattr(api, "_CACERTS_PEM", "/nonexistent/cacerts.pem")
+
+        # Create a file with invalid cert content so load_verify_locations fails
+        bad_pem = tmp_path / "bad_certifi.pem"
+        bad_pem.write_text("this is not a valid certificate")
+
+        fake_certifi = MagicMock()
+        fake_certifi.where.return_value = str(bad_pem)
+
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "certifi":
+                return fake_certifi
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        # System store fallback should still work
+        ctx = api._make_ssl_context()
+        assert ctx is not None
 
 
 class TestUrlopen:
