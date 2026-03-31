@@ -12,6 +12,7 @@ from kicad_jlcimport.easyeda.api import (
     filter_by_min_stock,
     filter_by_type,
     search_components,
+    search_components_cn,
     validate_lcsc_id,
 )
 from kicad_jlcimport.importer import import_component
@@ -27,8 +28,10 @@ def cmd_search(args):
     elif args.type == "extended":
         type_filter = "Extended"
 
+    region = getattr(args, "region", "global")
+    search_fn = search_components_cn if region == "cn" else search_components
     try:
-        result = search_components(args.keyword, page_size=args.count)
+        result = search_fn(args.keyword, page_size=args.count)
     except SSLCertError as e:
         print(f"  Error: {e}")
         print("  Use --insecure to bypass certificate verification.")
@@ -237,6 +240,12 @@ examples:
         "--min-stock", type=int, default=1, metavar="N", help="Minimum stock count filter (default: 1, use 0 for any)"
     )
     sp.add_argument("--csv", action="store_true", help="Output results as CSV")
+    sp.add_argument(
+        "--region",
+        choices=["global", "cn"],
+        default=load_config().get("region", "global"),
+        help="Search region: 'global' for international JLCPCB, 'cn' for Chinese SZLCSC (default: from config)",
+    )
     sp.set_defaults(func=cmd_search)
 
     # Import subcommand

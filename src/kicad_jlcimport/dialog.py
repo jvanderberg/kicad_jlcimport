@@ -22,6 +22,7 @@ from .easyeda.api import (
     filter_by_min_stock,
     filter_by_type,
     search_components,
+    search_components_cn,
 )
 from .gui.symbol_renderer import has_svg_support, render_svg_bitmap
 from .importer import import_component
@@ -1565,13 +1566,23 @@ class JLCImportDialog(wx.Dialog):
         # Search input row
         hbox_search = wx.BoxSizer(wx.HORIZONTAL)
         self.search_input = wx.TextCtrl(panel, style=wx.TE_PROCESS_ENTER)
-        self.search_input.SetHint("Search JLCPCB parts...")
+        _init_region = load_config().get("region", "global")
+        self.search_input.SetHint("Search SZLCSC parts..." if _init_region == "cn" else "Search JLCPCB parts...")
         self.search_input.Bind(wx.EVT_TEXT_ENTER, self._on_search)
         self.search_input.Bind(wx.EVT_TEXT, self._on_search_text_changed)
         hbox_search.Add(self.search_input, 1, wx.EXPAND | wx.RIGHT, 5)
         self.search_btn = wx.Button(panel, label="Search")
         self.search_btn.Bind(wx.EVT_BUTTON, self._on_search)
-        hbox_search.Add(self.search_btn, 0)
+        hbox_search.Add(self.search_btn, 0, wx.RIGHT, 10)
+        self._region_choices = ["Global (JLCPCB)", "China (SZLCSC)"]
+        self._region_values = ["global", "cn"]
+        self.region_choice = wx.Choice(panel, choices=self._region_choices)
+        saved_region = load_config().get("region", "global")
+        sel = self._region_values.index(saved_region) if saved_region in self._region_values else 0
+        self.region_choice.SetSelection(sel)
+        self.region_choice.Bind(wx.EVT_CHOICE, self._on_region_change)
+        hbox_search.Add(wx.StaticText(panel, label="Region:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        hbox_search.Add(self.region_choice, 0, wx.ALIGN_CENTER_VERTICAL)
         search_box.Add(hbox_search, 0, wx.EXPAND | wx.ALL, 5)
 
         # Filter row
@@ -2038,14 +2049,20 @@ class JLCImportDialog(wx.Dialog):
         self.search_btn.SetLabel("Search")
         self.search_btn.Enable()
 
+    def _get_search_fn(self):
+        """Return the search function for the currently selected region."""
+        idx = self.region_choice.GetSelection()
+        return search_components_cn if self._region_values[idx] == "cn" else search_components
+
     def _fetch_search_results(self, keyword, request_id):
         """Background thread: fetch search results from API."""
         try:
+            search_fn = self._get_search_fn()
             try:
-                result = search_components(keyword, page_size=500)
+                result = search_fn(keyword, page_size=500)
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                result = search_components(keyword, page_size=500)
+                result = search_fn(keyword, page_size=500)
             if not self._closing:
                 wx.CallAfter(self._on_search_complete, result, request_id)
         except APIError as e:
@@ -2191,6 +2208,16 @@ class JLCImportDialog(wx.Dialog):
 
     _on_min_stock_change = _on_filter_change
     _on_type_change = _on_filter_change
+
+    def _on_region_change(self, event):
+        """Persist region choice when user changes it."""
+        idx = self.region_choice.GetSelection()
+        region = self._region_values[idx]
+        cfg = load_config()
+        cfg["region"] = region
+        save_config(cfg)
+        hint = "Search SZLCSC parts..." if region == "cn" else "Search JLCPCB parts..."
+        self.search_input.SetHint(hint)
 
     def _on_dest_change(self, event):
         """Persist destination choice and refresh checkmarks."""

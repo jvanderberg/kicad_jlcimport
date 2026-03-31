@@ -283,6 +283,140 @@ class TestSearchComponents:
             assert result["results"] == []
 
 
+class TestSearchComponentsCn:
+    """Tests for search_components_cn function (Chinese SZLCSC API)."""
+
+    def test_search_cn_success(self):
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps(
+            {
+                "result": {
+                    "searchResult": {
+                        "totalCount": 1,
+                        "productRecordList": [
+                            {
+                                "productVO": {
+                                    "productId": "12345",
+                                    "productCode": "C123",
+                                    "productName": "电阻",
+                                    "productModel": "100K",
+                                    "productGradePlateName": "ACME",
+                                    "encapsulationModel": "0402",
+                                    "productType": "电阻",
+                                    "stockNumber": 1000,
+                                    "smtType": "SMT基础库",
+                                    "productPriceList": [{"productPrice": 0.01}],
+                                }
+                            }
+                        ],
+                    }
+                }
+            }
+        ).encode()
+
+        with patch.object(api, "_urlopen", return_value=mock_response):
+            result = api.search_components_cn("resistor", page=1, page_size=30)
+            assert result["total"] == 1
+            assert len(result["results"]) == 1
+            r = result["results"][0]
+            assert r["lcsc"] == "C123"
+            assert r["type"] == "Basic"
+            assert r["price"] == 0.01
+            assert r["url"] == "https://item.szlcsc.com/12345.html"
+            assert r["brand"] == "ACME"
+
+    def test_search_cn_extended_type(self):
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps(
+            {
+                "result": {
+                    "searchResult": {
+                        "totalCount": 1,
+                        "productRecordList": [
+                            {
+                                "productVO": {
+                                    "productCode": "C456",
+                                    "productName": "电容",
+                                    "productModel": "100uF",
+                                    "productGradePlateName": "ACME",
+                                    "encapsulationModel": "0805",
+                                    "productType": "电容",
+                                    "stockNumber": 500,
+                                    "smtType": "SMT扩展库",
+                                    "productPriceList": [],
+                                }
+                            }
+                        ],
+                    }
+                }
+            }
+        ).encode()
+
+        with patch.object(api, "_urlopen", return_value=mock_response):
+            result = api.search_components_cn("capacitor")
+            assert result["results"][0]["type"] == "Extended"
+            assert result["results"][0]["price"] is None
+
+    def test_search_cn_error(self):
+        def raise_error(*args, **kwargs):
+            raise urllib.error.HTTPError("url", 500, "Server Error", {}, None)
+
+        with patch.object(api, "_urlopen", raise_error):
+            with pytest.raises(APIError, match="Search failed"):
+                api.search_components_cn("test")
+
+    def test_search_cn_empty_result(self):
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps({"result": {}}).encode()
+
+        with patch.object(api, "_urlopen", return_value=mock_response):
+            result = api.search_components_cn("nonexistent")
+            assert result["total"] == 0
+            assert result["results"] == []
+
+    def test_search_cn_pagination(self):
+        """When page_size > 30, multiple API calls are made."""
+        call_count = 0
+
+        def mock_urlopen(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            resp = MagicMock()
+            resp.__enter__ = MagicMock(return_value=resp)
+            resp.__exit__ = MagicMock(return_value=False)
+            items = [
+                {
+                    "productVO": {
+                        "productCode": f"C{call_count}{i}",
+                        "productName": f"Part {i}",
+                        "productModel": f"Model{i}",
+                        "productGradePlateName": "",
+                        "encapsulationModel": "",
+                        "productType": "",
+                        "stockNumber": 100,
+                        "smtType": "",
+                        "productPriceList": [],
+                    }
+                }
+                for i in range(30)
+            ]
+            resp.read.return_value = json.dumps(
+                {"result": {"searchResult": {"totalCount": 60, "productRecordList": items}}}
+            ).encode()
+            return resp
+
+        with patch.object(api, "_urlopen", mock_urlopen):
+            result = api.search_components_cn("test", page_size=50)
+            assert call_count == 2  # ceil(50/30) = 2
+            assert len(result["results"]) == 50
+
+
 class TestDownloadStep:
     """Tests for download_step function."""
 

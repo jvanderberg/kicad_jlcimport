@@ -38,6 +38,7 @@ from kicad_jlcimport.easyeda.api import (
     filter_by_min_stock,
     filter_by_type,
     search_components,
+    search_components_cn,
 )
 from kicad_jlcimport.importer import import_component
 from kicad_jlcimport.kicad.library import (
@@ -341,6 +342,7 @@ class JLCImportTUI(App):
     }
     #search-input { width: 1fr; }
     #search-btn { margin-left: 1; }
+    #region-select { width: 14; margin-left: 1; }
     #category-suggestions {
         display: none;
         layer: overlay;
@@ -494,6 +496,7 @@ class JLCImportTUI(App):
         self._selected_result: dict | None = None
         self._toggling_dest: bool = False
         self._col_names = ["LCSC", "Type", "Price", "Stock", "Part", "Package", "Description"]
+        self._region = _config.get("region", "global")
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -501,10 +504,16 @@ class JLCImportTUI(App):
             with Vertical(id="search-section"):
                 with Horizontal(id="search-row"):
                     yield Input(
-                        placeholder="Search JLCPCB parts...",
+                        placeholder="Search SZLCSC parts..." if self._region == "cn" else "Search JLCPCB parts...",
                         id="search-input",
                     )
                     yield Button("Search", id="search-btn", variant="primary")
+                    yield Select(
+                        [("Global", "global"), ("China", "cn")],
+                        value=self._region,
+                        id="region-select",
+                        allow_blank=False,
+                    )
                 with Horizontal(id="filter-row"):
                     with RadioSet(id="type-filter"):
                         yield RadioButton("Both", value=True, id="type-both")
@@ -888,12 +897,13 @@ class JLCImportTUI(App):
         self.app.call_from_thread(self._log, f'Searching for "{keyword}"...')
         self.app.call_from_thread(self._start_search_pulse)
 
+        search_fn = search_components_cn if self._region == "cn" else search_components
         try:
             try:
-                result = search_components(keyword, page_size=500)
+                result = search_fn(keyword, page_size=500)
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                result = search_components(keyword, page_size=500)
+                result = search_fn(keyword, page_size=500)
 
             results = result["results"]
 
@@ -962,6 +972,14 @@ class JLCImportTUI(App):
 
     def on_select_changed(self, event: Select.Changed):
         """Re-filter when min-stock or package selection changes, update path on version change."""
+        if event.select.id == "region-select":
+            self._region = event.value
+            cfg = load_config()
+            cfg["region"] = self._region
+            save_config(cfg)
+            placeholder = "Search SZLCSC parts..." if self._region == "cn" else "Search JLCPCB parts..."
+            self.query_one("#search-input", Input).placeholder = placeholder
+            return
         if event.select.id in ("min-stock-select", "package-select"):
             if self._raw_search_results:
                 self._apply_filters()
