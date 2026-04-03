@@ -83,7 +83,7 @@ def cmd_search(args):
     print(f"  {'─' * 3} {'─' * 12} {'─' * 8} {'─' * 7} {'─' * 8}  {'─' * 30}")
 
     for i, r in enumerate(results, 1):
-        price_str = f"${r['price']:.4f}" if r["price"] else "  N/A  "
+        price_str = f"{r.get('currency', '$')}{r['price']:.4f}" if r["price"] else "  N/A  "
         stock_str = f"{r['stock']:>8,}" if r["stock"] else "     N/A"
         print(f"  {i:<3} {r['lcsc']:<12} {r['type']:<8} {price_str:>7} {stock_str}  {r['model']}")
         print(f"      {r['description']}")

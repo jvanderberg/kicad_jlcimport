@@ -2020,11 +2020,12 @@ class JLCImportDialog(wx.Dialog):
 
         self._search_request_id += 1
         request_id = self._search_request_id
+        search_fn = self._get_search_fn()
         self._start_search_pulse()
         self._search_overlay.show()
         threading.Thread(
             target=self._fetch_search_results,
-            args=(keyword, request_id),
+            args=(keyword, request_id, search_fn),
             daemon=True,
         ).start()
 
@@ -2054,10 +2055,9 @@ class JLCImportDialog(wx.Dialog):
         idx = self.region_choice.GetSelection()
         return search_components_cn if self._region_values[idx] == "cn" else search_components
 
-    def _fetch_search_results(self, keyword, request_id):
+    def _fetch_search_results(self, keyword, request_id, search_fn):
         """Background thread: fetch search results from API."""
         try:
-            search_fn = self._get_search_fn()
             try:
                 result = search_fn(keyword, page_size=500)
             except SSLCertError:
@@ -2238,7 +2238,7 @@ class JLCImportDialog(wx.Dialog):
             prefix = "\u2713 " if lcsc in self._imported_ids else ""
             self.results_list.InsertItem(i, prefix + lcsc)
             self.results_list.SetItem(i, 1, r["type"])
-            price_str = f"${r['price']:.4f}" if r["price"] else "N/A"
+            price_str = f"{r.get('currency', '$')}{r['price']:.4f}" if r["price"] else "N/A"
             self.results_list.SetItem(i, 2, price_str)
             stock_str = f"{r['stock']:,}" if r["stock"] else "N/A"
             self.results_list.SetItem(i, 3, stock_str)
@@ -2311,7 +2311,7 @@ class JLCImportDialog(wx.Dialog):
         self.detail_part.SetValue(r["model"])
         self.detail_brand.SetValue(r["brand"])
         self.detail_package.SetValue(r["package"])
-        price_str = f"${r['price']:.4f}" if r["price"] else "N/A"
+        price_str = f"{r.get('currency', '$')}{r['price']:.4f}" if r["price"] else "N/A"
         self.detail_price.SetValue(price_str)
         stock_str = f"{r['stock']:,}" if r["stock"] else "N/A"
         self.detail_stock.SetValue(stock_str)
@@ -2322,17 +2322,19 @@ class JLCImportDialog(wx.Dialog):
 
         self._lcsc_page_url = r.get("url", "")
         self.detail_lcsc_btn.Enable(bool(self._lcsc_page_url))
+        self.detail_lcsc_btn.SetLabel("SZLCSC Page" if "szlcsc.com" in self._lcsc_page_url else "LCSC Page")
 
         self.detail_import_btn.Enable()
 
         # Fetch image in background
         lcsc_url = r.get("url", "")
+        image_url = r.get("image_url", "")
         self._image_request_id += 1
         request_id = self._image_request_id
-        if lcsc_url:
+        if lcsc_url or image_url:
             if self._detail_page == 0:
                 self._show_skeleton()
-            threading.Thread(target=self._fetch_image, args=(lcsc_url, request_id), daemon=True).start()
+            threading.Thread(target=self._fetch_image, args=(lcsc_url, image_url, request_id), daemon=True).start()
         else:
             self._stop_skeleton()
             if self._detail_page == 0:
@@ -2467,7 +2469,7 @@ class JLCImportDialog(wx.Dialog):
         r = self._search_results[idx]
 
         # Update info
-        price_str = f"${r['price']:.4f}" if r["price"] else "N/A"
+        price_str = f"{r.get('currency', '$')}{r['price']:.4f}" if r["price"] else "N/A"
         stock_str = f"{r['stock']:,}" if r["stock"] else "N/A"
         info = (
             f"{r['lcsc']}  |  {r['model']}  |  {r['brand']}  |  {r['package']}  |  {price_str}  |  Stock: {stock_str}"
@@ -2489,10 +2491,13 @@ class JLCImportDialog(wx.Dialog):
 
         # Fetch photo image
         lcsc_url = r.get("url", "")
+        image_url = r.get("image_url", "")
         self._gallery_request_id += 1
         request_id = self._gallery_request_id
-        if lcsc_url:
-            threading.Thread(target=self._fetch_gallery_image, args=(lcsc_url, request_id), daemon=True).start()
+        if lcsc_url or image_url:
+            threading.Thread(
+                target=self._fetch_gallery_image, args=(lcsc_url, image_url, request_id), daemon=True
+            ).start()
         else:
             if self._gallery_page == 0:
                 self._stop_gallery_skeleton()
@@ -2645,14 +2650,14 @@ class JLCImportDialog(wx.Dialog):
         w, h = self.GetClientSize()
         return max(min(w - 100, h - 120), 100)
 
-    def _fetch_gallery_image(self, lcsc_url, request_id):
+    def _fetch_gallery_image(self, lcsc_url, image_url, request_id):
         """Fetch full-size image for gallery."""
         try:
             try:
-                img_data = fetch_product_image(lcsc_url)
+                img_data = fetch_product_image(lcsc_url, direct_image_url=image_url)
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                img_data = fetch_product_image(lcsc_url)
+                img_data = fetch_product_image(lcsc_url, direct_image_url=image_url)
         except Exception:
             img_data = None
         if not self._closing and self._gallery_request_id == request_id:
@@ -2733,14 +2738,14 @@ class JLCImportDialog(wx.Dialog):
         if self._lcsc_page_url:
             webbrowser.open(self._lcsc_page_url)
 
-    def _fetch_image(self, lcsc_url, request_id):
+    def _fetch_image(self, lcsc_url, image_url, request_id):
         """Fetch product image in background thread."""
         try:
             try:
-                img_data = fetch_product_image(lcsc_url)
+                img_data = fetch_product_image(lcsc_url, direct_image_url=image_url)
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                img_data = fetch_product_image(lcsc_url)
+                img_data = fetch_product_image(lcsc_url, direct_image_url=image_url)
         except Exception:
             img_data = None
         if not self._closing and self._image_request_id == request_id:

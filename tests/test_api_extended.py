@@ -1,5 +1,6 @@
 """Extended tests for api.py to improve coverage."""
 
+import gzip
 import json
 import ssl
 import urllib.error
@@ -306,8 +307,20 @@ class TestSearchComponentsCn:
                                     "encapsulationModel": "0402",
                                     "productType": "电阻",
                                     "stockNumber": 1000,
-                                    "smtType": "SMT基础库",
+                                    "smtLabel": "SMT基础库",
                                     "productPriceList": [{"productPrice": 0.01}],
+                                    "bigImageUrl": "https://alimg.szlcsc.com/upload/public/product/source/123.jpg",
+                                    "fileTypeVOList": [
+                                        {
+                                            "fileType": "pdf_property",
+                                            "detailVOList": [
+                                                {
+                                                    "fileName": "datasheet",
+                                                    "fileUrl": "/upload/public/pdf/source/20160218/1457707763339.pdf",
+                                                }
+                                            ],
+                                        }
+                                    ],
                                 }
                             }
                         ],
@@ -326,6 +339,8 @@ class TestSearchComponentsCn:
             assert r["price"] == 0.01
             assert r["url"] == "https://item.szlcsc.com/12345.html"
             assert r["brand"] == "ACME"
+            assert r["datasheet"] == "https://atta.szlcsc.com/upload/public/pdf/source/20160218/1457707763339.pdf"
+            assert r["image_url"] == "https://alimg.szlcsc.com/upload/public/product/source/123.jpg"
 
     def test_search_cn_extended_type(self):
         mock_response = MagicMock()
@@ -346,7 +361,7 @@ class TestSearchComponentsCn:
                                     "encapsulationModel": "0805",
                                     "productType": "电容",
                                     "stockNumber": 500,
-                                    "smtType": "SMT扩展库",
+                                    "smtLabel": "SMT扩展库",
                                     "productPriceList": [],
                                 }
                             }
@@ -360,6 +375,8 @@ class TestSearchComponentsCn:
             result = api.search_components_cn("capacitor")
             assert result["results"][0]["type"] == "Extended"
             assert result["results"][0]["price"] is None
+            assert result["results"][0]["datasheet"] == ""
+            assert result["results"][0]["image_url"] == ""
 
     def test_search_cn_error(self):
         def raise_error(*args, **kwargs):
@@ -400,7 +417,7 @@ class TestSearchComponentsCn:
                         "encapsulationModel": "",
                         "productType": "",
                         "stockNumber": 100,
-                        "smtType": "",
+                        "smtLabel": "",
                         "productPriceList": [],
                     }
                 }
@@ -415,6 +432,44 @@ class TestSearchComponentsCn:
             result = api.search_components_cn("test", page_size=50)
             assert call_count == 2  # ceil(50/30) = 2
             assert len(result["results"]) == 50
+
+    def test_search_cn_gzip_response(self):
+        """CN API may return gzip-compressed responses."""
+        payload = json.dumps(
+            {
+                "result": {
+                    "searchResult": {
+                        "totalCount": 1,
+                        "productRecordList": [
+                            {
+                                "productVO": {
+                                    "productCode": "C789",
+                                    "productName": "电感",
+                                    "productModel": "10uH",
+                                    "productGradePlateName": "",
+                                    "encapsulationModel": "0603",
+                                    "productType": "电感",
+                                    "stockNumber": 200,
+                                    "smtLabel": "SMT基础库",
+                                    "productPriceList": [{"productPrice": 0.05}],
+                                }
+                            }
+                        ],
+                    }
+                }
+            }
+        ).encode()
+
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = gzip.compress(payload)
+
+        with patch.object(api, "_urlopen", return_value=mock_response):
+            result = api.search_components_cn("inductor", page_size=10)
+            assert result["total"] == 1
+            assert result["results"][0]["lcsc"] == "C789"
+            assert result["results"][0]["type"] == "Basic"
 
 
 class TestDownloadStep:
@@ -629,6 +684,36 @@ class TestFetchProductImageExtended:
 
         with patch.object(api, "_urlopen", mock_urlopen):
             result = api.fetch_product_image("https://jlcpcb.com/product/C123")
+            assert result is None
+
+    def test_direct_image_url_success(self):
+        """direct_image_url fetches the image directly, skipping HTML scraping."""
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = b"\xff\xd8\xff\xe0JFIF"
+
+        with patch.object(api, "_urlopen", return_value=mock_response):
+            result = api.fetch_product_image(
+                "", direct_image_url="https://alimg.szlcsc.com/upload/public/product/source/123.jpg"
+            )
+            assert result == b"\xff\xd8\xff\xe0JFIF"
+
+    def test_direct_image_url_rejects_bad_host(self):
+        """direct_image_url rejects URLs from unknown hosts."""
+        result = api.fetch_product_image("", direct_image_url="https://evil.com/image.jpg")
+        assert result is None
+
+    def test_direct_image_url_network_error(self):
+        """direct_image_url returns None on network errors."""
+
+        def raise_error(*args, **kwargs):
+            raise OSError("Network unreachable")
+
+        with patch.object(api, "_urlopen", raise_error):
+            result = api.fetch_product_image(
+                "", direct_image_url="https://alimg.szlcsc.com/upload/public/product/source/123.jpg"
+            )
             assert result is None
 
 

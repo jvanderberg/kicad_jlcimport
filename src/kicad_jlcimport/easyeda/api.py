@@ -353,11 +353,24 @@ def search_components(
 
 
 SZLCSC_SEARCH_API = "https://so.szlcsc.com/query/product"
+SZLCSC_ATTA_BASE = "https://atta.szlcsc.com"
 
 _SMT_LABEL_MAP = {
     "SMT基础库": "Basic",
     "SMT扩展库": "Extended",
 }
+
+
+def _extract_cn_datasheet(pv: dict) -> str:
+    """Extract datasheet PDF URL from SZLCSC fileTypeVOList."""
+    for ft in pv.get("fileTypeVOList") or []:
+        if ft.get("fileType") == "pdf_property":
+            details = ft.get("detailVOList") or []
+            if details:
+                rel = details[0].get("fileUrl", "")
+                if rel and rel.startswith("/"):
+                    return f"{SZLCSC_ATTA_BASE}{rel}"
+    return ""
 
 
 def search_components_cn(keyword: str, page: int = 1, page_size: int = 50) -> Dict[str, Any]:
@@ -374,7 +387,10 @@ def search_components_cn(keyword: str, page: int = 1, page_size: int = 50) -> Di
     Returns dict with 'total' and 'results' list (same schema as
     :func:`search_components`).
     """
-    max_apipage = 30  # CN API caps each request at 30 items
+    # CN API returns max 30 items per request; cap total to avoid excessive
+    # sequential calls (e.g. page_size=500 would need 17 round-trips).
+    page_size = min(page_size, 100)
+    max_apipage = 30
     pages_needed = math.ceil(page_size / max_apipage)
     start_page = (page - 1) * pages_needed + 1
 
@@ -428,7 +444,7 @@ def search_components_cn(keyword: str, page: int = 1, page_size: int = 50) -> Di
         unit_price = price_list[0].get("productPrice") if price_list else None
 
         # Map Chinese SMT labels to Basic/Extended
-        smt_label = pv.get("smtType", "")
+        smt_label = pv.get("smtLabel", "")
         part_type = _SMT_LABEL_MAP.get(smt_label, "Extended")
 
         product_id = pv.get("productId", "")
@@ -443,9 +459,11 @@ def search_components_cn(keyword: str, page: int = 1, page_size: int = 50) -> Di
                 "stock": pv.get("stockNumber", 0),
                 "type": part_type,
                 "price": unit_price,
+                "currency": "¥",
                 "description": pv.get("productName", ""),
                 "url": f"https://item.szlcsc.com/{product_id}.html" if product_id else "",
-                "datasheet": "",
+                "datasheet": _extract_cn_datasheet(pv),
+                "image_url": pv.get("bigImageUrl", ""),
             }
         )
 
@@ -485,15 +503,22 @@ _ALLOWED_IMAGE_HOSTS = (
     "www.jlcpcb.com",
     "lcsc.com",
     "www.lcsc.com",
-    "szlcsc.com",
-    "www.szlcsc.com",
-    "item.szlcsc.com",
-    "alimg.szlcsc.com",
 )
 
+_ALLOWED_DIRECT_IMAGE_HOSTS = ("alimg.szlcsc.com",)
 
-def fetch_product_image(lcsc_url: str) -> Optional[bytes]:
-    """Fetch product image from LCSC/JLCPCB product page. Returns JPEG bytes or None."""
+
+def fetch_product_image(lcsc_url: str, direct_image_url: str = "") -> Optional[bytes]:
+    """Fetch product image. Returns image bytes or None.
+
+    If *direct_image_url* is provided (e.g. from the CN search API's
+    ``bigImageUrl``), it is fetched directly — no HTML scraping needed.
+    Otherwise, *lcsc_url* is loaded as an HTML page and scraped for an
+    ``assets.lcsc.com`` image URL (the international path).
+    """
+    if direct_image_url:
+        return _fetch_direct_image(direct_image_url)
+
     if not lcsc_url:
         return None
     # SSRF protection: only allow fetching from known LCSC/JLCPCB domains
@@ -522,16 +547,13 @@ def fetch_product_image(lcsc_url: str) -> Optional[bytes]:
     except (urllib.error.HTTPError, urllib.error.URLError, OSError):
         return None
 
-    # Find product image URL (international or Chinese CDN)
-    match = re.search(
-        r'https://(?:assets\.lcsc\.com/images/lcsc/900x900|alimg\.szlcsc\.com/upload/public/product/(?:source|breviary))/[^\s"<>]+(?:\.jpg|\.png)',
-        html,
-    )
+    # Find product image URL on international LCSC CDN
+    match = re.search(r'https://assets\.lcsc\.com/images/lcsc/900x900/[^\s"<>]+', html)
     if not match:
         return None
 
     img_url = match.group(0)
-    if not img_url.startswith(("https://assets.lcsc.com/", "https://alimg.szlcsc.com/")):
+    if not img_url.startswith("https://assets.lcsc.com/"):
         return None
     req2 = urllib.request.Request(
         img_url,
@@ -544,6 +566,34 @@ def fetch_product_image(lcsc_url: str) -> Optional[bytes]:
     )
     try:
         with _urlopen(req2, timeout=10) as resp:
+            return resp.read()
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+        return None
+
+
+def _fetch_direct_image(image_url: str) -> Optional[bytes]:
+    """Fetch an image directly from a CDN URL (e.g. alimg.szlcsc.com)."""
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(image_url)
+        if parsed.hostname not in _ALLOWED_DIRECT_IMAGE_HOSTS:
+            return None
+        if parsed.scheme not in ("http", "https"):
+            return None
+    except Exception:
+        return None
+
+    req = urllib.request.Request(
+        image_url,
+        headers={
+            "User-Agent": _UA,
+            "Accept": "image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+    try:
+        with _urlopen(req, timeout=10) as resp:
             return resp.read()
     except (urllib.error.HTTPError, urllib.error.URLError, OSError):
         return None

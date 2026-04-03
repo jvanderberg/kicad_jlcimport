@@ -654,6 +654,7 @@ class TestMain:
         monkeypatch.setattr("kicad_jlcimport.kicad.library.save_config", lambda _: None)
         mock_results = {"total": 0, "results": []}
         monkeypatch.setattr(cli, "search_components", lambda *a, **k: mock_results)
+        monkeypatch.setattr(cli, "search_components_cn", lambda *a, **k: mock_results)
         monkeypatch.setattr(sys, "argv", ["jlcimport", "search", "test"])
         cli.main()
         out = capsys.readouterr().out
