@@ -1573,7 +1573,7 @@ class JLCImportDialog(wx.Dialog):
         hbox_search.Add(self.search_input, 1, wx.EXPAND | wx.RIGHT, 5)
         self.search_btn = wx.Button(panel, label="Search")
         self.search_btn.Bind(wx.EVT_BUTTON, self._on_search)
-        hbox_search.Add(self.search_btn, 0, wx.RIGHT, 10)
+        hbox_search.Add(self.search_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
         self._region_choices = ["Global (JLCPCB)", "China (SZLCSC)"]
         self._region_values = ["global", "cn"]
         self.region_choice = wx.Choice(panel, choices=self._region_choices)
@@ -1581,7 +1581,7 @@ class JLCImportDialog(wx.Dialog):
         sel = self._region_values.index(saved_region) if saved_region in self._region_values else 0
         self.region_choice.SetSelection(sel)
         self.region_choice.Bind(wx.EVT_CHOICE, self._on_region_change)
-        hbox_search.Add(wx.StaticText(panel, label="Region:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        hbox_search.Add(wx.StaticText(panel, label="Region"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         hbox_search.Add(self.region_choice, 0, wx.ALIGN_CENTER_VERTICAL)
         search_box.Add(hbox_search, 0, wx.EXPAND | wx.ALL, 5)
 
@@ -1610,7 +1610,7 @@ class JLCImportDialog(wx.Dialog):
         self.package_choice.SetSelection(0)
         self.package_choice.Bind(wx.EVT_CHOICE, self._on_filter_change)
         hbox_filter.Add(self.package_choice, 0, wx.ALIGN_CENTER_VERTICAL)
-        search_box.Add(hbox_filter, 0, wx.LEFT | wx.RIGHT, 5)
+        search_box.Add(hbox_filter, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         vbox.Add(search_box, 0, wx.EXPAND | wx.ALL, 5)
 
