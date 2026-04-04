@@ -1,5 +1,21 @@
 # Project Notes
 
+## ⚠️ PYTHON 3.9 COMPATIBILITY — MANDATORY ⚠️
+
+**KiCad bundles Python 3.9.** All code in `src/kicad_jlcimport/` MUST be compatible with Python 3.9. This is non-negotiable — violations silently break the plugin inside KiCad with no error shown to the user.
+
+**DO NOT USE:**
+- `str | None`, `int | str` (PEP 604 union syntax — requires 3.10) → use `Optional[str]`, `Union[int, str]`
+- `match`/`case` (structural pattern matching — requires 3.10)
+- `type X = ...` (type aliases — requires 3.12)
+- `ExceptionGroup`, `except*` (requires 3.11)
+- `tomllib` (requires 3.11) → use `tomli` backport
+- `asyncio.TaskGroup` (requires 3.11)
+
+**ALWAYS USE:** `from typing import Optional, Union, List, Dict` instead of built-in generics (`list[str]`, `dict[str, int]` — requires 3.9+ but `Optional`/`Union` require `typing`).
+
+Tests and tools (`tests/`, `tools/`) may use newer syntax since they run in the dev venv, not inside KiCad.
+
 ## DEVELOPMENT ENVIRONMENT
 
 All work must be done inside the project's virtual environment. Activate it before running any commands:
