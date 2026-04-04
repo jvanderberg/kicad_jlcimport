@@ -64,7 +64,7 @@ class TestExtractBlocks:
     """Tests for the _extract_blocks s-expression parser."""
 
     def test_single_block(self):
-        from kicad_jlcimport.dialog import _extract_blocks
+        from kicad_jlcimport.kicad.footprint_parser import _extract_blocks
 
         text = "(fp_line (start 0 0) (end 1 1))"
         result = _extract_blocks(text, "fp_line")
@@ -72,14 +72,14 @@ class TestExtractBlocks:
         assert result[0] == text
 
     def test_multiple_blocks(self):
-        from kicad_jlcimport.dialog import _extract_blocks
+        from kicad_jlcimport.kicad.footprint_parser import _extract_blocks
 
         text = '(pad "1" smd rect) (pad "2" smd rect)'
         result = _extract_blocks(text, "pad")
         assert len(result) == 2
 
     def test_nested_parens(self):
-        from kicad_jlcimport.dialog import _extract_blocks
+        from kicad_jlcimport.kicad.footprint_parser import _extract_blocks
 
         text = '(pad "1" smd custom (primitives (gr_poly (pts (xy 0 0) (xy 1 1)))))'
         result = _extract_blocks(text, "pad")
@@ -87,13 +87,13 @@ class TestExtractBlocks:
         assert result[0] == text
 
     def test_no_match(self):
-        from kicad_jlcimport.dialog import _extract_blocks
+        from kicad_jlcimport.kicad.footprint_parser import _extract_blocks
 
         text = "(fp_line (start 0 0))"
         assert _extract_blocks(text, "fp_rect") == []
 
     def test_keyword_with_regex_chars_is_escaped(self):
-        from kicad_jlcimport.dialog import _extract_blocks
+        from kicad_jlcimport.kicad.footprint_parser import _extract_blocks
 
         # Without re.escape, "fp.line" would match "fp_line" via the dot
         text = "(fp_line (start 0 0))"
@@ -104,7 +104,7 @@ class TestExtractBlocks:
         assert len(_extract_blocks(text2, "fp.line")) == 1
 
     def test_partial_keyword_not_matched(self):
-        from kicad_jlcimport.dialog import _extract_blocks
+        from kicad_jlcimport.kicad.footprint_parser import _extract_blocks
 
         text = "(fp_line_extra (start 0 0))"
         # "fp_line" should NOT match "fp_line_extra" thanks to \b
@@ -120,7 +120,7 @@ class TestParseKicadMod:
     """Tests for the KiCad footprint parser used in the preview."""
 
     def test_basic_footprint(self, tmp_path):
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
         fp_file = tmp_path / "test.kicad_mod"
         fp_file.write_text(
@@ -138,14 +138,14 @@ class TestParseKicadMod:
         assert result["pads_count"] == 1
 
     def test_missing_file_returns_empty(self, tmp_path):
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
         result = _parse_kicad_mod(str(tmp_path / "nonexistent.kicad_mod"))
         assert result["pads_count"] == 0
         assert result["lines"] == []
 
     def test_circle_parsing(self, tmp_path):
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
         fp_file = tmp_path / "circ.kicad_mod"
         fp_file.write_text(
@@ -159,7 +159,7 @@ class TestParseKicadMod:
         assert abs(r - 1.0) < 0.01
 
     def test_rect_parsing(self, tmp_path):
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
         fp_file = tmp_path / "rect.kicad_mod"
         fp_file.write_text(
@@ -172,7 +172,7 @@ class TestParseKicadMod:
         assert result["rects"][0][7] is True  # filled
 
     def test_polygon_parsing(self, tmp_path):
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
         fp_file = tmp_path / "poly.kicad_mod"
         fp_file.write_text(
@@ -187,7 +187,7 @@ class TestParseKicadMod:
         assert filled is True
 
     def test_arc_parsing(self, tmp_path):
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
         fp_file = tmp_path / "arc.kicad_mod"
         fp_file.write_text(
@@ -199,14 +199,14 @@ class TestParseKicadMod:
         assert len(result["arcs"]) == 1
 
     def test_3d_model_with_env_var(self, tmp_path, monkeypatch):
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
         model_dir = tmp_path / "3dmodels"
         model_dir.mkdir()
         (model_dir / "R_0805.wrl").write_text("dummy")
 
         monkeypatch.setattr(
-            "kicad_jlcimport.dialog.resolve_kicad_var",
+            "kicad_jlcimport.kicad.footprint_parser.resolve_kicad_var",
             lambda key, kicad_version=10: str(model_dir) if "3DMODEL" in key else "",
         )
 
@@ -219,9 +219,11 @@ class TestParseKicadMod:
         assert exists is True
 
     def test_3d_model_unresolvable(self, tmp_path, monkeypatch):
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
-        monkeypatch.setattr("kicad_jlcimport.dialog.resolve_kicad_var", lambda key, kicad_version=10: "")
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.footprint_parser.resolve_kicad_var", lambda key, kicad_version=10: ""
+        )
 
         fp_file = tmp_path / "test.kicad_mod"
         fp_file.write_text('(footprint "X"\n  (model "${KICAD9_3DMODEL_DIR}/missing.wrl")\n)\n')
@@ -231,9 +233,11 @@ class TestParseKicadMod:
 
     def test_3d_model_kiprjmod_resolved(self, tmp_path, monkeypatch):
         """KIPRJMOD should be resolved via project_dir parameter."""
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
-        monkeypatch.setattr("kicad_jlcimport.dialog.resolve_kicad_var", lambda key, kicad_version=10: "")
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.footprint_parser.resolve_kicad_var", lambda key, kicad_version=10: ""
+        )
 
         proj_dir = tmp_path / "project"
         proj_dir.mkdir()
@@ -248,9 +252,11 @@ class TestParseKicadMod:
 
     def test_3d_model_kiprjmod_without_project_dir(self, tmp_path, monkeypatch):
         """Without project_dir, KIPRJMOD stays unresolved."""
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
-        monkeypatch.setattr("kicad_jlcimport.dialog.resolve_kicad_var", lambda key, kicad_version=10: "")
+        monkeypatch.setattr(
+            "kicad_jlcimport.kicad.footprint_parser.resolve_kicad_var", lambda key, kicad_version=10: ""
+        )
 
         fp_file = tmp_path / "test.kicad_mod"
         fp_file.write_text('(footprint "X"\n  (model "${KIPRJMOD}/model.wrl")\n)\n')
@@ -259,7 +265,7 @@ class TestParseKicadMod:
         assert exists is False
 
     def test_custom_pad_with_primitives(self, tmp_path):
-        from kicad_jlcimport.dialog import _parse_kicad_mod
+        from kicad_jlcimport.kicad.footprint_parser import _parse_kicad_mod
 
         fp_file = tmp_path / "custom.kicad_mod"
         fp_file.write_text(

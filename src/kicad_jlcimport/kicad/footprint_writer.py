@@ -115,15 +115,24 @@ def write_footprint(
             f' (layer "{arc.layer}") (uuid "{_uuid()}"))'
         )
 
-    # Solid regions (e.g., pin 1 indicators)
+    # Solid regions (e.g., pin 1 indicators, courtyard outlines)
     for region in footprint.regions:
         pts_str = " ".join(f"(xy {_fmt(x)} {_fmt(y)})" for x, y in region.points)
-        lines.append(
-            f"  (fp_poly (pts {pts_str})"
-            f" (stroke (width 0) (type solid))"
-            f" (fill solid)"
-            f' (layer "{region.layer}") (uuid "{_uuid()}"))'
-        )
+        if region.layer in ("F.CrtYd", "B.CrtYd"):
+            # Courtyard must be an unfilled outline, not a filled polygon
+            lines.append(
+                f"  (fp_poly (pts {pts_str})"
+                f" (stroke (width 0.05) (type solid))"
+                f" (fill none)"
+                f' (layer "{region.layer}") (uuid "{_uuid()}"))'
+            )
+        else:
+            lines.append(
+                f"  (fp_poly (pts {pts_str})"
+                f" (stroke (width 0) (type solid))"
+                f" (fill solid)"
+                f' (layer "{region.layer}") (uuid "{_uuid()}"))'
+            )
 
     # Pads
     for pad in footprint.pads:

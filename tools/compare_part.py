@@ -225,7 +225,7 @@ def render_kicad_svgs(kicad_files: dict, tmp_dir: str) -> dict:
             "export",
             "svg",
             "--layers",
-            "F.Mask,F.Cu,F.SilkS,F.Fab",
+            "F.Mask,F.Cu,F.SilkS,F.Fab,Edge.Cuts",
             "--drill-shape-opt",
             "2",
             "--page-size-mode",

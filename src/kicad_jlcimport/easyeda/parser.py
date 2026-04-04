@@ -392,7 +392,8 @@ def _parse_solid_region(parts: List[str]) -> EESolidRegion:
     # Helper: detect SVG arc commands in a path string
     has_arcs = re.search(r"[0-9]A\s*[\d.]", svg_path) or " A " in svg_path
 
-    # Handle npth (edge cuts) and silkscreen solid regions
+    # npth always means a board cutout (non-plated through-hole), regardless of
+    # which EasyEDA layer it was drawn on.
     if region_type == "npth":
         # Use arc-aware parser when path contains arc commands (rounded corners)
         if has_arcs:
