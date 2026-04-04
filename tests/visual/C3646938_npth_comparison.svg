@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400" style="background:#1a1a2e;">
+<text x="200.0" y="25" text-anchor="middle" fill="white" font-family="monospace" font-size="14">C3646938: NPTH Edge.Cuts</text>
+<path d="M 306.7,66.7 L 333.3,306.7 L 93.3,333.3 L 66.7,93.3 Z" fill="rgba(255,68,68,0.15)" stroke="#ff4444" stroke-width="2" stroke-dasharray="6,4"/>
+<path d="M 306.7,66.7 L 311.9,67.2 L 316.9,68.7 L 321.5,71.2 L 325.5,74.5 L 328.8,78.5 L 331.3,83.1 L 332.8,88.1 L 333.3,93.3 L 333.3,306.7 L 332.8,311.9 L 331.3,316.9 L 328.8,321.5 L 325.5,325.5 L 321.5,328.8 L 316.9,331.3 L 311.9,332.8 L 306.7,333.3 L 93.3,333.3 L 88.1,332.8 L 83.1,331.3 L 78.5,328.8 L 74.5,325.5 L 71.2,321.5 L 68.7,316.9 L 67.2,311.9 L 66.7,306.7 L 66.7,93.3 L 67.2,88.1 L 68.7,83.1 L 71.2,78.5 L 74.5,74.5 L 78.5,71.2 L 83.1,68.7 L 88.1,67.2 L 93.3,66.7 Z" fill="rgba(68,255,68,0.1)" stroke="#44ff44" stroke-width="2"/>
+<circle cx="306.7" cy="66.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="311.9" cy="67.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="316.9" cy="68.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="321.5" cy="71.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="325.5" cy="74.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="328.8" cy="78.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="331.3" cy="83.1" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="332.8" cy="88.1" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="333.3" cy="93.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="333.3" cy="306.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="332.8" cy="311.9" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="331.3" cy="316.9" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="328.8" cy="321.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="325.5" cy="325.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="321.5" cy="328.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="316.9" cy="331.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="311.9" cy="332.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="306.7" cy="333.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="93.3" cy="333.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="88.1" cy="332.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="83.1" cy="331.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="78.5" cy="328.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="74.5" cy="325.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="71.2" cy="321.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="68.7" cy="316.9" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="67.2" cy="311.9" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="66.7" cy="306.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="66.7" cy="93.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="67.2" cy="88.1" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="68.7" cy="83.1" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="71.2" cy="78.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="74.5" cy="74.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="78.5" cy="71.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="83.1" cy="68.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="88.1" cy="67.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="93.3" cy="66.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="306.7" cy="66.7" r="4" fill="#ff4444" opacity="0.8"/>
+<circle cx="333.3" cy="306.7" r="4" fill="#ff4444" opacity="0.8"/>
+<circle cx="93.3" cy="333.3" r="4" fill="#ff4444" opacity="0.8"/>
+<circle cx="66.7" cy="93.3" r="4" fill="#ff4444" opacity="0.8"/>
+<line x1="20" y1="360" x2="50" y2="360" stroke="#ff4444" stroke-width="2" stroke-dasharray="6,4"/>
+<text x="55" y="364" fill="#ff4444" font-family="monospace" font-size="11">Before fix (4 pts)</text>
+<line x1="20" y1="378" x2="50" y2="378" stroke="#44ff44" stroke-width="2"/>
+<text x="55" y="382" fill="#44ff44" font-family="monospace" font-size="11">After fix (36 pts)</text>
+</svg>

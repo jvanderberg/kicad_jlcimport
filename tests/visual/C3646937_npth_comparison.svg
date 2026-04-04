@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400" style="background:#1a1a2e;">
+<text x="200.0" y="25" text-anchor="middle" fill="white" font-family="monospace" font-size="14">C3646937: NPTH Edge.Cuts</text>
+<path d="M 200.0,310.8 L 323.1,310.8 L 335.4,101.5 L 76.9,89.2 Z" fill="rgba(255,68,68,0.15)" stroke="#ff4444" stroke-width="2" stroke-dasharray="6,4"/>
+<path d="M 200.0,310.8 L 323.1,310.8 L 325.5,310.5 L 327.8,309.8 L 329.9,308.7 L 331.8,307.2 L 333.3,305.3 L 334.4,303.2 L 335.1,300.9 L 335.4,298.5 L 335.4,101.5 L 335.1,99.1 L 334.4,96.8 L 333.3,94.7 L 331.8,92.8 L 329.9,91.3 L 327.8,90.2 L 325.5,89.5 L 323.1,89.2 L 76.9,89.2 L 74.5,89.5 L 72.2,90.2 L 70.1,91.3 L 68.2,92.8 L 66.7,94.7 L 65.6,96.8 L 64.9,99.1 L 64.6,101.5 L 64.6,298.5 L 64.9,300.9 L 65.6,303.2 L 66.7,305.3 L 68.2,307.2 L 70.1,308.7 L 72.2,309.8 L 74.5,310.5 L 76.9,310.8 Z" fill="rgba(68,255,68,0.1)" stroke="#44ff44" stroke-width="2"/>
+<circle cx="200.0" cy="310.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="323.1" cy="310.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="325.5" cy="310.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="327.8" cy="309.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="329.9" cy="308.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="331.8" cy="307.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="333.3" cy="305.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="334.4" cy="303.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="335.1" cy="300.9" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="335.4" cy="298.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="335.4" cy="101.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="335.1" cy="99.1" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="334.4" cy="96.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="333.3" cy="94.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="331.8" cy="92.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="329.9" cy="91.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="327.8" cy="90.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="325.5" cy="89.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="323.1" cy="89.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="76.9" cy="89.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="74.5" cy="89.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="72.2" cy="90.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="70.1" cy="91.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="68.2" cy="92.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="66.7" cy="94.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="65.6" cy="96.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="64.9" cy="99.1" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="64.6" cy="101.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="64.6" cy="298.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="64.9" cy="300.9" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="65.6" cy="303.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="66.7" cy="305.3" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="68.2" cy="307.2" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="70.1" cy="308.7" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="72.2" cy="309.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="74.5" cy="310.5" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="76.9" cy="310.8" r="2" fill="#44ff44" opacity="0.6"/>
+<circle cx="200.0" cy="310.8" r="4" fill="#ff4444" opacity="0.8"/>
+<circle cx="323.1" cy="310.8" r="4" fill="#ff4444" opacity="0.8"/>
+<circle cx="335.4" cy="101.5" r="4" fill="#ff4444" opacity="0.8"/>
+<circle cx="76.9" cy="89.2" r="4" fill="#ff4444" opacity="0.8"/>
+<line x1="20" y1="360" x2="50" y2="360" stroke="#ff4444" stroke-width="2" stroke-dasharray="6,4"/>
+<text x="55" y="364" fill="#ff4444" font-family="monospace" font-size="11">Before fix (4 pts)</text>
+<line x1="20" y1="378" x2="50" y2="378" stroke="#44ff44" stroke-width="2"/>
+<text x="55" y="382" fill="#44ff44" font-family="monospace" font-size="11">After fix (37 pts)</text>
+</svg>
