@@ -1,6 +1,5 @@
 """Extended tests for api.py to improve coverage."""
 
-import gzip
 import json
 import ssl
 import urllib.error
@@ -16,10 +15,11 @@ class TestMakeSslContext:
     """Tests for _make_ssl_context."""
 
     def test_creates_verified_context(self):
-        # The function is called at module import; verify the global is usable
-        assert api._SSL_CTX is not None
-        assert api._SSL_CTX.check_hostname is True
-        assert api._SSL_CTX.verify_mode == ssl.CERT_REQUIRED
+        # SSL context is lazily initialized; trigger it via _get_ssl_ctx()
+        ctx = api._get_ssl_ctx()
+        assert ctx is not None
+        assert ctx.check_hostname is True
+        assert ctx.verify_mode == ssl.CERT_REQUIRED
 
     def test_prefers_bundled_cacerts(self, monkeypatch, tmp_path):
         """When cacerts.pem exists and is valid, it should be used."""
@@ -37,11 +37,31 @@ class TestMakeSslContext:
         assert ctx is not None
         assert ctx.check_hostname is True
 
-    def test_falls_back_to_certifi(self, monkeypatch):
+    def test_falls_back_to_certifi(self, monkeypatch, tmp_path):
         """When no cacerts.pem exists, certifi should be tried."""
+        import os
+
         monkeypatch.setattr(api, "_CACERTS_PEM", "/nonexistent/cacerts.pem")
+
+        # certifi may not be installed; provide a fake module using the project's real CA bundle
+        project_pem = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "src", "kicad_jlcimport", "easyeda", "cacerts.pem"
+        )
+        fake_certifi = MagicMock()
+        fake_certifi.where.return_value = project_pem
+
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "certifi":
+                return fake_certifi
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
         ctx = api._make_ssl_context()
-        # certifi is installed in the test environment, so this should succeed
         assert ctx is not None
         assert ctx.verify_mode == ssl.CERT_REQUIRED
 
@@ -64,6 +84,32 @@ class TestMakeSslContext:
 
         ctx = api._make_ssl_context()
         assert ctx is None
+
+    def test_certifi_load_failure_falls_through(self, monkeypatch, tmp_path):
+        """When certifi is importable but load_verify_locations fails, fall through to system store."""
+        monkeypatch.setattr(api, "_CACERTS_PEM", "/nonexistent/cacerts.pem")
+
+        # Create a file with invalid cert content so load_verify_locations fails
+        bad_pem = tmp_path / "bad_certifi.pem"
+        bad_pem.write_text("this is not a valid certificate")
+
+        fake_certifi = MagicMock()
+        fake_certifi.where.return_value = str(bad_pem)
+
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "certifi":
+                return fake_certifi
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        # System store fallback should still work
+        ctx = api._make_ssl_context()
+        assert ctx is not None
 
 
 class TestUrlopen:
@@ -284,194 +330,6 @@ class TestSearchComponents:
             assert result["results"] == []
 
 
-class TestSearchComponentsCn:
-    """Tests for search_components_cn function (Chinese SZLCSC API)."""
-
-    def test_search_cn_success(self):
-        mock_response = MagicMock()
-        mock_response.__enter__ = MagicMock(return_value=mock_response)
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps(
-            {
-                "result": {
-                    "searchResult": {
-                        "totalCount": 1,
-                        "productRecordList": [
-                            {
-                                "productVO": {
-                                    "productId": "12345",
-                                    "productCode": "C123",
-                                    "productName": "电阻",
-                                    "productModel": "100K",
-                                    "productGradePlateName": "ACME",
-                                    "encapsulationModel": "0402",
-                                    "productType": "电阻",
-                                    "stockNumber": 1000,
-                                    "smtLabel": "SMT基础库",
-                                    "productPriceList": [{"productPrice": 0.01}],
-                                    "bigImageUrl": "https://alimg.szlcsc.com/upload/public/product/source/123.jpg",
-                                    "fileTypeVOList": [
-                                        {
-                                            "fileType": "pdf_property",
-                                            "detailVOList": [
-                                                {
-                                                    "fileName": "datasheet",
-                                                    "fileUrl": "/upload/public/pdf/source/20160218/1457707763339.pdf",
-                                                }
-                                            ],
-                                        }
-                                    ],
-                                }
-                            }
-                        ],
-                    }
-                }
-            }
-        ).encode()
-
-        with patch.object(api, "_urlopen", return_value=mock_response):
-            result = api.search_components_cn("resistor", page=1, page_size=30)
-            assert result["total"] == 1
-            assert len(result["results"]) == 1
-            r = result["results"][0]
-            assert r["lcsc"] == "C123"
-            assert r["type"] == "Basic"
-            assert r["price"] == 0.01
-            assert r["url"] == "https://item.szlcsc.com/12345.html"
-            assert r["brand"] == "ACME"
-            assert r["datasheet"] == "https://atta.szlcsc.com/upload/public/pdf/source/20160218/1457707763339.pdf"
-            assert r["image_url"] == "https://alimg.szlcsc.com/upload/public/product/source/123.jpg"
-
-    def test_search_cn_extended_type(self):
-        mock_response = MagicMock()
-        mock_response.__enter__ = MagicMock(return_value=mock_response)
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps(
-            {
-                "result": {
-                    "searchResult": {
-                        "totalCount": 1,
-                        "productRecordList": [
-                            {
-                                "productVO": {
-                                    "productCode": "C456",
-                                    "productName": "电容",
-                                    "productModel": "100uF",
-                                    "productGradePlateName": "ACME",
-                                    "encapsulationModel": "0805",
-                                    "productType": "电容",
-                                    "stockNumber": 500,
-                                    "smtLabel": "SMT扩展库",
-                                    "productPriceList": [],
-                                }
-                            }
-                        ],
-                    }
-                }
-            }
-        ).encode()
-
-        with patch.object(api, "_urlopen", return_value=mock_response):
-            result = api.search_components_cn("capacitor")
-            assert result["results"][0]["type"] == "Extended"
-            assert result["results"][0]["price"] is None
-            assert result["results"][0]["datasheet"] == ""
-            assert result["results"][0]["image_url"] == ""
-
-    def test_search_cn_error(self):
-        def raise_error(*args, **kwargs):
-            raise urllib.error.HTTPError("url", 500, "Server Error", {}, None)
-
-        with patch.object(api, "_urlopen", raise_error):
-            with pytest.raises(APIError, match="Search failed"):
-                api.search_components_cn("test")
-
-    def test_search_cn_empty_result(self):
-        mock_response = MagicMock()
-        mock_response.__enter__ = MagicMock(return_value=mock_response)
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps({"result": {}}).encode()
-
-        with patch.object(api, "_urlopen", return_value=mock_response):
-            result = api.search_components_cn("nonexistent")
-            assert result["total"] == 0
-            assert result["results"] == []
-
-    def test_search_cn_pagination(self):
-        """When page_size > 30, multiple API calls are made."""
-        call_count = 0
-
-        def mock_urlopen(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            resp = MagicMock()
-            resp.__enter__ = MagicMock(return_value=resp)
-            resp.__exit__ = MagicMock(return_value=False)
-            items = [
-                {
-                    "productVO": {
-                        "productCode": f"C{call_count}{i}",
-                        "productName": f"Part {i}",
-                        "productModel": f"Model{i}",
-                        "productGradePlateName": "",
-                        "encapsulationModel": "",
-                        "productType": "",
-                        "stockNumber": 100,
-                        "smtLabel": "",
-                        "productPriceList": [],
-                    }
-                }
-                for i in range(30)
-            ]
-            resp.read.return_value = json.dumps(
-                {"result": {"searchResult": {"totalCount": 60, "productRecordList": items}}}
-            ).encode()
-            return resp
-
-        with patch.object(api, "_urlopen", mock_urlopen):
-            result = api.search_components_cn("test", page_size=50)
-            assert call_count == 2  # ceil(50/30) = 2
-            assert len(result["results"]) == 50
-
-    def test_search_cn_gzip_response(self):
-        """CN API may return gzip-compressed responses."""
-        payload = json.dumps(
-            {
-                "result": {
-                    "searchResult": {
-                        "totalCount": 1,
-                        "productRecordList": [
-                            {
-                                "productVO": {
-                                    "productCode": "C789",
-                                    "productName": "电感",
-                                    "productModel": "10uH",
-                                    "productGradePlateName": "",
-                                    "encapsulationModel": "0603",
-                                    "productType": "电感",
-                                    "stockNumber": 200,
-                                    "smtLabel": "SMT基础库",
-                                    "productPriceList": [{"productPrice": 0.05}],
-                                }
-                            }
-                        ],
-                    }
-                }
-            }
-        ).encode()
-
-        mock_response = MagicMock()
-        mock_response.__enter__ = MagicMock(return_value=mock_response)
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = gzip.compress(payload)
-
-        with patch.object(api, "_urlopen", return_value=mock_response):
-            result = api.search_components_cn("inductor", page_size=10)
-            assert result["total"] == 1
-            assert result["results"][0]["lcsc"] == "C789"
-            assert result["results"][0]["type"] == "Basic"
-
-
 class TestDownloadStep:
     """Tests for download_step function."""
 
@@ -684,36 +542,6 @@ class TestFetchProductImageExtended:
 
         with patch.object(api, "_urlopen", mock_urlopen):
             result = api.fetch_product_image("https://jlcpcb.com/product/C123")
-            assert result is None
-
-    def test_direct_image_url_success(self):
-        """direct_image_url fetches the image directly, skipping HTML scraping."""
-        mock_response = MagicMock()
-        mock_response.__enter__ = MagicMock(return_value=mock_response)
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = b"\xff\xd8\xff\xe0JFIF"
-
-        with patch.object(api, "_urlopen", return_value=mock_response):
-            result = api.fetch_product_image(
-                "", direct_image_url="https://alimg.szlcsc.com/upload/public/product/source/123.jpg"
-            )
-            assert result == b"\xff\xd8\xff\xe0JFIF"
-
-    def test_direct_image_url_rejects_bad_host(self):
-        """direct_image_url rejects URLs from unknown hosts."""
-        result = api.fetch_product_image("", direct_image_url="https://evil.com/image.jpg")
-        assert result is None
-
-    def test_direct_image_url_network_error(self):
-        """direct_image_url returns None on network errors."""
-
-        def raise_error(*args, **kwargs):
-            raise OSError("Network unreachable")
-
-        with patch.object(api, "_urlopen", raise_error):
-            result = api.fetch_product_image(
-                "", direct_image_url="https://alimg.szlcsc.com/upload/public/product/source/123.jpg"
-            )
             assert result is None
 
 

@@ -6,8 +6,9 @@ import logging
 import math
 import os
 import re
+import shutil
 import socket
-import ssl
+import subprocess
 import sys
 import urllib.request
 import warnings
@@ -112,6 +113,8 @@ def _make_ssl_context():
 
     Returns None only if no certificate source is usable.
     """
+    import ssl
+
     # 1. Bundled endpoint-specific CAs — preferred, works in KiCad's Python
     if os.path.isfile(_CACERTS_PEM):
         try:
@@ -146,7 +149,117 @@ def _make_ssl_context():
     return None
 
 
-_SSL_CTX = _make_ssl_context()
+_SSL_CTX = None
+_SSL_CTX_INITIALIZED = False
+_SSL_AVAILABLE = None  # None = not yet checked
+
+
+def _check_ssl_available():
+    """Check whether the ssl module can actually be imported."""
+    global _SSL_AVAILABLE
+    if _SSL_AVAILABLE is None:
+        try:
+            import ssl as _ssl_test  # noqa: F811,F401
+
+            _SSL_AVAILABLE = True
+        except ImportError:
+            _SSL_AVAILABLE = False
+            logger.debug("ssl module unavailable — will use curl fallback")
+    return _SSL_AVAILABLE
+
+
+def _get_ssl_ctx():
+    global _SSL_CTX, _SSL_CTX_INITIALIZED
+    if not _SSL_CTX_INITIALIZED:
+        if _check_ssl_available():
+            _SSL_CTX = _make_ssl_context()
+        _SSL_CTX_INITIALIZED = True
+    return _SSL_CTX
+
+
+# ---------------------------------------------------------------------------
+# curl subprocess fallback — used when the ssl module cannot be loaded
+# (e.g. OpenSSL version mismatch inside an AppImage).
+# ---------------------------------------------------------------------------
+_CURL_PATH: Optional[str] = None
+
+
+def _get_curl_path() -> Optional[str]:
+    """Lazily resolve and cache the path to the curl binary."""
+    global _CURL_PATH
+    if _CURL_PATH is None:
+        _CURL_PATH = shutil.which("curl") or ""
+    return _CURL_PATH or None
+
+
+class _CurlResponse:
+    """Minimal file-like response wrapper around curl output."""
+
+    def __init__(self, data: bytes, status: int = 200, url: str = ""):
+        self._data = data
+        self.status = status
+        self.url = url
+
+    def read(self):
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+
+def _curl_fetch(
+    url: str, headers: dict = None, data: bytes = None, timeout: int = 30, insecure: bool = False
+) -> _CurlResponse:
+    """Fetch a URL using the system curl binary.
+
+    Raises APIError on failure.
+    """
+    curl = _get_curl_path()
+    if not curl:
+        raise APIError("SSL module unavailable and curl not found on this system. Cannot make HTTPS requests.")
+    # Write the HTTP status code to stderr via -w so it never gets
+    # conflated with the response body on stdout.
+    cmd = [curl, "-sS", "-L", "--max-time", str(timeout), "-o", "-", "-w", "%{stderr}%{http_code}"]
+    if insecure:
+        cmd.append("-k")
+    if headers:
+        for k, v in headers.items():
+            cmd.extend(["-H", f"{k}: {v}"])
+    if data is not None:
+        cmd.extend(["-X", "POST", "--data-binary", "@-"])
+    cmd.append("--")
+    cmd.append(url)
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=data,
+            capture_output=True,
+            timeout=timeout + 5,
+        )
+    except FileNotFoundError as e:
+        raise APIError("curl binary not found") from e
+    except subprocess.TimeoutExpired as e:
+        raise APIError(f"curl timed out fetching {url}") from e
+
+    body = proc.stdout
+    stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+
+    # -w wrote the status code as the last token on stderr
+    try:
+        status = int(stderr.rsplit(None, 1)[-1]) if stderr else 0
+    except (ValueError, IndexError):
+        status = 0
+
+    if proc.returncode != 0 or status == 0:
+        raise APIError(f"curl error fetching {url}: {stderr}")
+
+    if status >= 400:
+        raise APIError(f"HTTP {status} fetching {url}")
+
+    return _CurlResponse(body, status=status, url=url)
 
 
 def validate_lcsc_id(lcsc_id: str) -> str:
@@ -216,6 +329,9 @@ def _urlopen(req, timeout=30):
     system store).  Falls back to unverified HTTPS **only** when no CA source
     could be loaded at all, and emits a warning each time this happens.
 
+    When the ssl module is entirely unusable (e.g. OpenSSL version mismatch
+    in an AppImage), falls back to the system curl binary.
+
     When a verified context *is* available but the remote certificate cannot
     be validated, raises ``SSLCertError`` so the UI layer can decide how to
     handle it (e.g. prompt the user or accept ``--insecure``).
@@ -223,12 +339,25 @@ def _urlopen(req, timeout=30):
     If ``allow_unverified_ssl()`` has been called, all requests use an
     unverified context regardless of ``_SSL_CTX``.
     """
+    if not _check_ssl_available():
+        # ssl module broken — use curl fallback
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        headers = dict(getattr(req, "headers", {})) if hasattr(req, "headers") else {}
+        # Also include unredirected headers (set via add_header / add_unredirected_header)
+        if hasattr(req, "unredirected_hdrs"):
+            headers.update(req.unredirected_hdrs)
+        data = getattr(req, "data", None)
+        return _curl_fetch(url, headers=headers, data=data, timeout=timeout, insecure=_allow_unverified)
+
+    import ssl
+
     if _allow_unverified:
         return urllib.request.urlopen(req, timeout=timeout, context=ssl._create_unverified_context())
 
-    if _SSL_CTX is not None:
+    ctx = _get_ssl_ctx()
+    if ctx is not None:
         try:
-            return urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX)
+            return urllib.request.urlopen(req, timeout=timeout, context=ctx)
         except urllib.error.URLError as e:
             if isinstance(e.reason, ssl.SSLCertVerificationError):
                 raise SSLCertError(
@@ -252,6 +381,8 @@ def _get_json(url: str) -> Any:
     try:
         with _urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+    except APIError:
+        raise  # curl fallback already wraps errors as APIError
     except urllib.error.HTTPError as e:
         raise APIError(f"HTTP {e.code} fetching {url}") from e
     except urllib.error.URLError as e:
@@ -320,6 +451,8 @@ def search_components(
     try:
         with _urlopen(req, timeout=15) as resp:
             raw = json.loads(resp.read().decode("utf-8"))
+    except APIError:
+        raise  # curl fallback already wraps errors as APIError
     except (urllib.error.HTTPError, urllib.error.URLError) as e:
         raise APIError(f"Search failed: {e}") from e
 
@@ -425,6 +558,8 @@ def search_components_cn(keyword: str, page: int = 1, page_size: int = 50) -> Di
                 if raw_bytes[:2] == b"\x1f\x8b":
                     raw_bytes = gzip.decompress(raw_bytes)
                 raw = json.loads(raw_bytes.decode("utf-8"))
+        except APIError:
+            raise
         except (urllib.error.HTTPError, urllib.error.URLError) as e:
             raise APIError(f"Search failed: {e}") from e
 
@@ -544,7 +679,7 @@ def fetch_product_image(lcsc_url: str, direct_image_url: str = "") -> Optional[b
     try:
         with _urlopen(req, timeout=10) as resp:
             html = resp.read().decode("utf-8")
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, APIError):
         return None
 
     # Find product image URL on international LCSC CDN
@@ -567,7 +702,7 @@ def fetch_product_image(lcsc_url: str, direct_image_url: str = "") -> Optional[b
     try:
         with _urlopen(req2, timeout=10) as resp:
             return resp.read()
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, APIError):
         return None
 
 
@@ -595,7 +730,7 @@ def _fetch_direct_image(image_url: str) -> Optional[bytes]:
     try:
         with _urlopen(req, timeout=10) as resp:
             return resp.read()
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, APIError):
         return None
 
 
@@ -609,7 +744,7 @@ def download_step(uuid_3d: str) -> Optional[bytes]:
             if data[:2] == b"\x1f\x8b":
                 data = gzip.decompress(data)
             return data
-    except (urllib.error.HTTPError, urllib.error.URLError):
+    except (urllib.error.HTTPError, urllib.error.URLError, APIError):
         return None
 
 
@@ -623,7 +758,7 @@ def download_wrl_source(uuid_3d: str) -> Optional[str]:
             if data[:2] == b"\x1f\x8b":
                 data = gzip.decompress(data)
             return data.decode("utf-8")
-    except (urllib.error.HTTPError, urllib.error.URLError):
+    except (urllib.error.HTTPError, urllib.error.URLError, APIError):
         return None
 
 
