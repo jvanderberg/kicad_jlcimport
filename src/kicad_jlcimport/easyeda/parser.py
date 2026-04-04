@@ -235,14 +235,22 @@ def _parse_pad(parts: List[str]) -> EEPad:
 
     poly_points: List[float] = []
     if polygon_str and shape == "POLYGON":
-        try:
-            coords = [float(c) for c in polygon_str.strip().split(" ") if c]
-        except ValueError:
-            return None  # Reject pad with invalid polygon coordinates
-        # Store as pad-center-relative coordinates in mm (pairs of x, y)
-        for i in range(0, len(coords) - 1, 2):
-            poly_points.append(mil_to_mm(coords[i] - x))
-            poly_points.append(mil_to_mm(coords[i + 1] - y))
+        # polygon_str may be space-separated coords OR an SVG path (M/L/A commands)
+        if polygon_str.lstrip().startswith("M"):
+            # SVG path — use arc-aware parser for rounded corners / fillets
+            abs_points = _parse_svg_path_with_arcs(polygon_str)
+            for px, py in abs_points:
+                poly_points.append(px - mil_to_mm(x))
+                poly_points.append(py - mil_to_mm(y))
+        else:
+            try:
+                coords = [float(c) for c in polygon_str.strip().split(" ") if c]
+            except ValueError:
+                return None  # Reject pad with invalid polygon coordinates
+            # Store as pad-center-relative coordinates in mm (pairs of x, y)
+            for i in range(0, len(coords) - 1, 2):
+                poly_points.append(mil_to_mm(coords[i] - x))
+                poly_points.append(mil_to_mm(coords[i + 1] - y))
 
     return EEPad(
         shape=shape,

@@ -137,6 +137,23 @@ class TestParseFootprintShapes:
         assert abs(pad.polygon_points[0] - mil_to_mm(-10)) < 1e-6
         assert abs(pad.polygon_points[1] - mil_to_mm(-10)) < 1e-6
 
+    def test_parse_polygon_pad_svg_path_with_arcs(self):
+        """POLYGON pad with SVG path containing arcs should be parsed correctly."""
+        # Rounded rectangle centered at (400, 300) with arc corners
+        svg = (
+            "M 390 290 L 410 290 A 5 5 0 0 1 415 295 "
+            "L 415 305 A 5 5 0 0 1 410 310 "
+            "L 390 310 A 5 5 0 0 1 385 305 "
+            "L 385 295 A 5 5 0 0 1 390 290 Z"
+        )
+        shape = f"PAD~POLYGON~400~300~30~20~1~~1~0~{svg}~0~id4"
+        fp = parse_footprint_shapes([shape], 400, 300)
+        assert len(fp.pads) == 1
+        pad = fp.pads[0]
+        assert pad.shape == "POLYGON"
+        # Arc parser generates many points (4 arcs × 8+ segments each + line endpoints)
+        assert len(pad.polygon_points) > 16
+
     def test_parse_polygon_pad_empty_coords(self):
         """POLYGON pad with empty polygon string gets empty polygon_points."""
         shape = "PAD~POLYGON~400~300~20~20~1~~1~0~~0~id3"
