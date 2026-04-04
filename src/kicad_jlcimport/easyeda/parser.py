@@ -381,10 +381,16 @@ def _parse_solid_region(parts: List[str]) -> EESolidRegion:
     if not svg_path:
         return None
 
+    # Helper: detect SVG arc commands in a path string
+    has_arcs = re.search(r"[0-9]A\s*[\d.]", svg_path) or " A " in svg_path
+
     # Handle npth (edge cuts) and silkscreen solid regions
     if region_type == "npth":
-        # Parse M x y L x y L x y ... Z
-        points = _parse_svg_polygon(svg_path)
+        # Use arc-aware parser when path contains arc commands (rounded corners)
+        if has_arcs:
+            points = _parse_svg_path_with_arcs(svg_path)
+        else:
+            points = _parse_svg_polygon(svg_path)
         if not points:
             return None
         return EESolidRegion(layer="Edge.Cuts", points=points, region_type=region_type)
@@ -393,8 +399,7 @@ def _parse_solid_region(parts: List[str]) -> EESolidRegion:
     if layer in _SOLID_REGION_LAYERS and region_type == "solid":
         kicad_layer = LAYER_MAP.get(layer, "F.SilkS")
         # Check if path contains arc commands - if so, use arc parser
-        # Regex catches spaceless arcs like "3008.5A8.5" as well as " A "
-        if re.search(r"[0-9]A\s*[\d.]", svg_path) or " A " in svg_path:
+        if has_arcs:
             points = _parse_svg_path_with_arcs(svg_path)
             if points:
                 return EESolidRegion(layer=kicad_layer, points=points, region_type=region_type)

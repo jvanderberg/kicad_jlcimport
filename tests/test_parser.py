@@ -681,6 +681,25 @@ class TestParseSolidRegionArcDetection:
         # Should have arc-generated points (many more than 3)
         assert len(region.points) > 8
 
+    def test_npth_region_with_arcs(self):
+        """NPTH region with rounded corners (arc commands) should preserve arcs."""
+        # Rounded rectangle: straight edges with arc corners
+        path = (
+            "M 100 90 L 190 90 A 10 10 0 0 1 200 100 "
+            "L 200 190 A 10 10 0 0 1 190 200 "
+            "L 110 200 A 10 10 0 0 1 100 190 "
+            "L 100 100 A 10 10 0 0 1 110 90 Z"
+        )
+        shape = f"SOLIDREGION~99~~{path}~npth~gge1~~~~0"
+        parts = shape.split("~")
+        region = _parse_solid_region(parts)
+        assert region is not None
+        assert region.layer == "Edge.Cuts"
+        assert region.region_type == "npth"
+        # Arc parser generates many points for each corner arc;
+        # without arc support we'd only get 8 points (M + L endpoints)
+        assert len(region.points) > 16
+
 
 class TestC17451410PinRotations:
     """Test pin rotations for C17451410 (IS01EBFRGB) - has pins in all 4 directions."""
