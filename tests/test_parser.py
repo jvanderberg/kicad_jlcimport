@@ -823,3 +823,19 @@ class TestParseSymPath:
         shape = "PT"
         result = _parse_sym_path(shape, 0, 0)
         assert result is None
+
+    def test_path_with_arcs(self):
+        """Symbol path with arc commands should produce many interpolated points."""
+        # Rounded triangle with arc corners, origin at (100, 200)
+        svg = (
+            "M 100 190 L 110 190 A 5 5 0 0 1 115 195 "
+            "L 115 205 A 5 5 0 0 1 110 210 "
+            "L 100 210 A 5 5 0 0 1 95 205 "
+            "L 95 195 A 5 5 0 0 1 100 190 Z"
+        )
+        shape = f"PT~{svg}~#880000~1~0~#880000~gge1~0~"
+        result = _parse_sym_path(shape, 100, 200)
+        assert result is not None
+        assert result.closed is True
+        # Arc parser generates many points; without arc support we'd get ≤8
+        assert len(result.points) > 16

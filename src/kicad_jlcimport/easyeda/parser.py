@@ -951,24 +951,32 @@ def _parse_sym_path(shape_str: str, origin_x: float, origin_y: float) -> EEPolyl
     if not svg_path:
         return None
 
-    # Parse SVG path manually to apply origin offset correctly
-    # (can't use _parse_svg_polygon directly as it converts to mm before we apply offset)
-    points = []
-    path = svg_path.replace("Z", "").replace("z", "").strip()
-    tokens = re.split(r"[ML]\s*", path)
-    for token in tokens:
-        token = token.strip()
-        if not token:
-            continue
-        # Split on whitespace or commas for consistency with _parse_svg_polygon
-        coords = re.split(r"[,\s]+", token)
-        if len(coords) >= 2:
-            try:
-                x = float(coords[0])
-                y = float(coords[1])
-                points.append((mil_to_mm(x - origin_x), -mil_to_mm(y - origin_y)))
-            except ValueError:
+    # Use arc-aware parser when path contains arc commands
+    has_arcs = re.search(r"[0-9]A\s*[\d.]", svg_path) or " A " in svg_path
+    if has_arcs:
+        # _parse_svg_path_with_arcs returns absolute mm coordinates;
+        # apply origin offset and Y-axis flip for symbol coordinate system
+        ox_mm = mil_to_mm(origin_x)
+        oy_mm = mil_to_mm(origin_y)
+        raw = _parse_svg_path_with_arcs(svg_path)
+        points = [(px - ox_mm, -(py - oy_mm)) for px, py in raw]
+    else:
+        # Simple M/L path — parse manually to apply origin offset correctly
+        points = []
+        path = svg_path.replace("Z", "").replace("z", "").strip()
+        tokens = re.split(r"[ML]\s*", path)
+        for token in tokens:
+            token = token.strip()
+            if not token:
                 continue
+            coords = re.split(r"[,\s]+", token)
+            if len(coords) >= 2:
+                try:
+                    x = float(coords[0])
+                    y = float(coords[1])
+                    points.append((mil_to_mm(x - origin_x), -mil_to_mm(y - origin_y)))
+                except ValueError:
+                    continue
 
     if len(points) < 2:
         return None
