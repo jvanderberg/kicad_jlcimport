@@ -211,8 +211,9 @@ class TestClosingGuardsCallAfter:
             _closing=True,
             _ssl_warning_shown=False,
         )
-        with patch.object(wx, "CallAfter") as mock_call_after, patch(
-            "kicad_jlcimport.dialog._api_module.allow_unverified_ssl"
+        with (
+            patch.object(wx, "CallAfter") as mock_call_after,
+            patch("kicad_jlcimport.dialog._api_module.allow_unverified_ssl"),
         ):
             JLCImportDialog._handle_ssl_cert_error(dlg)
         mock_call_after.assert_not_called()

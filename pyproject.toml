@@ -38,7 +38,7 @@ exclude_lines = [
 ]
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py39"
 line-length = 120
 
 [tool.ruff.lint]
@@ -53,6 +53,8 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
+    "UP006",  # use dict/list instead of Dict/List (need typing imports for 3.9)
+    "UP035",  # typing.Dict/List deprecated (need them for 3.9)
 ]
 
 [tool.ruff.lint.isort]
