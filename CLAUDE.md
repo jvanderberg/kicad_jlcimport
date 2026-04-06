@@ -14,6 +14,8 @@
 
 **ALWAYS USE:** `from typing import Optional, Union, List, Dict` instead of built-in generics (`list[str]`, `dict[str, int]` — requires 3.9+ but `Optional`/`Union` require `typing`).
 
+**CI enforces this.** The test matrix runs the full suite on Python 3.9. Any 3.10+ syntax in `src/` will fail the CI build. Do NOT try to work around this with local compatibility shims or skip markers — just write 3.9-compatible code.
+
 Tests and tools (`tests/`, `tools/`) may use newer syntax since they run in the dev venv, not inside KiCad.
 
 ## DEVELOPMENT ENVIRONMENT
