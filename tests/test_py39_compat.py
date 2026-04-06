@@ -1,8 +1,16 @@
 """Verify all production code compiles and imports under Python 3.9 (KiCad's bundled version)."""
 
+import shutil
 import subprocess
+import sys
 
-PY39 = "/opt/homebrew/opt/python@3.9/bin/python3.9"
+import pytest
+
+PY39 = shutil.which("python3.9")
+if PY39 is None and sys.version_info[:2] == (3, 9):
+    PY39 = sys.executable
+
+pytestmark = pytest.mark.skipif(PY39 is None, reason="Python 3.9 not available")
 
 
 def test_source_compiles_on_py39():
