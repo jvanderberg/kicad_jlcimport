@@ -9,3 +9,4 @@ build/
 *.spec
 .coverage
 .claude/
+tests/visual/
