@@ -10,6 +10,7 @@ from .easyeda.parser import parse_footprint_shapes, parse_symbol_shapes
 from .kicad.footprint_writer import write_footprint
 from .kicad.library import (
     add_symbol_to_lib,
+    default_global_lib_dir,
     ensure_lib_structure,
     find_best_matching_footprint,
     sanitize_name,
@@ -81,6 +82,19 @@ def _check_existing_files(
     if os.path.exists(step_path) or os.path.exists(wrl_path):
         existing.append("3D model")
     return existing
+
+
+def _global_model_path(lib_dir: str, lib_name: str, model_name: str, kicad_version: int) -> str:
+    """Build the 3D model path for a global library import.
+
+    Uses the ``${KICADxx_3RD_PARTY}`` variable when the library lives in the
+    default 3rd-party directory, otherwise falls back to an absolute path so
+    custom directories (e.g. ~/Downloads) resolve correctly.
+    """
+    default_dir = default_global_lib_dir(kicad_version)
+    if os.path.normpath(lib_dir) == os.path.normpath(default_dir):
+        return f"${{KICAD{kicad_version}_3RD_PARTY}}/{lib_name}.3dshapes/{model_name}.wrl"
+    return os.path.join(lib_dir, f"{lib_name}.3dshapes", f"{model_name}.wrl").replace("\\", "/")
 
 
 def import_component(
@@ -494,7 +508,7 @@ def _import_to_library(
         # Use WRL instead of STEP for consistency with offset calculations (which use OBJ/WRL geometry)
         if wrl_path:
             if use_global:
-                model_path = f"${{KICAD{kicad_version}_3RD_PARTY}}/{lib_name}.3dshapes/{model_name}.wrl"
+                model_path = _global_model_path(lib_dir, lib_name, model_name, kicad_version)
             else:
                 model_path = f"${{KIPRJMOD}}/{lib_name}.3dshapes/{model_name}.wrl"
             if wrl_existed and not overwrite:
