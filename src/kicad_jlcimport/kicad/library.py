@@ -243,11 +243,10 @@ def get_global_lib_dir(kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
         if not os.path.isdir(custom):
             raise ValueError(f"Custom global library directory does not exist: {custom}")
         return custom
-    ver = version_dir_name(kicad_version)
-    return os.path.join(_kicad_data_base(), ver, "3rdparty")
+    return _default_3rdparty_dir(kicad_version)
 
 
-def default_global_lib_dir(kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
+def _default_3rdparty_dir(kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
     """Return the default 3rd-party library directory (ignoring any custom override)."""
     ver = version_dir_name(kicad_version)
     return os.path.join(_kicad_data_base(), ver, "3rdparty")
@@ -272,36 +271,6 @@ def update_global_lib_tables(
 
     _update_lib_table(os.path.join(config_dir, "sym-lib-table"), "sym_lib_table", lib_name, "KiCad", sym_uri)
     _update_lib_table(os.path.join(config_dir, "fp-lib-table"), "fp_lib_table", lib_name, "KiCad", fp_uri)
-
-    # When running inside KiCad, also register in pcbnew's in-memory table.
-    # KiCad keeps its own copy of the global fp-lib-table and overwrites the
-    # on-disk file when saving, so file-only writes get clobbered.
-    _register_fp_lib_in_pcbnew(lib_name, fp_uri)
-
-
-def _register_fp_lib_in_pcbnew(lib_name: str, fp_uri: str) -> bool:
-    """Register a footprint library in pcbnew's in-memory global table.
-
-    When running inside KiCad as a plugin, pcbnew holds the authoritative
-    copy of the global fp-lib-table.  Adding the library here ensures KiCad
-    sees it immediately and persists it when it next saves the table.
-
-    Returns True if the library was registered (or already present).
-    Returns False if pcbnew is not available (e.g. running from the TUI).
-    """
-    try:
-        import pcbnew
-
-        table = pcbnew.FP_LIB_TABLE.GetGlobalLibTable()
-        if table.HasLibrary(lib_name):
-            return True
-        row = pcbnew.FP_LIB_TABLE_ROW(lib_name, fp_uri, "KiCad", "", "")
-        table.InsertRow(row)
-        return True
-    except Exception:
-        # pcbnew not available (TUI / CLI) or API mismatch — fall back to
-        # the on-disk write that already happened above.
-        return False
 
 
 def _update_lib_table(table_path: str, table_type: str, lib_name: str, lib_type: str, uri: str) -> bool:
