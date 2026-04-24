@@ -494,20 +494,25 @@ def _iter_footprint_libraries(
     if project_dir:
         tables.append((os.path.join(project_dir, "fp-lib-table"), project_dir))
     tables.append((os.path.join(get_global_config_dir(kicad_version), "fp-lib-table"), ""))
-
     seen: set[tuple[str, str]] = set()
-    for table_path, table_project_dir in tables:
+    while tables:
+        table_path, table_project_dir = tables.pop()
         for lib_name, lib_type, uri in _read_fp_lib_entries(table_path):
-            if lib_type.lower() != "kicad":
-                continue
             path = _expand_lib_uri(uri, table_project_dir, kicad_version)
-            if not path or not path.lower().endswith(".pretty") or not os.path.isdir(path):
-                continue
             key = (lib_name, os.path.normpath(path))
             if key in seen:
                 continue
+            if lib_type.lower() == "kicad":
+                if not path or not path.lower().endswith(".pretty") or not os.path.isdir(path):
+                    continue
+                candidates.append(key)
+            elif lib_type.lower() == "table":
+                if not path or not os.path.isfile(path):
+                    continue
+                tables.append((path, ""))
+            else:
+                continue
             seen.add(key)
-            candidates.append(key)
 
     # Inject JLCImport .pretty directories that exist on disk but are missing
     # from the lib-tables.  This covers the window between the first import
