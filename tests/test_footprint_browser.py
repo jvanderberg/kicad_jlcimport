@@ -536,6 +536,117 @@ class TestIterFootprintLibrariesJlcInjection:
 
 
 # ===================================================================
+# _iter_footprint_libraries — Table-type indirection (KiCad 10)
+# ===================================================================
+
+
+class TestIterFootprintLibrariesTableType:
+    """Tests for (type "Table") fp-lib-table entries that point at another table file."""
+
+    def test_table_indirection_resolves_libs(self, tmp_path, monkeypatch):
+        """A Table entry should cause the referenced table to be walked too."""
+        # Real .pretty dir referenced from the nested table.
+        pretty = tmp_path / "Resistors.pretty"
+        pretty.mkdir()
+
+        # Nested table file lives in templates/.
+        templates = tmp_path / "templates"
+        templates.mkdir()
+        nested = templates / "fp-lib-table"
+        nested.write_text(f'(fp_lib_table\n  (lib (name "Resistors")(type "KiCad")(uri "{pretty}"))\n)\n')
+
+        # Project table just points at the nested table via a Table entry.
+        (tmp_path / "fp-lib-table").write_text(
+            f'(fp_lib_table\n  (lib (name "Default")(type "Table")(uri "{nested}"))\n)\n'
+        )
+        monkeypatch.setattr(library, "get_global_config_dir", lambda v: str(tmp_path / "nonexistent"))
+
+        result = library._iter_footprint_libraries(str(tmp_path))
+        lib_names = [name for name, path in result]
+        assert "Resistors" in lib_names
+
+    def test_table_indirection_case_insensitive(self, tmp_path, monkeypatch):
+        """Type matching should be case-insensitive (\"Table\" / \"TABLE\" / \"table\")."""
+        pretty = tmp_path / "L.pretty"
+        pretty.mkdir()
+        nested = tmp_path / "nested-table"
+        nested.write_text(f'(fp_lib_table\n  (lib (name "L")(type "KiCad")(uri "{pretty}"))\n)\n')
+
+        (tmp_path / "fp-lib-table").write_text(f'(fp_lib_table\n  (lib (name "X")(type "TABLE")(uri "{nested}"))\n)\n')
+        monkeypatch.setattr(library, "get_global_config_dir", lambda v: str(tmp_path / "nonexistent"))
+
+        result = library._iter_footprint_libraries(str(tmp_path))
+        assert "L" in [name for name, _ in result]
+
+    def test_table_indirection_resolves_relative_uri(self, tmp_path, monkeypatch):
+        """Relative URIs inside a nested table resolve against the nested table's own directory."""
+        templates = tmp_path / "templates"
+        templates.mkdir()
+        # .pretty sits next to the nested table file.
+        pretty = templates / "Caps.pretty"
+        pretty.mkdir()
+
+        nested = templates / "fp-lib-table"
+        # Relative URI — must resolve relative to templates/, not the project dir.
+        nested.write_text('(fp_lib_table\n  (lib (name "Caps")(type "KiCad")(uri "Caps.pretty"))\n)\n')
+
+        (tmp_path / "fp-lib-table").write_text(f'(fp_lib_table\n  (lib (name "T")(type "Table")(uri "{nested}"))\n)\n')
+        monkeypatch.setattr(library, "get_global_config_dir", lambda v: str(tmp_path / "nonexistent"))
+
+        result = library._iter_footprint_libraries(str(tmp_path))
+        assert "Caps" in [name for name, _ in result]
+
+    def test_table_indirection_cycle_does_not_loop(self, tmp_path, monkeypatch):
+        """A self-referential Table chain must terminate, not hang."""
+        a = tmp_path / "table-a"
+        b = tmp_path / "table-b"
+        a.write_text(f'(fp_lib_table\n  (lib (name "A")(type "Table")(uri "{b}"))\n)\n')
+        b.write_text(f'(fp_lib_table\n  (lib (name "B")(type "Table")(uri "{a}"))\n)\n')
+
+        (tmp_path / "fp-lib-table").write_text(f'(fp_lib_table\n  (lib (name "Root")(type "Table")(uri "{a}"))\n)\n')
+        monkeypatch.setattr(library, "get_global_config_dir", lambda v: str(tmp_path / "nonexistent"))
+
+        # Should return without hanging, and produce no kicad-type libs.
+        result = library._iter_footprint_libraries(str(tmp_path))
+        assert result == []
+
+    def test_table_indirection_self_cycle(self, tmp_path, monkeypatch):
+        """A Table entry pointing at the parent table itself must terminate."""
+        parent = tmp_path / "fp-lib-table"
+        parent.write_text(f'(fp_lib_table\n  (lib (name "Self")(type "Table")(uri "{parent}"))\n)\n')
+        monkeypatch.setattr(library, "get_global_config_dir", lambda v: str(tmp_path / "nonexistent"))
+
+        result = library._iter_footprint_libraries(str(tmp_path))
+        assert result == []
+
+    def test_table_indirection_missing_file_skipped(self, tmp_path, monkeypatch):
+        """A Table entry whose target does not exist is silently skipped."""
+        (tmp_path / "fp-lib-table").write_text(
+            '(fp_lib_table\n  (lib (name "X")(type "Table")(uri "/nonexistent/no-such-table"))\n)\n'
+        )
+        monkeypatch.setattr(library, "get_global_config_dir", lambda v: str(tmp_path / "nonexistent"))
+
+        result = library._iter_footprint_libraries(str(tmp_path))
+        assert result == []
+
+    def test_unknown_lib_type_skipped(self, tmp_path, monkeypatch):
+        """Types other than KiCad / Table (e.g. legacy, github) are ignored."""
+        pretty = tmp_path / "P.pretty"
+        pretty.mkdir()
+        (tmp_path / "fp-lib-table").write_text(
+            f"(fp_lib_table\n"
+            f'  (lib (name "Old")(type "Legacy")(uri "{pretty}"))\n'
+            f'  (lib (name "New")(type "KiCad")(uri "{pretty}"))\n)\n'
+        )
+        monkeypatch.setattr(library, "get_global_config_dir", lambda v: str(tmp_path / "nonexistent"))
+
+        result = library._iter_footprint_libraries(str(tmp_path))
+        names = [name for name, _ in result]
+        assert "New" in names
+        assert "Old" not in names
+
+
+# ===================================================================
 # _expand_lib_uri — KIPRJMOD guard
 # ===================================================================
 
