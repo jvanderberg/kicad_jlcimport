@@ -41,6 +41,10 @@ pytest tests/ -q --cov=kicad_jlcimport --cov-fail-under=80
 
 ALL THREE must pass with zero errors before any commit or push.
 
+## NO TODO COMMENTS
+
+Never add `TODO`, `FIXME`, or `XXX` comments to source files. If something needs fixing, fix it now or surface it in the PR description / conversation. Don't leave rot in the codebase.
+
 ## GIT WORKFLOW
 
 **NEVER push directly to main.** Always create a feature branch and open a PR. Do not push to or modify main without explicit user permission. Do not revert commits on main without explicit user permission.
