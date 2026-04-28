@@ -523,12 +523,6 @@ def _iter_footprint_libraries(
                 # KiCad 10 indirection: the URI points at another fp-lib-table.
                 # Resolve relative URIs inside the nested table relative to its
                 # own directory, matching KiCad's own behaviour.
-                # TODO: ${KIPRJMOD} inside a nested table currently expands to
-                # the nested table's directory, not the project root. KiCad
-                # itself resolves KIPRJMOD to the open project regardless of
-                # which table file the entry lives in. No known template hits
-                # this (templates use ${KICAD*_FOOTPRINT_DIR}); fix by splitting
-                # the relative-base and KIPRJMOD args in _expand_lib_uri.
                 if not os.path.isfile(path):
                     continue
                 tables.append((path, os.path.dirname(path)))
