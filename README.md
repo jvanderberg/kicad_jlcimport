@@ -63,6 +63,7 @@ source install.sh      # macOS/Linux
 
 Based on recent git history:
 
+- `v1.6.5`: global search now falls back to a constructed `lcsc.com/product-detail/<code>.html` URL when the JLCPCB API omits `lcscGoodsUrl` (common for less-popular variants); skipped for `C99*` JLC-internal codes that don't have an LCSC.com listing.
 - `v1.6.4`: support for KiCad 10 `(type "Table")` fp-lib-table indirection (Linux/Windows fresh installs ship a chained default table) — footprint browser now resolves bundled libraries when they live behind a Table entry; cycle detection prevents loops on self-referential or circular table chains.
 - `v1.4.0`: KiCad footprint browser with live preview, footprint/3D model renaming, KiCad library footprint reuse, SpinnerOverlay deadlock fix, multi-unit symbol crash fix, and pinned ruff version.
 - `v1.2.10`: fixed Python 3.9 annotation evaluation in library handling.
