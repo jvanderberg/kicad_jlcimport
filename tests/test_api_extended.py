@@ -310,6 +310,93 @@ class TestSearchComponents:
             assert result["results"][0]["type"] == "Extended"
             assert result["results"][0]["price"] is None
 
+    def test_search_components_url_fallback_constructed(self, monkeypatch):
+        """When the API omits lcscGoodsUrl for a regular C-code, build it from the code."""
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps(
+            {
+                "data": {
+                    "componentPageInfo": {
+                        "total": 1,
+                        "list": [
+                            {
+                                "componentCode": "C22467836",
+                                "componentName": "MCU",
+                                "componentLibraryType": "expand",
+                                "componentPrices": [],
+                                "lcscGoodsUrl": None,
+                                "dataManualUrl": None,
+                            }
+                        ],
+                    }
+                }
+            }
+        ).encode()
+
+        with patch.object(api, "_urlopen", return_value=mock_response):
+            result = api.search_components("mcu")
+            assert result["results"][0]["url"] == "https://www.lcsc.com/product-detail/C22467836.html"
+
+    def test_search_components_url_fallback_skipped_for_c99(self, monkeypatch):
+        """JLC-internal C99* codes have no LCSC.com listing; leave url empty."""
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps(
+            {
+                "data": {
+                    "componentPageInfo": {
+                        "total": 1,
+                        "list": [
+                            {
+                                "componentCode": "C9900177353",
+                                "componentName": "Internal part",
+                                "componentLibraryType": "expand",
+                                "componentPrices": [],
+                                "lcscGoodsUrl": None,
+                                "dataManualUrl": None,
+                            }
+                        ],
+                    }
+                }
+            }
+        ).encode()
+
+        with patch.object(api, "_urlopen", return_value=mock_response):
+            result = api.search_components("internal")
+            assert result["results"][0]["url"] == ""
+
+    def test_search_components_url_provided_is_preserved(self, monkeypatch):
+        """Don't overwrite a URL the API already returned."""
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps(
+            {
+                "data": {
+                    "componentPageInfo": {
+                        "total": 1,
+                        "list": [
+                            {
+                                "componentCode": "C22398291",
+                                "componentName": "MCU",
+                                "componentLibraryType": "expand",
+                                "componentPrices": [],
+                                "lcscGoodsUrl": "https://www.lcsc.com/product-detail/long-form_C22398291.html",
+                                "dataManualUrl": None,
+                            }
+                        ],
+                    }
+                }
+            }
+        ).encode()
+
+        with patch.object(api, "_urlopen", return_value=mock_response):
+            result = api.search_components("mcu")
+            assert result["results"][0]["url"] == "https://www.lcsc.com/product-detail/long-form_C22398291.html"
+
     def test_search_components_error(self, monkeypatch):
         def raise_error(*args, **kwargs):
             raise urllib.error.HTTPError("url", 500, "Server Error", {}, None)

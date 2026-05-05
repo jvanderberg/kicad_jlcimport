@@ -465,9 +465,13 @@ def search_components(
     for item in items:
         prices = item.get("componentPrices", [])
         unit_price = prices[0]["productPrice"] if prices else None
+        lcsc_code = item.get("componentCode", "")
+        url = item.get("lcscGoodsUrl") or ""
+        if not url and lcsc_code and not lcsc_code.startswith("C99"):
+            url = f"https://www.lcsc.com/product-detail/{lcsc_code}.html"
         results.append(
             {
-                "lcsc": item.get("componentCode", ""),
+                "lcsc": lcsc_code,
                 "name": item.get("componentName", ""),
                 "model": item.get("componentModelEn", ""),
                 "brand": item.get("componentBrandEn", ""),
@@ -477,7 +481,7 @@ def search_components(
                 "type": "Basic" if item.get("componentLibraryType") == "base" else "Extended",
                 "price": unit_price,
                 "description": item.get("describe", ""),
-                "url": item.get("lcscGoodsUrl", ""),
+                "url": url,
                 "datasheet": item.get("dataManualUrl", ""),
             }
         )
