@@ -36,7 +36,7 @@ class TestComputeModelTransform:
         # y' = -0.5*sin(90°) + (-0.5)*cos(90°) = -0.5*1 + (-0.5)*0 = -0.5
         assert offset[0] == pytest.approx(0.5)
         assert offset[1] == pytest.approx(-0.5)
-        # z_offset = -z_min + (model.z / 3.937) = -0 + (50 / 3.937) = 12.7mm
+        # z_offset = -z_min + mil_to_mm(model.z) = -0 + (50 × 0.254) = 12.7mm
         assert offset[2] == pytest.approx(12.7, abs=0.01)
         assert rotation == (0, 0, 90)
 
@@ -72,7 +72,7 @@ class TestComputeModelTransform:
         offset, _ = compute_model_transform(model, 0, 0, obj_source=obj)
         assert offset[0] == pytest.approx(-2.0)
         assert offset[1] == pytest.approx(-1.0)
-        assert offset[2] == pytest.approx(12.7, abs=0.01)  # 50 mils / 3.937
+        assert offset[2] == pytest.approx(12.7, abs=0.01)  # 50 mils × 0.254
 
 
 class TestObjXyCenter:

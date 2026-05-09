@@ -18,20 +18,16 @@ import os
 from typing import Optional, Tuple
 
 from ..easyeda.ee_types import EE3DModel
+from ..easyeda.parser import mil_to_mm
 
 # ============================================================================
-# Unit Conversion Constants
+# Unit Conversion
 # ============================================================================
-
-# EasyEDA uses a coordinate system where 1 unit = 10 mils = 0.254mm
-# Conversion factor: 1 / 0.254 = 3.937 (to convert EasyEDA units to mm)
-# Note: 1 mil = 0.001 inch = 0.0254mm, so 10 mils = 0.254mm
-_EE_UNITS_TO_MM = 3.937
-
-# SVGNODE z field uses the same unit system (10 mils = 0.254mm per unit)
-# This was discovered by comparing EasyEDA UI values with raw data
-# Example: z=-13.7795 EasyEDA units = -13.7795 × 0.254mm = -3.5mm
-_Z_EE_UNITS_TO_MM = 3.937
+#
+# 3D model origin and SVGNODE z use the same 10-mil units as the rest of
+# EasyEDA's coordinate system, so they share the canonical mil_to_mm
+# conversion (1 unit = 10 mils = 0.254 mm exactly).
+# Example: z = -13.7795 EasyEDA units → -13.7795 × 0.254 mm = -3.5 mm.
 
 # ============================================================================
 # Spurious Offset Detection Thresholds
@@ -189,8 +185,8 @@ def compute_model_transform(
     cy_eff = cy if (height > 0 and abs(cy) / height > _SIGNIFICANT_CY_HEIGHT_RATIO) else 0.0
 
     # --- Effective origin diff: zero out spurious offsets (check both X and Y) ---
-    model_origin_diff_x = (model.origin_x - fp_origin_x) / _EE_UNITS_TO_MM
-    model_origin_diff_y = (model.origin_y - fp_origin_y) / _EE_UNITS_TO_MM
+    model_origin_diff_x = mil_to_mm(model.origin_x - fp_origin_x)
+    model_origin_diff_y = mil_to_mm(model.origin_y - fp_origin_y)
     # Use magnitude of offset vector to determine if spurious
     origin_diff_magnitude = (model_origin_diff_x**2 + model_origin_diff_y**2) ** 0.5
     is_spurious = _is_spurious_offset(origin_diff_magnitude, height)
@@ -198,7 +194,7 @@ def compute_model_transform(
     diff_eff_y = 0.0 if is_spurious else model_origin_diff_y
 
     # --- Z offset (universal formula) ---
-    z_offset = -z_min + (model.z / _Z_EE_UNITS_TO_MM)
+    z_offset = -z_min + mil_to_mm(model.z)
 
     # --- Geometry offset: rotates with the model ---
     # Only apply Z-axis rotation - X/Y rotations are handled by KiCad's model orientation

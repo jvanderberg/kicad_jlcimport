@@ -49,14 +49,17 @@ PIN_TYPES = {
 _SOLID_REGION_LAYERS = {"3", "4", "12"}
 
 
-# EasyEDA stores coordinates in 10-mil units (1 unit = 10 mils = 0.254 mm).
-# Dividing by 3.937 converts EasyEDA units to millimeters (3.937 ≈ 1/0.254).
-MILS_TO_MM_DIVISOR = 3.937
+# EasyEDA stores coordinates in 10-mil units (1 unit = 10 mils = 0.254 mm exactly).
+# Multiplying by 0.254 is the exact conversion; the previous divisor 3.937 was a
+# rounded approximation of 1/0.254 = 3.93700787... and pushed pin endpoints off
+# KiCad's internal nanometre grid by ~50–500 nm, breaking net-label auto-connect
+# (issue #100).
+MILS_TO_MM_MULTIPLIER = 0.254
 
 
 def mil_to_mm(mil: float) -> float:
     """Convert EasyEDA units (10-mil) to millimeters."""
-    return mil / MILS_TO_MM_DIVISOR
+    return mil * MILS_TO_MM_MULTIPLIER
 
 
 _SVG_ARC_RE = re.compile(

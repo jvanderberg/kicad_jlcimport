@@ -2,7 +2,7 @@
 
 from kicad_jlcimport.easyeda.ee_types import EEFootprint, EESymbol
 from kicad_jlcimport.easyeda.parser import (
-    MILS_TO_MM_DIVISOR,
+    MILS_TO_MM_MULTIPLIER,
     _find_svg_path,
     _parse_solid_region,
     _parse_svg_arc_path,
@@ -22,12 +22,23 @@ class TestMilToMm:
 
     def test_positive(self):
         result = mil_to_mm(100)
-        assert abs(result - 100 / MILS_TO_MM_DIVISOR) < 1e-10
+        assert abs(result - 100 * MILS_TO_MM_MULTIPLIER) < 1e-10
 
     def test_negative(self):
         result = mil_to_mm(-50)
         assert result < 0
-        assert abs(result - (-50 / MILS_TO_MM_DIVISOR)) < 1e-10
+        assert abs(result - (-50 * MILS_TO_MM_MULTIPLIER)) < 1e-10
+
+    def test_exact_grid_alignment(self):
+        # Issue #100: net-label connectivity in KiCad requires that imported pin
+        # endpoints land on integer-nm coordinates that match the schematic
+        # grid. EasyEDA pins on a 50-mil (5 unit) or 100-mil (10 unit) grid
+        # must convert to multiples of 1.27 mm (= 1,270,000 nm) exactly.
+        for ee in (10, 50, 100, 355, 500, 1000, 3995):
+            mm = mil_to_mm(ee)
+            nm = round(mm * 1_000_000)
+            # ee × 254,000 nm/unit must match the integer nm value exactly
+            assert nm == ee * 254_000, f"EE={ee} -> {mm} mm ({nm} nm), expected {ee * 254_000} nm"
 
 
 class TestParseSvgArcPath:
