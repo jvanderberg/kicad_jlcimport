@@ -1,6 +1,6 @@
 """Tests for _kicad_format.py - shared formatting utilities."""
 
-from kicad_jlcimport.kicad._format import escape_sexpr, fmt_float, gen_uuid
+from kicad_jlcimport.kicad._format import escape_sexpr, fmt_float, fmt_geometry, gen_uuid
 
 
 class TestGenUuid:
@@ -51,6 +51,9 @@ class TestFmtFloat:
         result = fmt_float(1.123456789)
         assert len(result.split(".")[1]) <= 6
 
+    def test_plain_float_does_not_snap_grid_noise(self):
+        assert fmt_float(2.800102) == "2.800102"
+
     def test_large_integer(self):
         assert fmt_float(1000.0) == "1000"
 
@@ -67,6 +70,28 @@ class TestFmtFloat:
 
     def test_negative_inf_returns_zero(self):
         assert fmt_float(float("-inf")) == "0"
+
+
+class TestFmtGeometry:
+    def test_snaps_easyeda_grid_noise(self):
+        # Issue #102: footprint coordinates/dimensions can carry tiny EasyEDA
+        # decimal residuals that make KiCad treat otherwise grid-aligned pads as
+        # off-grid.
+        assert fmt_geometry(2.800102) == "2.8"
+        assert fmt_geometry(0.240005) == "0.24"
+        assert fmt_geometry(-0.974981) == "-0.975"
+        assert fmt_geometry(0.000076) == "0"
+
+    def test_preserves_meaningful_sub_micron_values(self):
+        assert fmt_geometry(1.937512) == "1.937512"
+
+    def test_preserves_exact_imperial_values(self):
+        assert fmt_geometry(0.0254) == "0.0254"  # 1 mil
+        assert fmt_geometry(0.0508) == "0.0508"  # 2 mil
+        assert fmt_geometry(0.0762) == "0.0762"  # 3 mil
+
+    def test_nan_returns_zero(self):
+        assert fmt_geometry(float("nan")) == "0"
 
 
 class TestEscapeSexpr:

@@ -7,6 +7,7 @@ from ..easyeda.ee_types import EESymbol
 from ..easyeda.parser import compute_arc_midpoint
 from ._format import escape_sexpr as _escape
 from ._format import fmt_float as _fmt
+from ._format import fmt_geometry as _geom
 from .version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version
 
 
@@ -89,11 +90,11 @@ def write_symbol(
         ref_x = 0
         ref_y = _estimate_top(symbol) + 2.0
         hide_suffix = " hide" if hide_properties else ""
-        lines.append(f'    (property "Reference" "{prefix}" (at {_fmt(ref_x)} {_fmt(ref_y)} 0)')
+        lines.append(f'    (property "Reference" "{prefix}" (at {_geom(ref_x)} {_geom(ref_y)} 0)')
         lines.append(f"      (effects (font (size 1.27 1.27)){hide_suffix})")
         lines.append("    )")
         val_y = _estimate_bottom(symbol) - 2.0
-        lines.append(f'    (property "Value" "{name}" (at {_fmt(ref_x)} {_fmt(val_y)} 0)')
+        lines.append(f'    (property "Value" "{name}" (at {_geom(ref_x)} {_geom(val_y)} 0)')
         lines.append(f"      (effects (font (size 1.27 1.27)){hide_suffix})")
         lines.append("    )")
         if footprint_ref:
@@ -146,20 +147,20 @@ def write_symbol(
             lines.append("      (polyline")
             lines.append("        (pts")
             for px, py in pts:
-                lines.append(f"          (xy {_fmt(px)} {_fmt(py)})")
+                lines.append(f"          (xy {_geom(px)} {_geom(py)})")
             lines.append("        )")
             lines.append("        (stroke (width 0.254) (type solid))")
             lines.append("        (fill (type background))")
             lines.append("      )")
         else:
-            lines.append(f"      (rectangle (start {_fmt(rect.x)} {_fmt(rect.y)}) (end {_fmt(x2)} {_fmt(y2)})")
+            lines.append(f"      (rectangle (start {_geom(rect.x)} {_geom(rect.y)}) (end {_geom(x2)} {_geom(y2)})")
             lines.append("        (stroke (width 0.254) (type solid))")
             lines.append("        (fill (type background))")
             lines.append("      )")
 
     # Circles
     for circle in symbol.circles:
-        lines.append(f"      (circle (center {_fmt(circle.cx)} {_fmt(circle.cy)}) (radius {_fmt(circle.radius)})")
+        lines.append(f"      (circle (center {_geom(circle.cx)} {_geom(circle.cy)}) (radius {_geom(circle.radius)})")
         lines.append("        (stroke (width 0.254) (type solid))")
         # Use "outline" for filled circles (solid dark dot) vs "none" for hollow
         fill_type = "outline" if circle.filled else "none"
@@ -172,7 +173,7 @@ def write_symbol(
         # Close the path by adding first point to end if marked closed
         if poly.closed and len(points) >= 2 and points[0] != points[-1]:
             points.append(points[0])
-        pts_str = " ".join(f"(xy {_fmt(x)} {_fmt(y)})" for x, y in points)
+        pts_str = " ".join(f"(xy {_geom(x)} {_geom(y)})" for x, y in points)
         lines.append("      (polyline")
         lines.append(f"        (pts {pts_str})")
         lines.append("        (stroke (width 0.254) (type solid))")
@@ -188,9 +189,9 @@ def write_symbol(
         else:
             s, e = arc.start, arc.end
         lines.append(
-            f"      (arc (start {_fmt(s[0])} {_fmt(s[1])})"
-            f" (mid {_fmt(mid[0])} {_fmt(mid[1])})"
-            f" (end {_fmt(e[0])} {_fmt(e[1])})"
+            f"      (arc (start {_geom(s[0])} {_geom(s[1])})"
+            f" (mid {_geom(mid[0])} {_geom(mid[1])})"
+            f" (end {_geom(e[0])} {_geom(e[1])})"
         )
         lines.append("        (stroke (width 0.254) (type solid))")
         lines.append("        (fill (type none))")
@@ -198,16 +199,16 @@ def write_symbol(
 
     # Texts
     for text in symbol.texts:
-        lines.append(f'      (text "{_escape(text.text)}" (at {_fmt(text.x)} {_fmt(text.y)} {_fmt(text.rotation)})')
-        lines.append(f"        (effects (font (size {_fmt(text.font_size)} {_fmt(text.font_size)})))")
+        lines.append(f'      (text "{_escape(text.text)}" (at {_geom(text.x)} {_geom(text.y)} {_fmt(text.rotation)})')
+        lines.append(f"        (effects (font (size {_geom(text.font_size)} {_geom(text.font_size)})))")
         lines.append("      )")
 
     # Pins
     for pin in symbol.pins:
         elec_type = pin.electrical_type
         # Direction is encoded in the angle field of (at x y angle)
-        pin_line = f"      (pin {elec_type} line (at {_fmt(pin.x)} {_fmt(pin.y)} {_fmt(pin.rotation)})"
-        pin_line += f" (length {_fmt(pin.length)})"
+        pin_line = f"      (pin {elec_type} line (at {_geom(pin.x)} {_geom(pin.y)} {_fmt(pin.rotation)})"
+        pin_line += f" (length {_geom(pin.length)})"
         lines.append(pin_line)
 
         name_effects = "(effects (font (size 1.27 1.27)))"
@@ -224,7 +225,7 @@ def write_symbol(
     # Pin connection point dots (optional, for visual comparison)
     if include_pin_dots:
         for pin in symbol.pins:
-            lines.append(f"      (circle (center {_fmt(pin.x)} {_fmt(pin.y)}) (radius 0.254)")
+            lines.append(f"      (circle (center {_geom(pin.x)} {_geom(pin.y)}) (radius 0.254)")
             lines.append("        (stroke (width 0.127) (type solid))")
             lines.append("        (fill (type none))")
             lines.append("      )")
