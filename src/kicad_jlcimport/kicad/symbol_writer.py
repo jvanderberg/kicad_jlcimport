@@ -206,8 +206,9 @@ def write_symbol(
     # Pins
     for pin in symbol.pins:
         elec_type = pin.electrical_type
+        style = pin.style
         # Direction is encoded in the angle field of (at x y angle)
-        pin_line = f"      (pin {elec_type} line (at {_geom(pin.x)} {_geom(pin.y)} {_fmt(pin.rotation)})"
+        pin_line = f"      (pin {elec_type} {style} (at {_geom(pin.x)} {_geom(pin.y)} {_fmt(pin.rotation)})"
         pin_line += f" (length {_geom(pin.length)})"
         lines.append(pin_line)
 
