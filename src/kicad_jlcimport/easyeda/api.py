@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 import warnings
 from typing import Any, Dict, List, Optional
@@ -763,6 +764,39 @@ def download_wrl_source(uuid_3d: str) -> Optional[str]:
                 data = gzip.decompress(data)
             return data.decode("utf-8")
     except (urllib.error.HTTPError, urllib.error.URLError, APIError):
+        return None
+
+
+def download_datasheet(url: str) -> Optional[bytes]:
+    """Download a datasheet PDF.
+
+    Returns ``None`` for missing/non-HTTP URLs, network errors, or responses
+    that do not look like PDF content.  Datasheet download is intentionally
+    best-effort so a transient PDF failure does not block component imports.
+    """
+    if not url:
+        return None
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            **_HEADERS,
+            "Accept": "application/pdf,application/octet-stream,*/*",
+        },
+    )
+    try:
+        with _urlopen(req, timeout=60) as resp:
+            data = resp.read()
+            if data[:2] == b"\x1f\x8b":
+                data = gzip.decompress(data)
+            if not data.lstrip().startswith(b"%PDF"):
+                return None
+            return data
+    except (OSError, urllib.error.HTTPError, urllib.error.URLError, APIError):
         return None
 
 

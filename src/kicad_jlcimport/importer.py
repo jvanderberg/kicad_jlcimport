@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import os
+import urllib.parse
 from typing import Callable
 
-from .easyeda.api import download_step, download_wrl_source, fetch_full_component
+from .easyeda.api import (
+    download_datasheet,
+    download_step,
+    download_wrl_source,
+    fetch_full_component,
+    search_components,
+    search_components_cn,
+)
 from .easyeda.parser import parse_footprint_shapes, parse_symbol_shapes
 from .kicad.footprint_writer import write_footprint
 from .kicad.library import (
@@ -97,6 +105,133 @@ def _global_model_path(lib_dir: str, lib_name: str, model_name: str, kicad_versi
     return os.path.join(lib_dir, f"{lib_name}.3dshapes", f"{model_name}.wrl").replace("\\", "/")
 
 
+def _global_datasheet_path(lib_dir: str, lib_name: str, filename: str, kicad_version: int) -> str:
+    """Build the datasheet path for a global library import."""
+    default_dir = _default_3rdparty_dir(kicad_version)
+    if os.path.normpath(lib_dir) == os.path.normpath(default_dir):
+        return f"${{KICAD{kicad_version}_3RD_PARTY}}/{lib_name}.datasheets/{filename}"
+    return os.path.join(lib_dir, f"{lib_name}.datasheets", filename).replace("\\", "/")
+
+
+def _datasheet_ref(
+    lib_dir: str,
+    lib_name: str,
+    filename: str,
+    use_global: bool,
+    export_only: bool,
+    kicad_version: int,
+) -> str:
+    """Return the KiCad datasheet property value for a saved datasheet."""
+    if export_only:
+        return f"{lib_name}.datasheets/{filename}"
+    if use_global:
+        return _global_datasheet_path(lib_dir, lib_name, filename, kicad_version)
+    return f"${{KIPRJMOD}}/{lib_name}.datasheets/{filename}"
+
+
+def _looks_like_pdf_url(url: str) -> bool:
+    """Return True when a URL path looks like a direct PDF."""
+    try:
+        return urllib.parse.urlparse(url).path.lower().endswith(".pdf")
+    except (TypeError, ValueError):
+        return False
+
+
+def _datasheet_candidate_urls(lcsc_id: str, primary_url: str) -> list[str]:
+    """Return direct datasheet URL candidates, falling back through search APIs."""
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: str) -> None:
+        if url and url not in seen:
+            seen.add(url)
+            candidates.append(url)
+
+    if _looks_like_pdf_url(primary_url):
+        add(primary_url)
+
+    for search_fn in (search_components, search_components_cn):
+        try:
+            result = search_fn(lcsc_id, page_size=5)
+        except Exception:
+            continue
+        fallback_url = ""
+        for item in result.get("results", []):
+            datasheet = item.get("datasheet", "")
+            if not datasheet:
+                continue
+            if item.get("lcsc", "").upper() == lcsc_id.upper():
+                add(datasheet)
+            elif not fallback_url:
+                fallback_url = datasheet
+        add(fallback_url)
+
+    if primary_url and not _looks_like_pdf_url(primary_url):
+        add(primary_url)
+
+    return candidates
+
+
+def _save_datasheet(
+    lib_dir: str,
+    lib_name: str,
+    name: str,
+    lcsc_id: str,
+    datasheet_url: str,
+    overwrite: bool,
+    use_global: bool,
+    export_only: bool,
+    log: Callable[[str], None],
+    kicad_version: int,
+) -> tuple[str, str]:
+    """Download the datasheet into ``<lib_name>.datasheets``.
+
+    Returns ``(datasheet_ref, saved_path)``.  On failure, ``datasheet_ref`` is
+    the original URL and ``saved_path`` is empty.
+    """
+    if not datasheet_url:
+        log("No datasheet URL available")
+        return "", ""
+
+    # Always use a stable KiCad-safe basename; datasheet URLs frequently have
+    # query strings or opaque download paths.
+    filename = f"{sanitize_name(name)}.pdf"
+    datasheets_dir = os.path.join(lib_dir, f"{lib_name}.datasheets")
+    dest_path = os.path.join(datasheets_dir, filename)
+    ref = _datasheet_ref(lib_dir, lib_name, filename, use_global, export_only, kicad_version)
+
+    if os.path.exists(dest_path) and not overwrite:
+        log(f"  Datasheet skipped: {dest_path} (exists, overwrite=off)")
+        return ref, dest_path
+
+    urls = _datasheet_candidate_urls(lcsc_id, datasheet_url)
+    if not urls:
+        log("No datasheet URL available")
+        return "", ""
+
+    log("Downloading datasheet...")
+    data = None
+    for idx, url in enumerate(urls):
+        if idx > 0:
+            log("  Datasheet retrying alternate URL...")
+        data = download_datasheet(url)
+        if data:
+            break
+
+    if not data:
+        if os.path.exists(dest_path):
+            log(f"  Datasheet download failed; keeping existing file: {dest_path}")
+            return ref, dest_path
+        log("  Datasheet download failed; keeping original URL.")
+        return datasheet_url, ""
+
+    os.makedirs(datasheets_dir, exist_ok=True)
+    with open(dest_path, "wb") as f:
+        f.write(data)
+    log(f"  Datasheet saved: {dest_path}")
+    return ref, dest_path
+
+
 def import_component(
     lcsc_id: str,
     lib_dir: str,
@@ -112,6 +247,7 @@ def import_component(
     component_data: dict | None = None,
     symbol_kwargs: dict | None = None,
     confirm_reuse_footprint: Callable[[str, str], bool] | None = None,
+    save_datasheet: bool = False,
 ) -> dict | None:
     """Import an LCSC component into a KiCad library or export raw files.
 
@@ -145,6 +281,9 @@ def import_component(
             footprint match is found. Receives ``(package, footprint_ref)`` and
             returns ``True`` to reuse the existing footprint reference in the
             symbol, or ``False`` to generate a new footprint as before.
+        save_datasheet: If True, download the datasheet PDF into
+            ``<lib_name>.datasheets`` and point KiCad datasheet properties at
+            the saved file when the download succeeds.
 
     Returns:
         dict with keys: title, name, fp_content, sym_content; or None if cancelled.
@@ -222,6 +361,22 @@ def import_component(
             if not confirm_overwrite(fp_name, existing):
                 return None
             overwrite = True
+
+    datasheet_path = ""
+    if save_datasheet:
+        datasheet_ref, datasheet_path = _save_datasheet(
+            lib_dir,
+            lib_name,
+            name,
+            lcsc_id,
+            comp.get("datasheet", ""),
+            overwrite,
+            use_global,
+            export_only,
+            log,
+            kicad_version,
+        )
+        comp["datasheet"] = datasheet_ref
 
     # footprint_ref defaults to lib:fp_name (respects any user rename).
     # This is overwritten below by candidate_ref if the user chose a KiCad
@@ -350,6 +505,7 @@ def import_component(
             metadata,
             fp_name=fp_name,
             model_name=model_name,
+            datasheet_path=datasheet_path,
         )
 
     return _import_to_library(
@@ -374,6 +530,7 @@ def import_component(
         footprint_ref,
         fp_name=fp_name,
         model_name=model_name,
+        datasheet_path=datasheet_path,
     )
 
 
@@ -395,6 +552,7 @@ def _export_only(
     metadata=None,
     fp_name=None,
     model_name=None,
+    datasheet_path="",
 ):
     """Write raw .kicad_mod, .kicad_sym, and 3D models to a flat directory."""
     # fp_name: filename for .kicad_mod (defaults to component name)
@@ -448,7 +606,13 @@ def _export_only(
         if wrl_path:
             log(f"  Saved: {wrl_path}")
 
-    return {"title": title, "name": name, "fp_content": fp_content, "sym_content": sym_content}
+    return {
+        "title": title,
+        "name": name,
+        "fp_content": fp_content,
+        "sym_content": sym_content,
+        "datasheet_path": datasheet_path,
+    }
 
 
 def _import_to_library(
@@ -473,6 +637,7 @@ def _import_to_library(
     footprint_ref="",
     fp_name=None,
     model_name=None,
+    datasheet_path="",
 ):
     """Import into KiCad library structure with lib-table updates.
 
@@ -564,4 +729,10 @@ def _import_to_library(
         if newly_created:
             log("NOTE: Reopen project for new library tables to take effect.")
 
-    return {"title": title, "name": name, "fp_content": fp_content, "sym_content": sym_content}
+    return {
+        "title": title,
+        "name": name,
+        "fp_content": fp_content,
+        "sym_content": sym_content,
+        "datasheet_path": datasheet_path,
+    }
