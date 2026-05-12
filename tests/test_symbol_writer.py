@@ -131,6 +131,22 @@ class TestWriteSymbol:
         assert '(name "VCC"' in result
         assert '(number "1"' in result
 
+    def test_pin_style_generation(self):
+        for style in ("inverted", "clock", "inverted_clock"):
+            pin = EEPin(
+                number="1",
+                name="CLK",
+                x=0,
+                y=0,
+                rotation=0,
+                length=2.54,
+                electrical_type="input",
+                style=style,
+            )
+            sym = _make_symbol(pins=[pin])
+            result = write_symbol(sym, "Test")
+            assert f"(pin input {style}" in result
+
     def test_pin_hidden_name(self):
         pin = EEPin(
             number="1", name="VCC", x=0, y=0, rotation=0, length=2.54, electrical_type="power_in", name_visible=False

@@ -91,6 +91,7 @@ class EEPin:
     rotation: float
     length: float
     electrical_type: str
+    style: str = "line"
     name_visible: bool = True
     number_visible: bool = True
 
