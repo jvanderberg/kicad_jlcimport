@@ -15,6 +15,7 @@ from textual.containers import Center, Container, Horizontal, Vertical, Vertical
 from textual.screen import Screen
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -414,13 +415,13 @@ class JLCImportTUI(App):
     }
     #detail-buttons Button { margin-right: 1; }
 
-    /* Import section – 3 rows */
+    /* Import section */
     #import-section {
         height: auto;
         border-top: solid #333333;
         padding: 0;
     }
-    #import-row-1, #import-row-2, #import-row-3 {
+    #import-row-1, #import-row-2, #import-row-3, #import-row-4 {
         height: 1;
         width: 100%;
     }
@@ -466,6 +467,7 @@ class JLCImportTUI(App):
         _config = load_config()
         self._lib_name = _config.get("lib_name", "JLCImport")
         self._use_global = _config.get("use_global", False)
+        self._save_datasheets = _config.get("save_datasheets", False)
         self._global_lib_dir_override = global_lib_dir
         if global_lib_dir:
             self._global_lib_dir = global_lib_dir
@@ -575,6 +577,8 @@ class JLCImportTUI(App):
                         id="kicad-version-select",
                         allow_blank=False,
                     )
+                with Horizontal(id="import-row-4"):
+                    yield Checkbox("Save datasheet PDF", value=self._save_datasheets, id="save-datasheet-checkbox")
 
             with Container(id="status-section"):
                 yield RichLog(id="status-log", highlight=True, markup=True)
@@ -709,6 +713,19 @@ class JLCImportTUI(App):
         config = load_config()
         config["use_global"] = use_global
         save_config(config)
+
+    def _persist_save_datasheets(self, save_datasheets: bool):
+        """Save the datasheet download preference to config."""
+        self._save_datasheets = save_datasheets
+        config = load_config()
+        config["save_datasheets"] = save_datasheets
+        save_config(config)
+
+    def on_checkbox_changed(self, event):
+        """Persist import option checkboxes when they change."""
+        checkbox = getattr(event, "checkbox", None) or getattr(event, "control", None)
+        if checkbox and checkbox.id == "save-datasheet-checkbox":
+            self._persist_save_datasheets(bool(event.value))
 
     @staticmethod
     def _global_label(path: str, max_len: int = 50) -> str:
@@ -1208,6 +1225,8 @@ class JLCImportTUI(App):
 
         use_global = self.query_one("#dest-global", RadioButton).value
         kicad_version = self._get_kicad_version()
+        save_datasheet = bool(self.query_one("#save-datasheet-checkbox", Checkbox).value)
+        self._persist_save_datasheets(save_datasheet)
 
         if use_global:
             lib_dir = self._global_lib_dir
@@ -1220,7 +1239,7 @@ class JLCImportTUI(App):
         search_result = self._selected_result
 
         self.query_one("#detail-import-btn", Button).disabled = True
-        self._run_import(lcsc_id, lib_dir, use_global, kicad_version, search_result)
+        self._run_import(lcsc_id, lib_dir, use_global, kicad_version, search_result, save_datasheet)
 
     def _get_kicad_version(self) -> int:
         """Return the selected KiCad version from the dropdown."""
@@ -1282,14 +1301,22 @@ class JLCImportTUI(App):
         return bool(result_holder and result_holder[0])
 
     @work(thread=True)
-    def _run_import(self, lcsc_id: str, lib_dir: str, use_global: bool, kicad_version: int, search_result=None):
+    def _run_import(
+        self,
+        lcsc_id: str,
+        lib_dir: str,
+        use_global: bool,
+        kicad_version: int,
+        search_result=None,
+        save_datasheet: bool = False,
+    ):
         """Run the import in a background thread."""
         try:
             try:
-                self._do_import(lcsc_id, lib_dir, use_global, kicad_version, search_result)
+                self._do_import(lcsc_id, lib_dir, use_global, kicad_version, search_result, save_datasheet)
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                self._do_import(lcsc_id, lib_dir, use_global, kicad_version, search_result)
+                self._do_import(lcsc_id, lib_dir, use_global, kicad_version, search_result, save_datasheet)
         except APIError as e:
             self.app.call_from_thread(self._log, f"[red]API Error: {e}[/red]")
         except Exception as e:
@@ -1298,7 +1325,15 @@ class JLCImportTUI(App):
         finally:
             self.app.call_from_thread(self.query_one("#detail-import-btn", Button).__setattr__, "disabled", False)
 
-    def _do_import(self, lcsc_id: str, lib_dir: str, use_global: bool, kicad_version: int, search_result=None):
+    def _do_import(
+        self,
+        lcsc_id: str,
+        lib_dir: str,
+        use_global: bool,
+        kicad_version: int,
+        search_result=None,
+        save_datasheet: bool = False,
+    ):
         """Execute the import process."""
         lib_name = self._lib_name
 
@@ -1316,6 +1351,7 @@ class JLCImportTUI(App):
             search_result=search_result,
             confirm_metadata=self._confirm_metadata,
             confirm_overwrite=self._confirm_overwrite,
+            save_datasheet=save_datasheet,
         )
 
         if result is None:

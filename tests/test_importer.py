@@ -137,6 +137,109 @@ class TestImportComponent:
         assert (tmp_path / "TestLib.kicad_sym").exists()
         assert "Project library tables updated" in " ".join(log_messages)
 
+    def test_import_saves_datasheet_to_library(self, tmp_path, monkeypatch):
+        """save_datasheet stores a PDF in <lib>.datasheets and uses the local reference."""
+        log_messages = []
+        captured_symbol = {}
+        captured_footprint = {}
+
+        fake_comp = self._make_fake_comp(with_symbol=True, with_3d=False)
+        fake_fp = self._make_fake_footprint()
+        fake_sym = self._make_fake_symbol()
+
+        def capture_write_symbol(*args, **kwargs):
+            captured_symbol.update(kwargs)
+            return '  (symbol "TestPart")\n'
+
+        def capture_write_footprint(*args, **kwargs):
+            captured_footprint.update(kwargs)
+            return "(footprint TestPart)\n"
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: fake_sym)
+        monkeypatch.setattr(importer, "write_footprint", capture_write_footprint)
+        monkeypatch.setattr(importer, "write_symbol", capture_write_symbol)
+        monkeypatch.setattr(importer, "download_datasheet", lambda _: b"%PDF-1.7\nfixture")
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            use_global=False,
+            save_datasheet=True,
+            log=lambda msg: log_messages.append(msg),
+        )
+
+        ds_path = tmp_path / "TestLib.datasheets" / "TestPart.pdf"
+        assert ds_path.read_bytes() == b"%PDF-1.7\nfixture"
+        assert captured_symbol["datasheet"] == "${KIPRJMOD}/TestLib.datasheets/TestPart.pdf"
+        assert captured_footprint["datasheet"] == "${KIPRJMOD}/TestLib.datasheets/TestPart.pdf"
+        assert result["datasheet_path"] == str(ds_path)
+        assert "Datasheet saved" in " ".join(log_messages)
+
+    def test_import_skips_existing_datasheet_without_overwrite(self, tmp_path, monkeypatch):
+        """Existing datasheets are reused without another download when overwrite is off."""
+        log_messages = []
+        fake_comp = self._make_fake_comp(with_symbol=False, with_3d=False)
+        fake_fp = self._make_fake_footprint()
+
+        ds_dir = tmp_path / "TestLib.datasheets"
+        ds_dir.mkdir()
+        ds_path = ds_dir / "TestPart.pdf"
+        ds_path.write_bytes(b"%PDF existing")
+
+        def should_not_download(_):
+            raise AssertionError("datasheet download should be skipped")
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
+        monkeypatch.setattr(importer, "download_datasheet", should_not_download)
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            overwrite=False,
+            save_datasheet=True,
+            log=lambda msg: log_messages.append(msg),
+        )
+
+        assert result["datasheet_path"] == str(ds_path)
+        assert ds_path.read_bytes() == b"%PDF existing"
+        assert "Datasheet skipped" in " ".join(log_messages)
+
+    def test_import_keeps_datasheet_url_when_download_fails(self, tmp_path, monkeypatch):
+        """A failed datasheet download does not block import or replace the URL."""
+        captured_symbol = {}
+        fake_comp = self._make_fake_comp(with_symbol=True, with_3d=False)
+        fake_fp = self._make_fake_footprint()
+        fake_sym = self._make_fake_symbol()
+
+        def capture_write_symbol(*args, **kwargs):
+            captured_symbol.update(kwargs)
+            return '  (symbol "TestPart")\n'
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: fake_sym)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
+        monkeypatch.setattr(importer, "write_symbol", capture_write_symbol)
+        monkeypatch.setattr(importer, "download_datasheet", lambda _: None)
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            save_datasheet=True,
+            log=lambda msg: None,
+        )
+
+        assert not (tmp_path / "TestLib.datasheets").exists()
+        assert captured_symbol["datasheet"] == "https://example.com/ds.pdf"
+        assert result["datasheet_path"] == ""
+
     def test_import_to_library_global(self, tmp_path, monkeypatch):
         """Test import to global library."""
         log_messages = []
