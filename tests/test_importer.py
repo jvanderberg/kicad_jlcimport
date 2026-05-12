@@ -227,6 +227,8 @@ class TestImportComponent:
         monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
         monkeypatch.setattr(importer, "write_symbol", capture_write_symbol)
         monkeypatch.setattr(importer, "download_datasheet", lambda _: None)
+        monkeypatch.setattr(importer, "search_components", lambda *a, **k: {"results": []})
+        monkeypatch.setattr(importer, "search_components_cn", lambda *a, **k: {"results": []})
 
         result = importer.import_component(
             "C123",
@@ -239,6 +241,64 @@ class TestImportComponent:
         assert not (tmp_path / "TestLib.datasheets").exists()
         assert captured_symbol["datasheet"] == "https://example.com/ds.pdf"
         assert result["datasheet_path"] == ""
+
+    def test_import_retries_datasheet_from_search_candidates(self, tmp_path, monkeypatch):
+        """Product-page datasheet URLs fall back to direct URLs from search APIs."""
+        attempts = []
+        fake_comp = self._make_fake_comp(with_symbol=False, with_3d=False)
+        fake_comp["datasheet"] = "https://item.szlcsc.com/417287.html"
+        fake_fp = self._make_fake_footprint()
+
+        def fake_download(url):
+            attempts.append(url)
+            if url == "https://atta.szlcsc.com/upload/public/pdf/source/20151126/1457707596805.pdf":
+                return b"%PDF-1.3\ncn fixture"
+            return None
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
+        monkeypatch.setattr(importer, "download_datasheet", fake_download)
+        monkeypatch.setattr(
+            importer,
+            "search_components",
+            lambda *a, **k: {
+                "results": [
+                    {
+                        "lcsc": "C123",
+                        "datasheet": "https://www.lcsc.com/datasheet/C123.pdf",
+                    }
+                ]
+            },
+        )
+        monkeypatch.setattr(
+            importer,
+            "search_components_cn",
+            lambda *a, **k: {
+                "results": [
+                    {
+                        "lcsc": "C123",
+                        "datasheet": "https://atta.szlcsc.com/upload/public/pdf/source/20151126/1457707596805.pdf",
+                    }
+                ]
+            },
+        )
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            save_datasheet=True,
+            log=lambda msg: None,
+        )
+
+        ds_path = tmp_path / "TestLib.datasheets" / "TestPart.pdf"
+        assert ds_path.read_bytes() == b"%PDF-1.3\ncn fixture"
+        assert attempts == [
+            "https://www.lcsc.com/datasheet/C123.pdf",
+            "https://atta.szlcsc.com/upload/public/pdf/source/20151126/1457707596805.pdf",
+        ]
+        assert result["datasheet_path"] == str(ds_path)
 
     def test_import_to_library_global(self, tmp_path, monkeypatch):
         """Test import to global library."""

@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import os
+import urllib.parse
 from typing import Callable
 
-from .easyeda.api import download_datasheet, download_step, download_wrl_source, fetch_full_component
+from .easyeda.api import (
+    download_datasheet,
+    download_step,
+    download_wrl_source,
+    fetch_full_component,
+    search_components,
+    search_components_cn,
+)
 from .easyeda.parser import parse_footprint_shapes, parse_symbol_shapes
 from .kicad.footprint_writer import write_footprint
 from .kicad.library import (
@@ -121,10 +129,54 @@ def _datasheet_ref(
     return f"${{KIPRJMOD}}/{lib_name}.datasheets/{filename}"
 
 
+def _looks_like_pdf_url(url: str) -> bool:
+    """Return True when a URL path looks like a direct PDF."""
+    try:
+        return urllib.parse.urlparse(url).path.lower().endswith(".pdf")
+    except (TypeError, ValueError):
+        return False
+
+
+def _datasheet_candidate_urls(lcsc_id: str, primary_url: str) -> list[str]:
+    """Return direct datasheet URL candidates, falling back through search APIs."""
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: str) -> None:
+        if url and url not in seen:
+            seen.add(url)
+            candidates.append(url)
+
+    if _looks_like_pdf_url(primary_url):
+        add(primary_url)
+
+    for search_fn in (search_components, search_components_cn):
+        try:
+            result = search_fn(lcsc_id, page_size=5)
+        except Exception:
+            continue
+        fallback_url = ""
+        for item in result.get("results", []):
+            datasheet = item.get("datasheet", "")
+            if not datasheet:
+                continue
+            if item.get("lcsc", "").upper() == lcsc_id.upper():
+                add(datasheet)
+            elif not fallback_url:
+                fallback_url = datasheet
+        add(fallback_url)
+
+    if primary_url and not _looks_like_pdf_url(primary_url):
+        add(primary_url)
+
+    return candidates
+
+
 def _save_datasheet(
     lib_dir: str,
     lib_name: str,
     name: str,
+    lcsc_id: str,
     datasheet_url: str,
     overwrite: bool,
     use_global: bool,
@@ -152,8 +204,20 @@ def _save_datasheet(
         log(f"  Datasheet skipped: {dest_path} (exists, overwrite=off)")
         return ref, dest_path
 
+    urls = _datasheet_candidate_urls(lcsc_id, datasheet_url)
+    if not urls:
+        log("No datasheet URL available")
+        return "", ""
+
     log("Downloading datasheet...")
-    data = download_datasheet(datasheet_url)
+    data = None
+    for idx, url in enumerate(urls):
+        if idx > 0:
+            log("  Datasheet retrying alternate URL...")
+        data = download_datasheet(url)
+        if data:
+            break
+
     if not data:
         if os.path.exists(dest_path):
             log(f"  Datasheet download failed; keeping existing file: {dest_path}")
@@ -304,6 +368,7 @@ def import_component(
             lib_dir,
             lib_name,
             name,
+            lcsc_id,
             comp.get("datasheet", ""),
             overwrite,
             use_global,
