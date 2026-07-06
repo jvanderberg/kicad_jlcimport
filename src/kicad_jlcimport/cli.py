@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """CLI tool for testing JLCImport search and import."""
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -101,6 +103,30 @@ def _resolve_project_dir(path: str) -> str:
     return abs_path
 
 
+def _find_exact_search_result(lcsc_id: str) -> dict | None:
+    """Return catalog metadata for *lcsc_id* when search has an exact match."""
+    best_match = None
+    for search_fn in (search_components, search_components_cn):
+        try:
+            result = search_fn(lcsc_id, page_size=10)
+        except APIError:
+            continue
+        for item in result.get("results", []):
+            if str(item.get("lcsc", "")).upper() != lcsc_id:
+                continue
+            if item.get("datasheet"):
+                return item
+            if best_match is None:
+                best_match = item
+    return best_match
+
+
+def _catalog_metadata_for_import(args, lcsc_id: str) -> dict | None:
+    if not getattr(args, "catalog_metadata", False):
+        return None
+    return _find_exact_search_result(lcsc_id)
+
+
 def cmd_import(args):
     """Import a component and show/save the output."""
     try:
@@ -121,6 +147,7 @@ def cmd_import(args):
             if not os.path.isdir(lib_dir):
                 print(f"  Error: project path does not exist or is not a directory: {args.project}")
                 return
+            search_result = _catalog_metadata_for_import(args, lcsc_id)
             result = import_component(
                 lcsc_id,
                 lib_dir,
@@ -129,6 +156,7 @@ def cmd_import(args):
                 use_global=False,
                 log=log,
                 kicad_version=kicad_version,
+                search_result=search_result,
             )
         elif getattr(args, "global_dest", False) or getattr(args, "global_lib_dir", None):
             if getattr(args, "global_lib_dir", None):
@@ -138,6 +166,7 @@ def cmd_import(args):
                     return
             else:
                 lib_dir = get_global_lib_dir(kicad_version)
+            search_result = _catalog_metadata_for_import(args, lcsc_id)
             result = import_component(
                 lcsc_id,
                 lib_dir,
@@ -146,8 +175,10 @@ def cmd_import(args):
                 use_global=True,
                 log=log,
                 kicad_version=kicad_version,
+                search_result=search_result,
             )
         elif args.output:
+            search_result = _catalog_metadata_for_import(args, lcsc_id)
             result = import_component(
                 lcsc_id,
                 args.output,
@@ -155,11 +186,13 @@ def cmd_import(args):
                 export_only=True,
                 log=log,
                 kicad_version=kicad_version,
+                search_result=search_result,
             )
         else:
             # No destination: fetch, parse, and show summary without writing
             import tempfile
 
+            search_result = _catalog_metadata_for_import(args, lcsc_id)
             with tempfile.TemporaryDirectory() as tmp_dir:
                 result = import_component(
                     lcsc_id,
@@ -168,6 +201,7 @@ def cmd_import(args):
                     export_only=True,
                     log=log,
                     kicad_version=kicad_version,
+                    search_result=search_result,
                 )
             if not args.show:
                 fp_content = result["fp_content"]
@@ -278,7 +312,7 @@ examples:
         default=DEFAULT_KICAD_VERSION,
         help=f"Target KiCad version (default: {DEFAULT_KICAD_VERSION})",
     )
-    ip.set_defaults(func=cmd_import)
+    ip.set_defaults(func=cmd_import, catalog_metadata=True)
 
     args = parser.parse_args()
     if args.insecure:
