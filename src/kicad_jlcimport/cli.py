@@ -19,6 +19,12 @@ from kicad_jlcimport.importer import import_component
 from kicad_jlcimport.kicad.library import get_global_lib_dir, load_config
 from kicad_jlcimport.kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
 
+# Number of results to request when a type/stock filter is active.
+_FILTERED_FETCH_SIZE = 100
+
+# CLI type labels -> JLCPCB ``componentLibraryType`` request values.
+_API_LIBRARY_TYPES = {"Basic": "base", "Extended": "expand"}
+
 
 def cmd_search(args):
     """Search for components."""
@@ -29,9 +35,22 @@ def cmd_search(args):
         type_filter = "Extended"
 
     region = getattr(args, "region", "global")
-    search_fn = search_components_cn if region == "cn" else search_components
+    min_stock = args.min_stock
+
+    # Type and stock filters are applied to the fetched page, so fetching only
+    # ``count`` results would drop matching parts that rank further down (Basic
+    # parts are a tiny fraction of most result sets).  Over-fetch when filtering
+    # and trim to ``count`` afterwards; the global API can also filter by type
+    # server-side.
+    filtering = bool(type_filter) or min_stock > 0
+    fetch_size = max(args.count, _FILTERED_FETCH_SIZE) if filtering else args.count
     try:
-        result = search_fn(args.keyword, page_size=args.count)
+        if region == "cn":
+            result = search_components_cn(args.keyword, page_size=fetch_size)
+        else:
+            result = search_components(
+                args.keyword, page_size=fetch_size, part_type=_API_LIBRARY_TYPES.get(type_filter)
+            )
     except SSLCertError as e:
         print(f"  Error: {e}")
         print("  Use --insecure to bypass certificate verification.")
@@ -41,8 +60,8 @@ def cmd_search(args):
     results = result["results"]
 
     results = filter_by_type(results, type_filter)
-    min_stock = args.min_stock
     results = filter_by_min_stock(results, min_stock)
+    results = results[: args.count]
 
     results.sort(key=lambda r: r["stock"] or 0, reverse=True)
 

@@ -298,6 +298,94 @@ class TestCmdSearch:
         assert "N/A" in out  # Stock is N/A
 
 
+def _part(lcsc, part_type, stock):
+    return {
+        "lcsc": lcsc,
+        "type": part_type,
+        "stock": stock,
+        "price": 0.01,
+        "model": lcsc + "-M",
+        "package": "0603",
+        "brand": "ACME",
+        "description": "desc",
+    }
+
+
+class TestCmdSearchFiltering:
+    """Regression tests: filters must not be applied to only the first ``count`` hits."""
+
+    @staticmethod
+    def _args(**kw):
+        base = {"keyword": "1k 0603", "count": 3, "type": "both", "min_stock": 0, "csv": True, "region": "global"}
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    @staticmethod
+    def _lcscs(out):
+        return [line.split(",")[0] for line in out.strip().splitlines()[1:]]
+
+    def test_basic_filter_overfetches_and_requests_server_side_type(self, monkeypatch, capsys):
+        calls = []
+
+        def fake_search(keyword, page_size=10, part_type=None, **_):
+            calls.append((page_size, part_type))
+            return {"total": 1, "results": [_part("C21190", "Basic", 100)]}
+
+        monkeypatch.setattr(cli, "search_components", fake_search)
+        cli.cmd_search(self._args(type="basic", count=6))
+        assert calls == [(cli._FILTERED_FETCH_SIZE, "base")]
+        assert self._lcscs(capsys.readouterr().out) == ["C21190"]
+
+    def test_extended_filter_requests_expand(self, monkeypatch, capsys):
+        calls = []
+
+        def fake_search(keyword, page_size=10, part_type=None, **_):
+            calls.append(part_type)
+            return {"total": 0, "results": []}
+
+        monkeypatch.setattr(cli, "search_components", fake_search)
+        cli.cmd_search(self._args(type="extended"))
+        assert calls == ["expand"]
+
+    def test_cn_basic_part_beyond_count_is_found(self, monkeypatch, capsys):
+        """The Basic part ranks 11th: fetching only ``count`` results dropped it."""
+        extended = [_part(f"C{i}", "Extended", 1000) for i in range(10)]
+        results = extended + [_part("C21190", "Basic", 19784564)]
+        sizes = []
+
+        def fake_cn(keyword, page_size=50, **_):
+            sizes.append(page_size)
+            return {"total": 1500, "results": results[:page_size]}
+
+        monkeypatch.setattr(cli, "search_components_cn", fake_cn)
+        cli.cmd_search(self._args(region="cn", type="basic", count=10, min_stock=1))
+        assert sizes == [cli._FILTERED_FETCH_SIZE]
+        assert self._lcscs(capsys.readouterr().out) == ["C21190"]
+
+    def test_min_stock_beyond_count_is_found_and_trimmed(self, monkeypatch, capsys):
+        """min-stock alone: well-stocked parts past the first ``count`` hits are kept,
+        and output is still capped at ``count``."""
+        results = [_part(f"C{i}", "Extended", 5) for i in range(5)]
+        results += [_part(f"C{100 + i}", "Extended", 50000 + i) for i in range(5)]
+
+        monkeypatch.setattr(
+            cli, "search_components", lambda keyword, page_size=10, **_: {"total": 10, "results": results[:page_size]}
+        )
+        cli.cmd_search(self._args(min_stock=10000, count=3))
+        assert self._lcscs(capsys.readouterr().out) == ["C102", "C101", "C100"]
+
+    def test_unfiltered_search_fetches_only_count(self, monkeypatch, capsys):
+        sizes = []
+
+        def fake_search(keyword, page_size=10, part_type=None, **_):
+            sizes.append((page_size, part_type))
+            return {"total": 0, "results": []}
+
+        monkeypatch.setattr(cli, "search_components", fake_search)
+        cli.cmd_search(self._args(count=8, min_stock=0))
+        assert sizes == [(8, None)]
+
+
 class TestCmdImport:
     """Tests for cmd_import function."""
 

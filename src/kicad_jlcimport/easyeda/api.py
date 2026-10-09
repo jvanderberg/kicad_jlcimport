@@ -510,6 +510,20 @@ def _extract_cn_datasheet(pv: dict) -> str:
     return ""
 
 
+def _cn_stock(record: dict, pv: dict) -> int:
+    """Return the stock count to report for a SZLCSC search record.
+
+    ``productVO.stockNumber`` is only the LCSC mall warehouse stock.  JLCPCB
+    Basic parts are held in the JLC SMT warehouse, so their mall stock is
+    usually 0 even when millions are available for assembly.  The record-level
+    ``smtStockNumber`` is the assembly stock (the same figure the global JLCPCB
+    API reports as ``stockCount``), so prefer whichever is larger.
+    """
+    mall = pv.get("stockNumber") or 0
+    smt = record.get("smtStockNumber") or 0
+    return max(mall, smt)
+
+
 def search_components_cn(keyword: str, page: int = 1, page_size: int = 50) -> Dict[str, Any]:
     """Search the domestic Chinese SZLCSC (立创商城) parts library.
 
@@ -595,7 +609,7 @@ def search_components_cn(keyword: str, page: int = 1, page_size: int = 50) -> Di
                 "brand": pv.get("productGradePlateName", ""),
                 "package": pv.get("encapsulationModel", ""),
                 "category": pv.get("productType", ""),
-                "stock": pv.get("stockNumber", 0),
+                "stock": _cn_stock(item, pv),
                 "type": part_type,
                 "price": unit_price,
                 "currency": "¥",

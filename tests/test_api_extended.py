@@ -417,6 +417,60 @@ class TestSearchComponents:
             assert result["results"] == []
 
 
+class TestSearchComponentsCn:
+    """Tests for search_components_cn (SZLCSC) result mapping."""
+
+    @staticmethod
+    def _response(records):
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps(
+            {"result": {"searchResult": {"totalCount": len(records), "productRecordList": records}}}
+        ).encode()
+        return mock_response
+
+    def test_basic_part_uses_smt_stock_when_mall_stock_is_zero(self):
+        """Regression: Basic parts have 0 mall stock but millions in JLC's SMT
+        warehouse.  Reporting mall stock made every Basic part fail the default
+        ``--min-stock 1`` filter, so ``search -t basic`` returned nothing."""
+        records = [
+            {
+                "productVO": {
+                    "productCode": "C21190",
+                    "productModel": "0603WAF1001T5E",
+                    "smtLabel": "SMT基础库",
+                    "stockNumber": 0,
+                },
+                "smtStockNumber": 19784564,
+            },
+            {
+                "productVO": {
+                    "productCode": "C22548",
+                    "productModel": "RC0603FR-071KL",
+                    "smtLabel": "SMT扩展库",
+                    "stockNumber": 10060454,
+                },
+                "smtStockNumber": 10789554,
+            },
+        ]
+        with patch.object(api, "_urlopen", return_value=self._response(records)):
+            result = api.search_components_cn("1k 0603", page_size=10)
+        by_code = {r["lcsc"]: r for r in result["results"]}
+        assert by_code["C21190"]["type"] == "Basic"
+        assert by_code["C21190"]["stock"] == 19784564
+        assert by_code["C22548"]["type"] == "Extended"
+        assert by_code["C22548"]["stock"] == 10789554
+        assert api.filter_by_min_stock(api.filter_by_type(result["results"], "Basic"), 1)
+
+    def test_falls_back_to_mall_stock_without_smt_stock(self):
+        records = [{"productVO": {"productCode": "C1", "smtLabel": "", "stockNumber": 42}}]
+        with patch.object(api, "_urlopen", return_value=self._response(records)):
+            result = api.search_components_cn("x", page_size=10)
+        assert result["results"][0]["stock"] == 42
+        assert result["results"][0]["type"] == "Extended"
+
+
 class TestDownloadStep:
     """Tests for download_step function."""
 
