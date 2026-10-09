@@ -1053,3 +1053,50 @@ class TestFetchFullComponent:
             with mock.patch.object(api, "fetch_component_data", side_effect=[fp_data, sym_data]):
                 result = api.fetch_full_component("C1")
                 assert result["datasheet"] == ""
+
+    def test_ignores_plain_footprint_product_page_link(self):
+        uuids = [{"component_uuid": "sym1"}, {"component_uuid": "fp1"}]
+        sym_data = {
+            "title": "TPS563201DDCR",
+            "dataStr": {
+                "head": {
+                    "c_para": {
+                        "pre": "U?",
+                        "Supplier Part": "C116592",
+                        "Manufacturer Part": "TPS563201DDCR",
+                    }
+                }
+            },
+        }
+        fp_data = {
+            "dataStr": {
+                "head": {
+                    "c_para": {
+                        "pre": "U?",
+                        "link": "https://item.szlcsc.com/169042.html",
+                    }
+                }
+            }
+        }
+        with mock.patch.object(api, "fetch_component_uuids", return_value=uuids):
+            with mock.patch.object(api, "fetch_component_data", side_effect=[fp_data, sym_data]):
+                result = api.fetch_full_component("C116592")
+                assert result["datasheet"] == ""
+
+    def test_uses_datasheet_like_footprint_link(self):
+        uuids = [{"component_uuid": "sym1"}, {"component_uuid": "fp1"}]
+        sym_data = {"dataStr": {"head": {"c_para": {"pre": "U?"}}}}
+        fp_data = {
+            "dataStr": {
+                "head": {
+                    "c_para": {
+                        "pre": "U?",
+                        "link": "https://item.szlcsc.com/datasheet/TPS563201DDCR/117846.html",
+                    }
+                }
+            }
+        }
+        with mock.patch.object(api, "fetch_component_uuids", return_value=uuids):
+            with mock.patch.object(api, "fetch_component_data", side_effect=[fp_data, sym_data]):
+                result = api.fetch_full_component("C116592")
+                assert result["datasheet"] == "https://item.szlcsc.com/datasheet/TPS563201DDCR/117846.html"
