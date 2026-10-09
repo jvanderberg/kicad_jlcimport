@@ -2,7 +2,7 @@
 
 import re
 
-from kicad_jlcimport.easyeda.ee_types import EECircle, EEPin, EEPolyline, EERectangle, EESymbol
+from kicad_jlcimport.easyeda.ee_types import EEArc, EECircle, EEPin, EEPolyline, EERectangle, EESymbol
 from kicad_jlcimport.kicad.symbol_writer import (
     _estimate_bottom,
     _estimate_top,
@@ -306,6 +306,29 @@ class TestEstimateTopBottom:
         top = _estimate_top(sym)
         assert top == 10
 
+    def test_polyline_only_symbol_uses_graphics(self):
+        """Regression: a diode drawn only with polylines (pins at y=0) put the
+        Reference at y=2, on top of the body."""
+        pins = [
+            EEPin(number="1", name="K", x=-5.08, y=0, rotation=0, length=2.54, electrical_type="passive"),
+            EEPin(number="2", name="A", x=5.08, y=0, rotation=180, length=2.54, electrical_type="passive"),
+        ]
+        body = EEPolyline(points=[(-1.27, 2.54), (-1.27, -2.54), (1.27, 0), (-1.27, 2.54)], closed=True)
+        sym = _make_symbol(pins=pins, polylines=[body])
+        assert _estimate_top(sym) == 2.54
+        assert _estimate_bottom(sym) == -2.54
+        result = write_symbol(sym, "D1", prefix="D")
+        ref_y = float(re.search(r'"Reference" "D" \(at \S+ (\S+)', result).group(1))
+        val_y = float(re.search(r'"Value" "D1" \(at \S+ (\S+)', result).group(1))
+        assert ref_y > 2.54 + 1
+        assert val_y < -2.54 - 1
+
+    def test_circles_and_arcs_extend_bounds(self):
+        sym = _make_symbol(circles=[EECircle(cx=0, cy=1, radius=3, width=0.254, layer="")])
+        sym.arcs = [EEArc(width=0.254, layer="", start=(-2, 0), end=(2, 0), rx=2, ry=2, large_arc=0, sweep=1)]
+        assert _estimate_top(sym) == 4
+        assert _estimate_bottom(sym) <= -2
+
     def test_defaults_when_empty(self):
         sym = _make_symbol()
         assert _estimate_top(sym) == 5.0
@@ -330,3 +353,85 @@ class TestWriteSymbolLibraryVersions:
     def test_default_is_v9(self):
         result = write_symbol_library([])
         assert "(version 20241209)" in result
+
+
+def _pin(number, name, etype="input", name_visible=True, number_visible=True, x=0.0):
+    return EEPin(
+        number=number,
+        name=name,
+        x=x,
+        y=0,
+        rotation=0,
+        length=2.54,
+        electrical_type=etype,
+        name_visible=name_visible,
+        number_visible=number_visible,
+    )
+
+
+class TestDiscretePinStyle:
+    """Regression: imported discretes drew pin names over the body (KiCad ignores
+    per-pin name ``hide``) and carried input/unspecified pins that trip ERC."""
+
+    def test_resistor_hides_names_and_numbers_and_uses_passive(self):
+        sym = _make_symbol(pins=[_pin("1", "1"), _pin("2", "2", x=5.08)])
+        result = write_symbol(sym, "R0603", prefix="R")
+        assert "(pin_numbers hide)" in result
+        assert "(pin_names (offset 1.016) hide)" in result
+        assert "(pin passive line" in result
+        assert "(pin input line" not in result
+
+    def test_capacitor_unspecified_pins_become_passive(self):
+        sym = _make_symbol(pins=[_pin("1", "1", "unspecified"), _pin("2", "2", "unspecified", x=5.08)])
+        result = write_symbol(sym, "C0603", prefix="C")
+        assert result.count("(pin passive line") == 2
+        assert "(pin_numbers hide)" in result
+
+    def test_mosfet_hides_names_keeps_visible_numbers(self):
+        pins = [_pin("1", "G", "unspecified"), _pin("2", "S", "unspecified"), _pin("3", "D", "unspecified")]
+        result = write_symbol(_make_symbol(pins=pins), "2N7002", prefix="Q")
+        assert "(pin_names (offset 1.016) hide)" in result
+        assert "(pin_numbers hide)" not in result
+        assert result.count("(pin passive line") == 3
+
+    def test_diode_two_pins_keeps_numbers_unless_source_hid_them(self):
+        pins = [_pin("1", "K"), _pin("2", "A", x=5.08)]
+        result = write_symbol(_make_symbol(pins=pins), "D1", prefix="D")
+        assert "(pin_names (offset 1.016) hide)" in result
+        assert "(pin_numbers hide)" not in result
+
+    def test_all_numbers_hidden_in_source_hides_symbol_numbers(self):
+        pins = [_pin("1", "K", number_visible=False), _pin("2", "A", number_visible=False, x=5.08)]
+        result = write_symbol(_make_symbol(pins=pins), "D1", prefix="D")
+        assert "(pin_numbers hide)" in result
+
+    def test_ic_keeps_pin_types_and_visible_names(self):
+        pins = [_pin("1", "VIN", "power_in"), _pin("2", "EN", "input"), _pin("3", "OUT", "output")]
+        result = write_symbol(_make_symbol(pins=pins), "LDO", prefix="U")
+        assert "(pin_names (offset 1.016))" in result
+        assert "(pin_numbers hide)" not in result
+        assert "(pin power_in line" in result
+        assert "(pin input line" in result
+        assert "(pin output line" in result
+
+    def test_ic_with_all_names_hidden_in_source_hides_symbol_names(self):
+        pins = [_pin("1", "IN", name_visible=False), _pin("2", "OUT", "output", name_visible=False)]
+        result = write_symbol(_make_symbol(pins=pins), "U1", prefix="U")
+        assert "(pin_names (offset 1.016) hide)" in result
+        assert "(pin input line" in result
+
+    def test_ic_with_some_names_hidden_keeps_names(self):
+        pins = [_pin("1", "IN", name_visible=False), _pin("2", "OUT", "output")]
+        result = write_symbol(_make_symbol(pins=pins), "U1", prefix="U")
+        assert "(pin_names (offset 1.016))" in result
+
+    def test_prefix_match_is_case_insensitive(self):
+        sym = _make_symbol(pins=[_pin("1", "+"), _pin("2", "-", x=5.08)])
+        result = write_symbol(sym, "LED1", prefix="led")
+        assert "(pin_names (offset 1.016) hide)" in result
+        assert result.count("(pin passive line") == 2
+
+    def test_no_pins_emits_default_pin_names(self):
+        result = write_symbol(_make_symbol(), "Empty", prefix="R")
+        assert "(pin_names (offset 1.016))" in result
+        assert "(pin_numbers hide)" not in result

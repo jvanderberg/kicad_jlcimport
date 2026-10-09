@@ -1028,28 +1028,30 @@ class TestFetchFullComponent:
                 assert result["prefix"] == "R"
                 assert result["manufacturer"] == "Yageo"
                 assert result["uuid_3d"] == "3d-model-uuid"
-                assert result["datasheet"] == "https://example.com/ds.pdf"
+                assert result["datasheet"] == "https://www.lcsc.com/datasheet/C12345.pdf"
                 assert result["footprint_uuid"] == "fp1"
                 assert result["symbol_uuids"] == ["sym1"]
 
-    def test_datasheet_protocol_relative(self):
+    def test_datasheet_ignores_footprint_link(self):
+        """Regression: the shared footprint's ``link`` belongs to some other part
+        (e.g. ``https://item.szlcsc.com/362304.html``) and must not be used."""
         uuids = [{"component_uuid": "sym1"}, {"component_uuid": "fp1"}]
-        sym_data = {
-            "dataStr": {"head": {"c_para": {"pre": "U?", "link": "//example.com/ds.pdf"}}},
-        }
-        fp_data = {"dataStr": {"head": {"c_para": {}}}}
+        sym_data = {"dataStr": {"head": {"c_para": {"pre": "R?"}}}}
+        fp_data = {"dataStr": {"head": {"c_para": {"link": "https://item.szlcsc.com/362304.html"}}}}
         with mock.patch.object(api, "fetch_component_uuids", return_value=uuids):
             with mock.patch.object(api, "fetch_component_data", side_effect=[fp_data, sym_data]):
-                result = api.fetch_full_component("C1")
-                assert result["datasheet"] == "https://example.com/ds.pdf"
+                result = api.fetch_full_component("C1588")
+                assert result["datasheet"] == "https://www.lcsc.com/datasheet/C1588.pdf"
 
-    def test_datasheet_invalid_url(self):
+    def test_datasheet_ignores_symbol_link(self):
         uuids = [{"component_uuid": "sym1"}, {"component_uuid": "fp1"}]
         sym_data = {
-            "dataStr": {"head": {"c_para": {"pre": "U?", "link": "not-a-url"}}},
+            "dataStr": {
+                "head": {"c_para": {"pre": "Q?", "link": "https://www.diodes.com/assets/Package-Files/SOT23.pdf"}}
+            },
         }
         fp_data = {"dataStr": {"head": {"c_para": {}}}}
         with mock.patch.object(api, "fetch_component_uuids", return_value=uuids):
             with mock.patch.object(api, "fetch_component_data", side_effect=[fp_data, sym_data]):
-                result = api.fetch_full_component("C1")
-                assert result["datasheet"] == ""
+                result = api.fetch_full_component("C8545")
+                assert result["datasheet"] == "https://www.lcsc.com/datasheet/C8545.pdf"

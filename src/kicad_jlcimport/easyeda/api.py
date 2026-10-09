@@ -510,6 +510,20 @@ def _extract_cn_datasheet(pv: dict) -> str:
     return ""
 
 
+def _cn_stock(record: dict, pv: dict) -> int:
+    """Return the stock count to report for a SZLCSC search record.
+
+    ``productVO.stockNumber`` is only the LCSC mall warehouse stock.  JLCPCB
+    Basic parts are held in the JLC SMT warehouse, so their mall stock is
+    usually 0 even when millions are available for assembly.  The record-level
+    ``smtStockNumber`` is the assembly stock (the same figure the global JLCPCB
+    API reports as ``stockCount``), so prefer whichever is larger.
+    """
+    mall = pv.get("stockNumber") or 0
+    smt = record.get("smtStockNumber") or 0
+    return max(mall, smt)
+
+
 def search_components_cn(keyword: str, page: int = 1, page_size: int = 50) -> Dict[str, Any]:
     """Search the domestic Chinese SZLCSC (立创商城) parts library.
 
@@ -595,7 +609,7 @@ def search_components_cn(keyword: str, page: int = 1, page_size: int = 50) -> Di
                 "brand": pv.get("productGradePlateName", ""),
                 "package": pv.get("encapsulationModel", ""),
                 "category": pv.get("productType", ""),
-                "stock": pv.get("stockNumber", 0),
+                "stock": _cn_stock(item, pv),
                 "type": part_type,
                 "price": unit_price,
                 "currency": "¥",
@@ -771,6 +785,14 @@ def _strip_cjk_parens(text: str) -> str:
     return re.sub(r"\([^\x00-\x7F]+\)", "", text).strip()
 
 
+LCSC_DATASHEET_URL = "https://www.lcsc.com/datasheet/{lcsc_id}.pdf"
+
+
+def lcsc_datasheet_url(lcsc_id: str) -> str:
+    """Return the LCSC datasheet URL for a part number (e.g. ``C8545``)."""
+    return LCSC_DATASHEET_URL.format(lcsc_id=lcsc_id)
+
+
 def fetch_full_component(lcsc_id: str) -> Dict[str, Any]:
     """High-level: fetch all data needed for a component.
 
@@ -811,9 +833,12 @@ def fetch_full_component(lcsc_id: str) -> Dict[str, Any]:
     if prefix.endswith("?"):
         prefix = prefix[:-1]
 
-    datasheet = c_para.get("link", fp_c_para.get("link", ""))
-    if datasheet and not datasheet.startswith("http"):
-        datasheet = "https:" + datasheet if datasheet.startswith("//") else ""
+    # The EasyEDA ``c_para.link`` is not a reliable datasheet: symbols rarely
+    # set it, and the footprint fallback belongs to whichever part first
+    # published that (shared) footprint -- e.g. a package drawing or another
+    # part's Chinese szlcsc.com product page.  LCSC serves the part's own
+    # English datasheet at a URL derived from the part number.
+    datasheet = lcsc_datasheet_url(lcsc_id)
 
     # 3D model UUID from footprint head
     uuid_3d = fp_data.get("dataStr", {}).get("head", {}).get("uuid_3d", "")
