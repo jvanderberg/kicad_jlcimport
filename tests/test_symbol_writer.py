@@ -2,7 +2,7 @@
 
 import re
 
-from kicad_jlcimport.easyeda.ee_types import EECircle, EEPin, EEPolyline, EERectangle, EESymbol
+from kicad_jlcimport.easyeda.ee_types import EEArc, EECircle, EEPin, EEPolyline, EERectangle, EESymbol
 from kicad_jlcimport.kicad.symbol_writer import (
     _estimate_bottom,
     _estimate_top,
@@ -305,6 +305,29 @@ class TestEstimateTopBottom:
         )
         top = _estimate_top(sym)
         assert top == 10
+
+    def test_polyline_only_symbol_uses_graphics(self):
+        """Regression: a diode drawn only with polylines (pins at y=0) put the
+        Reference at y=2, on top of the body."""
+        pins = [
+            EEPin(number="1", name="K", x=-5.08, y=0, rotation=0, length=2.54, electrical_type="passive"),
+            EEPin(number="2", name="A", x=5.08, y=0, rotation=180, length=2.54, electrical_type="passive"),
+        ]
+        body = EEPolyline(points=[(-1.27, 2.54), (-1.27, -2.54), (1.27, 0), (-1.27, 2.54)], closed=True)
+        sym = _make_symbol(pins=pins, polylines=[body])
+        assert _estimate_top(sym) == 2.54
+        assert _estimate_bottom(sym) == -2.54
+        result = write_symbol(sym, "D1", prefix="D")
+        ref_y = float(re.search(r'"Reference" "D" \(at \S+ (\S+)', result).group(1))
+        val_y = float(re.search(r'"Value" "D1" \(at \S+ (\S+)', result).group(1))
+        assert ref_y > 2.54 + 1
+        assert val_y < -2.54 - 1
+
+    def test_circles_and_arcs_extend_bounds(self):
+        sym = _make_symbol(circles=[EECircle(cx=0, cy=1, radius=3, width=0.254, layer="")])
+        sym.arcs = [EEArc(width=0.254, layer="", start=(-2, 0), end=(2, 0), rx=2, ry=2, large_arc=0, sweep=1)]
+        assert _estimate_top(sym) == 4
+        assert _estimate_bottom(sym) <= -2
 
     def test_defaults_when_empty(self):
         sym = _make_symbol()

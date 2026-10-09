@@ -297,21 +297,35 @@ def write_symbol_library(
     return "\n".join(lines) + "\n"
 
 
-def _estimate_top(symbol: EESymbol) -> float:
-    """Estimate the top Y coordinate of the symbol."""
-    ys = []
+def _graphic_ys(symbol: EESymbol) -> List[float]:
+    """Y coordinates spanned by the symbol's pins and body graphics.
+
+    Polylines, circles and arcs must be included: discretes (diodes, LEDs,
+    capacitors) are drawn entirely with them, and ignoring them placed the
+    Reference/Value text on top of the body.
+    """
+    ys: List[float] = []
     for rect in symbol.rectangles:
         ys.extend([rect.y, rect.y + rect.height])
     for pin in symbol.pins:
         ys.append(pin.y)
+    for poly in symbol.polylines:
+        ys.extend(py for _, py in poly.points)
+    for circle in symbol.circles:
+        ys.extend([circle.cy - circle.radius, circle.cy + circle.radius])
+    for arc in symbol.arcs:
+        mid = compute_arc_midpoint(arc.start, arc.end, arc.rx, arc.ry, arc.large_arc, arc.sweep)
+        ys.extend([arc.start[1], arc.end[1], mid[1]])
+    return ys
+
+
+def _estimate_top(symbol: EESymbol) -> float:
+    """Estimate the top Y coordinate of the symbol."""
+    ys = _graphic_ys(symbol)
     return max(ys) if ys else 5.0
 
 
 def _estimate_bottom(symbol: EESymbol) -> float:
     """Estimate the bottom Y coordinate of the symbol."""
-    ys = []
-    for rect in symbol.rectangles:
-        ys.extend([rect.y, rect.y + rect.height])
-    for pin in symbol.pins:
-        ys.append(pin.y)
+    ys = _graphic_ys(symbol)
     return min(ys) if ys else -5.0
