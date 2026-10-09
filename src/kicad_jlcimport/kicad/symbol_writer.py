@@ -10,6 +10,40 @@ from ._format import fmt_float as _fmt
 from ._format import fmt_geometry as _geom
 from .version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version
 
+# Reference prefixes of discrete parts.  KiCad's stock Device / Transistor
+# symbols for these use ``passive`` pins and hide pin names (G/S/D, A/K, 1/2
+# would otherwise be drawn over the body graphics).
+_DISCRETE_PREFIXES = frozenset({"R", "C", "L", "FB", "F", "D", "LED", "Q"})
+
+# Non-polarized two-terminal passives whose pin numbers are hidden in KiCad's
+# stock symbols (R, C, L, ferrite bead, fuse).
+_TWO_PIN_PASSIVE_PREFIXES = frozenset({"R", "C", "L", "FB", "F"})
+
+
+def _is_discrete(prefix: str) -> bool:
+    return prefix.strip().upper() in _DISCRETE_PREFIXES
+
+
+def _hide_pin_names(symbol: EESymbol, prefix: str) -> bool:
+    """Whether to hide pin names for the whole symbol.
+
+    KiCad has no per-pin name visibility (a ``hide`` on a pin's name effects is
+    ignored), so EasyEDA's per-pin hidden flags only take effect via the
+    symbol-level ``pin_names`` setting.
+    """
+    if not symbol.pins:
+        return False
+    return _is_discrete(prefix) or all(not p.name_visible for p in symbol.pins)
+
+
+def _hide_pin_numbers(symbol: EESymbol, prefix: str) -> bool:
+    """Whether to hide pin numbers for the whole symbol (see _hide_pin_names)."""
+    if not symbol.pins:
+        return False
+    if len(symbol.pins) == 2 and prefix.strip().upper() in _TWO_PIN_PASSIVE_PREFIXES:
+        return True
+    return all(not p.number_visible for p in symbol.pins)
+
 
 def _rounded_rect_points(x1: float, y1: float, x2: float, y2: float, r: float) -> List[tuple]:
     """Generate points for a rounded rectangle as a closed polyline.
@@ -82,7 +116,12 @@ def write_symbol(
     if unit_index == 0:
         # Outer symbol wrapper
         lines.append(f'  (symbol "{name}"')
-        lines.append("    (pin_names (offset 1.016))")
+        if _hide_pin_numbers(symbol, prefix):
+            lines.append("    (pin_numbers hide)")
+        if _hide_pin_names(symbol, prefix):
+            lines.append("    (pin_names (offset 1.016) hide)")
+        else:
+            lines.append("    (pin_names (offset 1.016))")
         lines.append("    (in_bom yes)")
         lines.append("    (on_board yes)")
 
@@ -203,9 +242,11 @@ def write_symbol(
         lines.append(f"        (effects (font (size {_geom(text.font_size)} {_geom(text.font_size)})))")
         lines.append("      )")
 
-    # Pins
+    # Pins.  EasyEDA discretes usually carry "input" or "unspecified" pins,
+    # which raise false ERC errors; KiCad's stock discretes are all passive.
+    discrete = _is_discrete(prefix)
     for pin in symbol.pins:
-        elec_type = pin.electrical_type
+        elec_type = "passive" if discrete else pin.electrical_type
         # Direction is encoded in the angle field of (at x y angle)
         pin_line = f"      (pin {elec_type} line (at {_geom(pin.x)} {_geom(pin.y)} {_fmt(pin.rotation)})"
         pin_line += f" (length {_geom(pin.length)})"
