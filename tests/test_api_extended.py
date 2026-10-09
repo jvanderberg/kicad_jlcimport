@@ -571,7 +571,7 @@ class TestFetchFullComponent:
                 assert result["title"] == "Test IC"
                 assert result["prefix"] == "U"
                 assert result["lcsc_id"] == "C123"
-                assert result["datasheet"] == "https://datasheet.com/test.pdf"
+                assert result["datasheet"] == "https://www.lcsc.com/datasheet/C123.pdf"
                 assert result["manufacturer"] == "ACME"
                 assert result["manufacturer_part"] == "MPN123"
                 assert result["uuid_3d"] == "3d_uuid"
@@ -603,7 +603,7 @@ class TestFetchFullComponent:
                 assert len(result["symbol_data_list"]) == 0
 
     def test_fetch_full_component_datasheet_normalization(self, monkeypatch):
-        """Test that datasheets are properly normalized to https URLs."""
+        """The datasheet is always the LCSC URL, never the EasyEDA ``link``."""
         mock_uuids = [{"component_uuid": "fp_uuid"}]
 
         mock_fp_data = {
@@ -621,8 +621,7 @@ class TestFetchFullComponent:
         with patch.object(api, "fetch_component_uuids", return_value=mock_uuids):
             with patch.object(api, "fetch_component_data", return_value=mock_fp_data):
                 result = api.fetch_full_component("C789")
-                # Links not starting with http or // should be empty
-                assert result["datasheet"] == ""
+                assert result["datasheet"] == "https://www.lcsc.com/datasheet/C789.pdf"
 
 
 class TestFetchProductImageExtended:

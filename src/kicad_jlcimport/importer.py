@@ -125,7 +125,10 @@ def import_component(
         log: Callback for status messages.
         kicad_version: Target KiCad major version (8 or 9).
         search_result: Optional search result dict with ``brand``, ``description``,
-            and ``datasheet`` fields from the JLCPCB search API.
+            and ``package`` fields from the JLCPCB search API.  Its ``datasheet``
+            is deliberately not used: the CN endpoint returns Chinese szlcsc.com
+            PDFs, so imported parts always get the LCSC datasheet URL set by
+            ``fetch_full_component``.
         confirm_metadata: Optional callback that receives a dict with ``description``,
             ``keywords``, and ``manufacturer`` keys. When a footprint match is
             available it also includes ``__package_name`` and
@@ -161,8 +164,6 @@ def import_component(
             comp["manufacturer"] = search_result["brand"]
         if search_result.get("description"):
             comp["description"] = search_result["description"]
-        if search_result.get("datasheet"):
-            comp["datasheet"] = search_result["datasheet"]
         # Some EasyEDA payloads omit package while JLC search results include it.
         if search_result.get("package") and not comp.get("package"):
             comp["package"] = search_result["package"]

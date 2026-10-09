@@ -882,11 +882,11 @@ class TestSearchResultMerge:
         assert captured_kwargs["manufacturer"] == "UMW"
         assert captured_kwargs["description"] == "LDO Voltage Regulators SOT-89-3"
 
-    def test_datasheet_overrides_cpara_link(self, tmp_path, monkeypatch):
-        """search_result datasheet should replace c_para link."""
+    def test_search_result_datasheet_does_not_override_lcsc_url(self, tmp_path, monkeypatch):
+        """The LCSC datasheet URL from fetch_full_component is kept even when the
+        search result carries one (the CN endpoint returns Chinese szlcsc PDFs)."""
         fake_comp = self._make_fake_comp()
-        # Simulate c_para link pointing to a Chinese product page
-        fake_comp["datasheet"] = "https://item.szlcsc.com/173241.html"
+        fake_comp["datasheet"] = "https://www.lcsc.com/datasheet/C123.pdf"
         fake_fp = self._make_fake_footprint()
 
         captured_kwargs = {}
@@ -907,17 +907,17 @@ class TestSearchResultMerge:
         monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
         monkeypatch.setattr(importer, "write_symbol", capture_write_symbol)
 
-        correct_datasheet = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2401161647_JST.pdf"
+        cn_datasheet = "https://atta.szlcsc.com/upload/public/pdf/source/20171228/C164913_15144413269051213916.pdf"
         importer.import_component(
             "C123",
             str(tmp_path),
             "TestLib",
             export_only=True,
             log=lambda msg: None,
-            search_result={"brand": "JST", "description": "Connector", "datasheet": correct_datasheet},
+            search_result={"brand": "JST", "description": "Connector", "datasheet": cn_datasheet},
         )
 
-        assert captured_kwargs["datasheet"] == correct_datasheet
+        assert captured_kwargs["datasheet"] == "https://www.lcsc.com/datasheet/C123.pdf"
 
     def test_none_search_result_preserves_behavior(self, tmp_path, monkeypatch):
         """search_result=None should use existing c_para manufacturer."""
