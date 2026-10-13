@@ -129,6 +129,7 @@ def cmd_import(args):
                 use_global=False,
                 log=log,
                 kicad_version=kicad_version,
+                save_datasheet=getattr(args, "save_datasheet", False),
             )
         elif getattr(args, "global_dest", False) or getattr(args, "global_lib_dir", None):
             if getattr(args, "global_lib_dir", None):
@@ -146,6 +147,7 @@ def cmd_import(args):
                 use_global=True,
                 log=log,
                 kicad_version=kicad_version,
+                save_datasheet=getattr(args, "save_datasheet", False),
             )
         elif args.output:
             result = import_component(
@@ -155,6 +157,7 @@ def cmd_import(args):
                 export_only=True,
                 log=log,
                 kicad_version=kicad_version,
+                save_datasheet=getattr(args, "save_datasheet", False),
             )
         else:
             # No destination: fetch, parse, and show summary without writing
@@ -168,6 +171,7 @@ def cmd_import(args):
                     export_only=True,
                     log=log,
                     kicad_version=kicad_version,
+                    save_datasheet=False,
                 )
             if not args.show:
                 fp_content = result["fp_content"]
@@ -265,6 +269,20 @@ examples:
     )
     ip.add_argument(
         "--overwrite", action="store_true", help="Overwrite existing symbol/footprint when importing to a library"
+    )
+    datasheet_group = ip.add_mutually_exclusive_group()
+    datasheet_group.add_argument(
+        "--save-datasheet",
+        dest="save_datasheet",
+        action="store_true",
+        default=load_config().get("save_datasheets", False),
+        help="Download the datasheet PDF into <library>.datasheets and reference the local copy",
+    )
+    datasheet_group.add_argument(
+        "--no-save-datasheet",
+        dest="save_datasheet",
+        action="store_false",
+        help="Do not download a local datasheet PDF for this import",
     )
     ip.add_argument(
         "--lib-name",

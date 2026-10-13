@@ -36,12 +36,15 @@ class TestConfigUseGlobal:
         """_DEFAULT_CONFIG should include use_global defaulting to False."""
         assert "use_global" in library._DEFAULT_CONFIG
         assert library._DEFAULT_CONFIG["use_global"] is False
+        assert "save_datasheets" in library._DEFAULT_CONFIG
+        assert library._DEFAULT_CONFIG["save_datasheets"] is False
 
     def test_load_config_returns_use_global_default(self, tmp_path, monkeypatch):
         """load_config returns use_global=False when config file is missing."""
         monkeypatch.setattr(library, "_config_path", lambda: str(tmp_path / "cfg.json"))
         config = library.load_config()
         assert config["use_global"] is False
+        assert config["save_datasheets"] is False
 
     def test_save_and_load_use_global_true(self, tmp_path, monkeypatch):
         """Saving use_global=True then loading it back preserves the value."""
@@ -59,9 +62,11 @@ class TestConfigUseGlobal:
         monkeypatch.setattr(library, "_config_path", lambda: str(cfg_file))
         config = library.load_config()
         assert config["use_global"] is False
+        assert config["save_datasheets"] is False
         # Should be written to disk
         stored = json.loads(cfg_file.read_text())
         assert "use_global" in stored
+        assert "save_datasheets" in stored
 
 
 @pytest.mark.skipif(not _has_wx, reason="wx not available")
@@ -150,6 +155,23 @@ class TestDialogStickyDestination:
         JLCImportDialog._persist_destination(dlg)
 
         assert saved["use_global"] is False
+
+    def test_dialog_saves_datasheet_preference(self, monkeypatch):
+        """_persist_save_datasheets saves the datasheet option to config."""
+        saved = {}
+        monkeypatch.setattr(
+            "kicad_jlcimport.dialog.load_config",
+            lambda: {"lib_name": "JLCImport", "global_lib_dir": "", "use_global": False, "save_datasheets": False},
+        )
+        monkeypatch.setattr("kicad_jlcimport.dialog.save_config", lambda c: saved.update(c))
+        from kicad_jlcimport.dialog import JLCImportDialog
+
+        dlg = SimpleNamespace(save_datasheet_check=MagicMock())
+        dlg.save_datasheet_check.GetValue.return_value = True
+
+        JLCImportDialog._persist_save_datasheets(dlg)
+
+        assert saved["save_datasheets"] is True
 
     def test_dialog_does_not_persist_on_import_failure(self, monkeypatch):
         """A failed import should not persist the destination preference."""
@@ -257,6 +279,29 @@ class TestTUIStickyDestination:
         JLCImportTUI._persist_destination(app, use_global=True)
 
         assert saved["use_global"] is True
+
+    def test_tui_persist_save_datasheets(self, tmp_path, monkeypatch):
+        """_persist_save_datasheets saves the datasheet option to config."""
+        saved = {}
+        monkeypatch.setattr(
+            "kicad_jlcimport.tui.app.load_config",
+            lambda: {"lib_name": "JLCImport", "use_global": False, "save_datasheets": False},
+        )
+        monkeypatch.setattr(
+            "kicad_jlcimport.tui.app.save_config",
+            lambda c: saved.update(c),
+        )
+        monkeypatch.setattr(
+            "kicad_jlcimport.tui.app.get_global_lib_dir",
+            lambda _v: str(tmp_path),
+        )
+        from kicad_jlcimport.tui.app import JLCImportTUI
+
+        app = JLCImportTUI()
+        JLCImportTUI._persist_save_datasheets(app, True)
+
+        assert saved["save_datasheets"] is True
+        assert app._save_datasheets is True
 
     def test_tui_does_not_persist_on_import_failure(self, tmp_path, monkeypatch):
         """A failed import should not persist the destination preference."""

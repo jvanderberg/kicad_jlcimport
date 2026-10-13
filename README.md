@@ -74,7 +74,7 @@ Based on recent git history:
 
 ## Configuration
 
-The plugin stores settings in `jlcimport.json` in your KiCad config directory. Right now this is mainly the library name preference, shared across plugin, CLI, and TUI.
+The plugin stores settings in `jlcimport.json` in your KiCad config directory. This includes library name, destination, and datasheet-saving preferences shared across plugin, CLI, and TUI.
 
 ## Compatibility
 

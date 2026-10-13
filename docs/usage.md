@@ -130,6 +130,7 @@ Useful import flags:
 - `--global` import into global 3rd-party libraries.
 - `--global-lib-dir DIR` one-run override of global path.
 - `--overwrite` replace existing entries.
+- `--save-datasheet` / `--no-save-datasheet` override local datasheet PDF saving for one import.
 - `--kicad-version 8|9|10` target version-specific formats.
 
 ### Network / TLS Example

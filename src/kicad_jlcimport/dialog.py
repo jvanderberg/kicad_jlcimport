@@ -1532,6 +1532,14 @@ class JLCImportDialog(wx.Dialog):
         self.version_choice.Bind(wx.EVT_CHOICE, self._on_version_change)
         lib_name_sizer.Add(self.version_choice, 0, wx.ALIGN_CENTER_VERTICAL)
         import_box.Add(lib_name_sizer, 0, wx.ALL, 5)
+
+        # Row 4: optional datasheet download
+        datasheet_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.save_datasheet_check = wx.CheckBox(panel, label="Save datasheet PDF")
+        self.save_datasheet_check.SetValue(bool(_config.get("save_datasheets", False)))
+        self.save_datasheet_check.Bind(wx.EVT_CHECKBOX, self._on_save_datasheets_change)
+        datasheet_sizer.Add(self.save_datasheet_check, 0, wx.ALIGN_CENTER_VERTICAL)
+        import_box.Add(datasheet_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
         self._update_version_visibility()
 
         vbox.Add(import_box, 0, wx.EXPAND | wx.ALL, 5)
@@ -1649,6 +1657,17 @@ class JLCImportDialog(wx.Dialog):
         config = load_config()
         config["use_global"] = use_global
         save_config(config)
+
+    def _persist_save_datasheets(self):
+        """Save the datasheet download preference to config."""
+        config = load_config()
+        config["save_datasheets"] = self.save_datasheet_check.GetValue()
+        save_config(config)
+
+    def _on_save_datasheets_change(self, event):
+        """Persist datasheet download preference when the checkbox changes."""
+        self._persist_save_datasheets()
+        event.Skip()
 
     def _on_lib_name_change(self, event):
         """Persist library name when the input loses focus."""
@@ -2639,22 +2658,30 @@ class JLCImportDialog(wx.Dialog):
         search_result = self._selected_result
         lib_name = self._lib_name
         kicad_version = self._get_kicad_version()
+        save_datasheet = self.save_datasheet_check.GetValue()
+        self._persist_save_datasheets()
 
         threading.Thread(
             target=self._import_worker,
-            args=(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version),
+            args=(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version, save_datasheet),
             daemon=True,
         ).start()
 
-    def _import_worker(self, lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version):
+    def _import_worker(
+        self, lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version, save_datasheet=False
+    ):
         """Background thread: run the import."""
         _dispatched = False
         try:
             try:
-                result = self._do_import(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version)
+                result = self._do_import(
+                    lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version, save_datasheet
+                )
             except SSLCertError:
                 self._handle_ssl_cert_error()
-                result = self._do_import(lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version)
+                result = self._do_import(
+                    lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version, save_datasheet
+                )
             if not self._closing:
                 _dispatched = True
                 wx.CallAfter(self._on_import_complete, result)
@@ -2719,7 +2746,7 @@ class JLCImportDialog(wx.Dialog):
         dlg.Destroy()
         return result
 
-    def _do_import(self, lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version):
+    def _do_import(self, lcsc_id, lib_dir, lib_name, use_global, search_result, kicad_version, save_datasheet=False):
         """Run import_component on a background thread with thread-safe callbacks."""
 
         def log(msg):
@@ -2783,4 +2810,5 @@ class JLCImportDialog(wx.Dialog):
             search_result=search_result,
             confirm_metadata=confirm_metadata,
             confirm_overwrite=confirm_overwrite,
+            save_datasheet=save_datasheet,
         )
