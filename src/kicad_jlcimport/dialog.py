@@ -27,7 +27,14 @@ from .easyeda.api import (
 from .gui.symbol_renderer import has_svg_support, render_svg_bitmap
 from .importer import import_component
 from .kicad.footprint_parser import _parse_kicad_mod
-from .kicad.library import SymbolLibraryError, get_global_lib_dir, load_config, save_config
+from .kicad.library import (
+    LibraryNameError,
+    SymbolLibraryError,
+    get_global_lib_dir,
+    load_config,
+    save_config,
+    validate_lib_name,
+)
 from .kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
 
 
@@ -1654,6 +1661,13 @@ class JLCImportDialog(wx.Dialog):
         """Persist library name when the input loses focus."""
         new_name = self.lib_name_input.GetValue().strip()
         if new_name and new_name != self._lib_name:
+            try:
+                new_name = validate_lib_name(new_name)
+            except LibraryNameError as e:
+                self._log(f"Error: {e}")
+                self.lib_name_input.SetValue(self._lib_name)
+                event.Skip()
+                return
             self._lib_name = new_name
             config = load_config()
             config["lib_name"] = new_name
@@ -2662,7 +2676,7 @@ class JLCImportDialog(wx.Dialog):
             if not self._closing:
                 _dispatched = True
                 wx.CallAfter(self._on_import_error, f"API Error: {e}")
-        except SymbolLibraryError as e:
+        except (SymbolLibraryError, LibraryNameError) as e:
             if not self._closing:
                 _dispatched = True
                 wx.CallAfter(self._on_import_error, f"Error: {e}")

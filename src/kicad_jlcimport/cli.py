@@ -16,7 +16,13 @@ from kicad_jlcimport.easyeda.api import (
     validate_lcsc_id,
 )
 from kicad_jlcimport.importer import import_component
-from kicad_jlcimport.kicad.library import SymbolLibraryError, get_global_lib_dir, load_config
+from kicad_jlcimport.kicad.library import (
+    LibraryNameError,
+    SymbolLibraryError,
+    get_global_lib_dir,
+    load_config,
+    validate_lib_name,
+)
 from kicad_jlcimport.kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
 
 
@@ -109,7 +115,11 @@ def cmd_import(args):
         print(f"  Error: {e}")
         return
 
-    lib_name = args.lib_name
+    try:
+        lib_name = validate_lib_name(args.lib_name)
+    except LibraryNameError as e:
+        print(f"  Error: {e}")
+        sys.exit(1)
     kicad_version = args.kicad_version
 
     def log(msg):

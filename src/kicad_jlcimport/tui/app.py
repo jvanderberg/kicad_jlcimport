@@ -41,10 +41,12 @@ from kicad_jlcimport.easyeda.api import (
 )
 from kicad_jlcimport.importer import import_component
 from kicad_jlcimport.kicad.library import (
+    LibraryNameError,
     SymbolLibraryError,
     get_global_lib_dir,
     load_config,
     save_config,
+    validate_lib_name,
 )
 from kicad_jlcimport.kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
 
@@ -698,6 +700,12 @@ class JLCImportTUI(App):
         """Save the library name if it changed."""
         new_name = self.query_one("#lib-name-input", Input).value.strip()
         if new_name and new_name != self._lib_name:
+            try:
+                new_name = validate_lib_name(new_name)
+            except LibraryNameError as e:
+                self._log(f"[red]Error: {e}[/red]")
+                self.query_one("#lib-name-input", Input).value = self._lib_name
+                return
             self._lib_name = new_name
             config = load_config()
             config["lib_name"] = new_name
@@ -1293,7 +1301,7 @@ class JLCImportTUI(App):
                 self._do_import(lcsc_id, lib_dir, use_global, kicad_version, search_result)
         except APIError as e:
             self.app.call_from_thread(self._log, f"[red]API Error: {e}[/red]")
-        except SymbolLibraryError as e:
+        except (SymbolLibraryError, LibraryNameError) as e:
             self.app.call_from_thread(self._log, f"[red]Error: {e}[/red]")
         except Exception as e:
             self.app.call_from_thread(self._log, f"[red]Error: {e}[/red]")

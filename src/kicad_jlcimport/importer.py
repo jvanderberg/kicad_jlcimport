@@ -21,6 +21,7 @@ from .kicad.library import (
     symbol_exists,
     update_global_lib_tables,
     update_project_lib_tables,
+    validate_lib_name,
 )
 from .kicad.model3d import compute_model_transform, save_models
 from .kicad.symbol_writer import write_symbol
@@ -160,7 +161,12 @@ def import_component(
 
     Returns:
         dict with keys: title, name, fp_content, sym_content; or None if cancelled.
+
+    Raises:
+        LibraryNameError: *lib_name* is not a safe library name (checked before any fetch).
+        SymbolLibraryError: the existing symbol library can't be read or safely edited.
     """
+    lib_name = validate_lib_name(lib_name)
     if component_data is not None:
         comp = component_data
     else:

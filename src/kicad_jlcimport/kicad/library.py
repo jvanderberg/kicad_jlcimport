@@ -8,6 +8,7 @@ import re
 import sys
 
 from ._fileio import atomic_write
+from ._format import escape_sexpr
 from .version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version, version_dir_name
 
 _DEFAULT_CONFIG = {"lib_name": "JLCImport", "global_lib_dir": "", "use_global": False}
@@ -57,7 +58,9 @@ def ensure_lib_structure(base_path: str, lib_name: str = "JLCImport") -> dict:
     """Create library directory structure if needed.
 
     Returns dict with paths: sym_path, fp_dir, models_dir
+    Raises LibraryNameError if *lib_name* is not a safe library name.
     """
+    lib_name = validate_lib_name(lib_name)
     sym_path = os.path.join(base_path, f"{lib_name}.kicad_sym")
     fp_dir = os.path.join(base_path, f"{lib_name}.pretty")
     models_dir = os.path.join(base_path, f"{lib_name}.3dshapes")
@@ -380,8 +383,10 @@ def _update_lib_table(table_path: str, table_type: str, lib_name: str, lib_type:
     """Add an entry to a lib-table file (global or project).
 
     Returns True if the file was newly created.
+    Raises LibraryNameError if *lib_name* is not a safe library name.
     """
-    entry = f'  (lib (name "{lib_name}")(type "{lib_type}")(uri "{uri}")(options "")(descr ""))'
+    lib_name = validate_lib_name(lib_name)
+    entry = f'  (lib (name "{lib_name}")(type "{lib_type}")(uri "{escape_sexpr(uri)}")(options "")(descr ""))'
 
     if os.path.exists(table_path):
         with open(table_path, encoding="utf-8") as f:
@@ -829,6 +834,37 @@ def find_best_matching_footprint(
     if best is None:
         return None
     return f"{best[1]}:{best[2]}"
+
+
+class LibraryNameError(ValueError):
+    """The configured library name can't be used safely."""
+
+
+_LIB_NAME_BAD_CHARS = set('/\\:"<>|?*$')
+
+
+def validate_lib_name(lib_name: str) -> str:
+    """Return *lib_name* stripped of surrounding whitespace, or raise LibraryNameError.
+
+    The name becomes a KiCad library nickname, part of ``Lib:Footprint``
+    references, and the stem of the .kicad_sym/.pretty/.3dshapes paths, so it
+    must be a single safe filename on every OS.  Names are never silently
+    rewritten: a renamed library would point imports somewhere unexpected.
+    """
+    name = (lib_name or "").strip()
+    if not name:
+        raise LibraryNameError("Library name is empty.")
+    for ch in name:
+        if ch in _LIB_NAME_BAD_CHARS or ord(ch) < 32 or ord(ch) == 127:
+            shown = repr(ch) if ch.isprintable() else f"control character {ch!r}"
+            raise LibraryNameError(
+                f"Library name {name!r} contains {shown}, which can't be used in a KiCad library name or file name."
+            )
+    if name in (".", "..") or name.endswith("."):
+        raise LibraryNameError(f"Library name {name!r} can't be '.' or '..', or end with '.'.")
+    if _WINDOWS_RESERVED.match(name):
+        raise LibraryNameError(f"Library name {name!r} is a reserved device name on Windows.")
+    return name
 
 
 def sanitize_name(title: str) -> str:
