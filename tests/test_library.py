@@ -4,7 +4,6 @@ import os
 import tempfile
 
 from kicad_jlcimport.kicad.library import (
-    _remove_symbol,
     _update_lib_table,
     add_symbol_to_lib,
     ensure_lib_structure,
@@ -206,25 +205,36 @@ class TestUpdateLibTable:
             assert text1 == text2  # No change
 
 
-class TestRemoveSymbol:
-    def test_removes_simple_symbol(self):
-        content = '(kicad_symbol_lib\n  (symbol "R_100"\n    (pin_names)\n  )\n)\n'
-        result = _remove_symbol(content, "R_100")
-        assert '(symbol "R_100"' not in result
-        assert "(kicad_symbol_lib" in result
+class TestOverwriteReplacesSymbol:
+    def _overwrite(self, tmp_path, content, name, new):
+        sym_path = str(tmp_path / "test.kicad_sym")
+        with open(sym_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        assert add_symbol_to_lib(sym_path, name, new, overwrite=True) is True
+        with open(sym_path, encoding="utf-8") as f:
+            return f.read()
 
-    def test_removes_one_of_many(self):
+    def test_replaces_simple_symbol(self, tmp_path):
+        content = '(kicad_symbol_lib\n  (symbol "R_100"\n    (pin_names)\n  )\n)\n'
+        result = self._overwrite(tmp_path, content, "R_100", '  (symbol "R_100"\n    (new)\n  )\n')
+        assert "(pin_names)" not in result
+        assert "(new)" in result
+        assert result.startswith("(kicad_symbol_lib")
+
+    def test_replaces_one_of_many(self, tmp_path):
         content = (
             '(kicad_symbol_lib\n  (symbol "R_100"\n    (pin_names)\n  )\n  (symbol "C_100"\n    (pin_names)\n  )\n)\n'
         )
-        result = _remove_symbol(content, "R_100")
-        assert '(symbol "R_100"' not in result
+        result = self._overwrite(tmp_path, content, "R_100", '  (symbol "R_100"\n    (new)\n  )\n')
+        assert result.count("(pin_names)") == 1
         assert '(symbol "C_100"' in result
+        assert result.index('(symbol "R_100"') < result.index('(symbol "C_100"')
 
-    def test_nonexistent_symbol_unchanged(self):
+    def test_absent_symbol_is_appended(self, tmp_path):
         content = '(kicad_symbol_lib\n  (symbol "R_100")\n)\n'
-        result = _remove_symbol(content, "X_999")
-        assert result == content
+        result = self._overwrite(tmp_path, content, "X_999", '  (symbol "X_999")\n')
+        assert '(symbol "R_100")' in result
+        assert '(symbol "X_999")' in result
 
 
 class TestFindBestMatchingFootprint:

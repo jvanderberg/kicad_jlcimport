@@ -19,6 +19,7 @@ from typing import Optional, Tuple
 
 from ..easyeda.ee_types import EE3DModel
 from ..easyeda.parser import mil_to_mm
+from ._fileio import atomic_write
 
 # ============================================================================
 # Unit Conversion
@@ -272,8 +273,7 @@ def save_models(
 
     # Save STEP
     if step_data is not None:
-        with open(step_path, "wb") as f:
-            f.write(step_data)
+        atomic_write(step_path, step_data)
         step_out = step_path
     elif os.path.exists(step_path):
         step_out = step_path
@@ -284,8 +284,7 @@ def save_models(
     if wrl_source is not None:
         wrl_content = convert_to_vrml(wrl_source)
         if wrl_content:
-            with open(wrl_path, "w", encoding="utf-8") as f:
-                f.write(wrl_content)
+            atomic_write(wrl_path, wrl_content)
             wrl_out = wrl_path
         elif os.path.exists(wrl_path):
             wrl_out = wrl_path

@@ -5,6 +5,8 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 from kicad_jlcimport.kicad import library
 
 
@@ -327,11 +329,10 @@ class TestUpdateLibTableExtended:
         assert result is False  # Appended to existing
 
 
-class TestRemoveSymbolExtended:
-    """Extended tests for _remove_symbol function."""
+class TestOverwriteNestedSymbol:
+    """Overwriting a symbol that contains nested unit sub-symbols."""
 
-    def test_removes_nested_symbol(self):
-        """Test removal of symbol with nested parens."""
+    def test_replaces_nested_symbol(self, tmp_path):
         content = """(kicad_symbol_lib
   (symbol "R_100"
     (pin_names)
@@ -342,9 +343,13 @@ class TestRemoveSymbolExtended:
   )
 )
 """
-        result = library._remove_symbol(content, "R_100")
-        assert '(symbol "R_100"' not in result
-        assert "(kicad_symbol_lib" in result
+        sym_path = tmp_path / "test.kicad_sym"
+        sym_path.write_text(content)
+        library.add_symbol_to_lib(str(sym_path), "R_100", '  (symbol "R_100"\n  )\n', overwrite=True)
+        result = sym_path.read_text()
+        assert "R_100_0_1" not in result
+        assert "(rectangle" not in result
+        assert result.startswith("(kicad_symbol_lib")
 
 
 class TestUpdateGlobalLibTablesBackslash:
@@ -379,6 +384,6 @@ class TestAddSymbolToLibExtended:
         sym_path = tmp_path / "test.kicad_sym"
         sym_path.write_text("(kicad_symbol_lib\n")  # No closing paren at all
 
-        result = library.add_symbol_to_lib(str(sym_path), "Test", '  (symbol "Test")\n')
-        # rfind(")") returns -1 when no ), so function returns False
-        assert result is False
+        with pytest.raises(library.SymbolLibraryError):
+            library.add_symbol_to_lib(str(sym_path), "Test", '  (symbol "Test")\n')
+        assert sym_path.read_text() == "(kicad_symbol_lib\n"

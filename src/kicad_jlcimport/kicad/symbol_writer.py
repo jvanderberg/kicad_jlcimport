@@ -81,7 +81,7 @@ def write_symbol(
 
     if unit_index == 0:
         # Outer symbol wrapper
-        lines.append(f'  (symbol "{name}"')
+        lines.append(f'  (symbol "{_escape(name)}"')
         lines.append("    (pin_names (offset 1.016))")
         lines.append("    (in_bom yes)")
         lines.append("    (on_board yes)")
@@ -90,19 +90,19 @@ def write_symbol(
         ref_x = 0
         ref_y = _estimate_top(symbol) + 2.0
         hide_suffix = " hide" if hide_properties else ""
-        lines.append(f'    (property "Reference" "{prefix}" (at {_geom(ref_x)} {_geom(ref_y)} 0)')
+        lines.append(f'    (property "Reference" "{_escape(prefix)}" (at {_geom(ref_x)} {_geom(ref_y)} 0)')
         lines.append(f"      (effects (font (size 1.27 1.27)){hide_suffix})")
         lines.append("    )")
         val_y = _estimate_bottom(symbol) - 2.0
-        lines.append(f'    (property "Value" "{name}" (at {_geom(ref_x)} {_geom(val_y)} 0)')
+        lines.append(f'    (property "Value" "{_escape(name)}" (at {_geom(ref_x)} {_geom(val_y)} 0)')
         lines.append(f"      (effects (font (size 1.27 1.27)){hide_suffix})")
         lines.append("    )")
         if footprint_ref:
-            lines.append(f'    (property "Footprint" "{footprint_ref}" (at 0 0 0)')
+            lines.append(f'    (property "Footprint" "{_escape(footprint_ref)}" (at 0 0 0)')
             lines.append("      (effects (font (size 1.27 1.27)) hide)")
             lines.append("    )")
         if datasheet:
-            lines.append(f'    (property "Datasheet" "{datasheet}" (at 0 0 0)')
+            lines.append(f'    (property "Datasheet" "{_escape(datasheet)}" (at 0 0 0)')
             lines.append("      (effects (font (size 1.27 1.27)) hide)")
             lines.append("    )")
         if description:
@@ -114,7 +114,7 @@ def write_symbol(
             lines.append("      (effects (font (size 1.27 1.27)) hide)")
             lines.append("    )")
         if lcsc_id:
-            lines.append(f'    (property "LCSC" "{lcsc_id}" (at 0 0 0)')
+            lines.append(f'    (property "LCSC" "{_escape(lcsc_id)}" (at 0 0 0)')
             lines.append("      (effects (font (size 1.27 1.27)) hide)")
             lines.append("    )")
         if manufacturer:
@@ -130,12 +130,12 @@ def write_symbol(
     # to exist even when it is empty.  Without it KiCad crashes when the symbol
     # is opened in the symbol editor.  Emit it once, on the first unit call.
     if total_units > 1 and unit_index == 0:
-        lines.append(f'    (symbol "{name}_0_1"')
+        lines.append(f'    (symbol "{_escape(name)}_0_1"')
         lines.append("    )")
 
     # Unit sub-symbol for graphics
     unit_num = (unit_index + 1) if total_units > 1 else 0
-    lines.append(f'    (symbol "{name}_{unit_num}_1"')
+    lines.append(f'    (symbol "{_escape(name)}_{unit_num}_1"')
 
     # Rectangles
     for rect in symbol.rectangles:
@@ -219,7 +219,7 @@ def write_symbol(
         num_effects = "(effects (font (size 1.27 1.27)))"
         if not pin.number_visible:
             num_effects = "(effects (font (size 1.27 1.27)) hide)"
-        lines.append(f'        (number "{pin.number}" {num_effects})')
+        lines.append(f'        (number "{_escape(pin.number)}" {num_effects})')
         lines.append("      )")
 
     # Pin connection point dots (optional, for visual comparison)

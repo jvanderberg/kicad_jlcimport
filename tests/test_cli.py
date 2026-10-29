@@ -36,7 +36,7 @@ def test_cli_import_project_writes_kicad_library(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *_a, **_k: _Footprint())
     monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *_a, **_k: _Symbol())
     monkeypatch.setattr(importer, "write_footprint", lambda *_a, **_k: "fp\n")
-    monkeypatch.setattr(importer, "write_symbol", lambda *_a, **_k: "sym\n")
+    monkeypatch.setattr(importer, "write_symbol", lambda *_a, **_k: '  (symbol "TestPart")\n')
 
     args = SimpleNamespace(
         part="C123",
@@ -216,7 +216,7 @@ def test_cli_import_with_kicad_v8(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *_a, **_k: _Footprint())
     monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *_a, **_k: _Symbol())
     monkeypatch.setattr(importer, "write_footprint", lambda *_a, **_k: "fp\n")
-    monkeypatch.setattr(importer, "write_symbol", lambda *_a, **_k: "sym\n")
+    monkeypatch.setattr(importer, "write_symbol", lambda *_a, **_k: '  (symbol "TestPart")\n')
 
     args = SimpleNamespace(
         part="C123",

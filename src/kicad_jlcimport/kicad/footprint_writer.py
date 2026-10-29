@@ -42,7 +42,7 @@ def write_footprint(
     ref_y = min_y - 1.0
     val_y = max_y + 1.0
 
-    lines.append(f'(footprint "{name}"')
+    lines.append(f'(footprint "{_escape(name)}"')
     lines.append(f"  (version {footprint_format_version(kicad_version)})")
     lines.append('  (generator "JLCImport")')
     if has_generator_version(kicad_version):
@@ -61,7 +61,9 @@ def write_footprint(
     lines.append("    (effects (font (size 1 1) (thickness 0.15)))")
     lines.append("  )")
     if datasheet:
-        lines.append(f'  (property "Datasheet" "{datasheet}" (at 0 0 0) (layer "F.Fab") (hide yes) (uuid "{_uuid()}")')
+        lines.append(
+            f'  (property "Datasheet" "{_escape(datasheet)}" (at 0 0 0) (layer "F.Fab") (hide yes) (uuid "{_uuid()}")'
+        )
         lines.append("    (effects (font (size 1 1) (thickness 0.15)))")
         lines.append("  )")
     if description:
@@ -71,7 +73,9 @@ def write_footprint(
         lines.append("    (effects (font (size 1 1) (thickness 0.15)))")
         lines.append("  )")
     if lcsc_id:
-        lines.append(f'  (property "LCSC" "{lcsc_id}" (at 0 0 0) (layer "F.Fab") (hide yes) (uuid "{_uuid()}")')
+        lines.append(
+            f'  (property "LCSC" "{_escape(lcsc_id)}" (at 0 0 0) (layer "F.Fab") (hide yes) (uuid "{_uuid()}")'
+        )
         lines.append("    (effects (font (size 1 1) (thickness 0.15)))")
         lines.append("  )")
 
@@ -156,7 +160,7 @@ def write_footprint(
             # Use a minimal anchor size — the actual shape is defined
             # entirely by the gr_poly primitive.  A large anchor would fill
             # in the castellated notches of the custom polygon.
-            lines.append(f'  (pad "{pad.number}" {pad_type} {pad_shape} {custom_at} (size 0.1 0.1)')
+            lines.append(f'  (pad "{_escape(pad.number)}" {pad_type} {pad_shape} {custom_at} (size 0.1 0.1)')
             if pad.drill > 0:
                 lines.append(f"    {_drill_str(pad)}")
             lines.append(f"    (layers {layers_str})")
@@ -165,7 +169,7 @@ def write_footprint(
             lines.append(f"      (gr_poly (pts {pts_str}) (width 0) (fill yes))")
             lines.append(f'    ) (uuid "{_uuid()}"))')
         else:
-            pad_line = f'  (pad "{pad.number}" {pad_type} {pad_shape} {at_str} {size_str}'
+            pad_line = f'  (pad "{_escape(pad.number)}" {pad_type} {pad_shape} {at_str} {size_str}'
             if pad.drill > 0:
                 pad_line += f" {_drill_str(pad)}"
             pad_line += f' (layers {layers_str}) (uuid "{_uuid()}"))'
@@ -185,7 +189,7 @@ def write_footprint(
     if model_path:
         ox, oy, oz = model_offset
         rx, ry, rz = model_rotation
-        lines.append(f'  (model "{model_path}"')
+        lines.append(f'  (model "{_escape(model_path)}"')
         lines.append(f"    (offset (xyz {_geom(ox)} {_geom(oy)} {_geom(oz)}))")
         lines.append("    (scale (xyz 1 1 1))")
         lines.append(f"    (rotate (xyz {_fmt(rx)} {_fmt(ry)} {_fmt(rz)}))")

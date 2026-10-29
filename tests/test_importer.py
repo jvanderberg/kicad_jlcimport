@@ -4,9 +4,12 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from kicad_jlcimport import importer
 from kicad_jlcimport.easyeda.ee_types import EE3DModel, EEFootprint, EEPad, EEPin, EESymbol
 from kicad_jlcimport.importer import _build_description, _build_keywords
+from kicad_jlcimport.kicad.library import SymbolLibraryError
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -136,6 +139,33 @@ class TestImportComponent:
         assert (tmp_path / "TestLib.pretty" / "TestPart.kicad_mod").exists()
         assert (tmp_path / "TestLib.kicad_sym").exists()
         assert "Project library tables updated" in " ".join(log_messages)
+
+    def test_malformed_symbol_library_aborts_before_writing(self, tmp_path, monkeypatch):
+        """A broken .kicad_sym stops the import before any file is written."""
+        fake_comp = self._make_fake_comp(with_symbol=True, with_3d=False)
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: self._make_fake_footprint())
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: '  (symbol "TestPart")\n')
+        broken = '(kicad_symbol_lib\n  (symbol "Other"\n)\n'
+        (tmp_path / "TestLib.kicad_sym").write_text(broken)
+        prompts = []
+
+        with pytest.raises(SymbolLibraryError, match="not a well-formed"):
+            importer.import_component(
+                "C123",
+                str(tmp_path),
+                "TestLib",
+                use_global=False,
+                log=lambda msg: None,
+                confirm_metadata=lambda m: prompts.append("metadata") or m,
+                confirm_overwrite=lambda *a: prompts.append("overwrite") or True,
+            )
+
+        assert prompts == []
+        assert (tmp_path / "TestLib.kicad_sym").read_text() == broken
+        assert sorted(os.listdir(str(tmp_path))) == ["TestLib.kicad_sym"]
 
     def test_import_to_library_global(self, tmp_path, monkeypatch):
         """Test import to global library."""

@@ -16,7 +16,7 @@ from kicad_jlcimport.easyeda.api import (
     validate_lcsc_id,
 )
 from kicad_jlcimport.importer import import_component
-from kicad_jlcimport.kicad.library import get_global_lib_dir, load_config
+from kicad_jlcimport.kicad.library import SymbolLibraryError, get_global_lib_dir, load_config
 from kicad_jlcimport.kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
 
 
@@ -185,6 +185,9 @@ def cmd_import(args):
     except APIError as e:
         print(f"  Error: {e}")
         return
+    except SymbolLibraryError as e:
+        print(f"  Error: {e}")
+        sys.exit(1)
 
     fp_content = result["fp_content"]
     sym_content = result["sym_content"]

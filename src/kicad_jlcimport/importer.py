@@ -7,14 +7,18 @@ from typing import Callable
 
 from .easyeda.api import download_step, download_wrl_source, fetch_full_component
 from .easyeda.parser import parse_footprint_shapes, parse_symbol_shapes
+from .kicad._fileio import atomic_write
 from .kicad.footprint_writer import write_footprint
 from .kicad.library import (
+    SymbolLibraryError,
     _default_3rdparty_dir,
     add_symbol_to_lib,
+    check_symbol_lib,
     ensure_lib_structure,
     find_best_matching_footprint,
     sanitize_name,
     save_footprint,
+    symbol_exists,
     update_global_lib_tables,
     update_project_lib_tables,
 )
@@ -54,13 +58,20 @@ def _build_keywords(comp: dict) -> str:
 
 
 def _check_existing_files(
-    lib_dir: str, lib_name: str, fp_name: str, sym_name: str = "", model_name: str = ""
+    lib_dir: str,
+    lib_name: str,
+    fp_name: str,
+    sym_name: str = "",
+    model_name: str = "",
+    symbol_names: set[str] | None = None,
 ) -> list[str]:
     """Return a list of existing file types (e.g. ["footprint", "symbol", "3D model"]).
 
     *fp_name* is the footprint filename.
     *sym_name* is the symbol name inside the .kicad_sym (defaults to *fp_name*).
     *model_name* is the 3D model filename (defaults to *fp_name*).
+    *symbol_names* are the library's top-level symbol names if already known;
+    otherwise the library is read.
     """
     sym_name = sym_name or fp_name
     model_name = model_name or fp_name
@@ -68,13 +79,14 @@ def _check_existing_files(
     fp_path = os.path.join(lib_dir, f"{lib_name}.pretty", f"{fp_name}.kicad_mod")
     if os.path.exists(fp_path):
         existing.append("footprint")
-    sym_path = os.path.join(lib_dir, f"{lib_name}.kicad_sym")
-    if os.path.exists(sym_path):
+    if symbol_names is not None:
+        if sym_name in symbol_names:
+            existing.append("symbol")
+    else:
         try:
-            with open(sym_path, encoding="utf-8") as f:
-                if f'(symbol "{sym_name}"' in f.read():
-                    existing.append("symbol")
-        except (PermissionError, OSError):
+            if symbol_exists(os.path.join(lib_dir, f"{lib_name}.kicad_sym"), sym_name):
+                existing.append("symbol")
+        except (OSError, SymbolLibraryError):
             pass
     models_dir = os.path.join(lib_dir, f"{lib_name}.3dshapes")
     step_path = os.path.join(models_dir, f"{model_name}.step")
@@ -167,6 +179,12 @@ def import_component(
         if search_result.get("package") and not comp.get("package"):
             comp["package"] = search_result["package"]
 
+    # Fail before any dialog or file write if the symbol library can't be
+    # edited safely.
+    existing_symbols = None
+    if not export_only and comp.get("symbol_data_list"):
+        existing_symbols = check_symbol_lib(os.path.join(lib_dir, f"{lib_name}.kicad_sym"))
+
     title = comp["title"]
     name = sanitize_name(title)
     package = comp.get("package", "")
@@ -217,7 +235,9 @@ def import_component(
     # Check for existing files and ask user to confirm overwrite.
     # This runs after metadata editing so fp_name reflects any user rename.
     if not export_only and confirm_overwrite:
-        existing = _check_existing_files(lib_dir, lib_name, fp_name, sym_name=name, model_name=model_name)
+        existing = _check_existing_files(
+            lib_dir, lib_name, fp_name, sym_name=name, model_name=model_name, symbol_names=existing_symbols
+        )
         if existing:
             if not confirm_overwrite(fp_name, existing):
                 return None
@@ -421,8 +441,7 @@ def _export_only(
     )
 
     fp_path = os.path.join(out_dir, f"{fp_name}.kicad_mod")
-    with open(fp_path, "w") as f:
-        f.write(fp_content)
+    atomic_write(fp_path, fp_content)
     log(f"  Saved: {fp_path}")
 
     if sym_content:
@@ -433,8 +452,7 @@ def _export_only(
         if has_generator_version(kicad_version):
             sym_lib += '  (generator_version "1.0")\n'
         sym_lib += sym_content + ")\n"
-        with open(sym_path, "w") as f:
-            f.write(sym_lib)
+        atomic_write(sym_path, sym_lib)
         log(f"  Saved: {sym_path}")
 
     if uuid_3d:
