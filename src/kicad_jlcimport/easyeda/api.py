@@ -480,6 +480,7 @@ def search_components(
                 "stock": item.get("stockCount", 0),
                 "type": "Basic" if item.get("componentLibraryType") == "base" else "Extended",
                 "price": unit_price,
+                "price_breaks": _price_breaks(prices),
                 "description": item.get("describe", ""),
                 "url": url,
                 "datasheet": item.get("dataManualUrl", ""),
@@ -487,6 +488,34 @@ def search_components(
         )
 
     return {"total": total, "results": results}
+
+
+def _price_breaks(prices: List[Dict[str, Any]]) -> List[tuple]:
+    """Convert JLCPCB ``componentPrices`` into sorted ``(min_qty, unit_price)`` tuples."""
+    breaks = []
+    for p in prices or []:
+        price = p.get("productPrice")
+        if price is None:
+            continue
+        try:
+            breaks.append((int(p.get("startNumber") or 1), float(price)))
+        except (TypeError, ValueError):
+            continue
+    return sorted(breaks)
+
+
+def lookup_part(lcsc_id: str) -> Optional[Dict[str, Any]]:
+    """Look up a single part in the JLCPCB assembly library by exact LCSC number.
+
+    Searches for the part number and returns the result whose ``lcsc`` field
+    matches exactly (same schema as :func:`search_components` results), or
+    None when JLCPCB does not list the part.  Raises APIError on failure.
+    """
+    lcsc_id = validate_lcsc_id(lcsc_id)
+    for item in search_components(lcsc_id, page_size=10)["results"]:
+        if (item.get("lcsc") or "").upper() == lcsc_id:
+            return item
+    return None
 
 
 SZLCSC_SEARCH_API = "https://so.szlcsc.com/query/product"

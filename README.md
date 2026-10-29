@@ -9,6 +9,7 @@ JLCImport is a KiCad action plugin that imports symbols, footprints, and 3D mode
 - Includes searchable part lookup with stock and type filtering.
 - Handles modern KiCad formats (8/9/10).
 - Ships with plugin, CLI, GUI, and TUI workflows.
+- **JLCPCB production export**: Gerbers + drill zip, BOM and CPL. Before generating, it checks every part's stock and basic/extended status, and it solves each part's CPL rotation and centre by fitting JLC's own footprint onto your pads (no rotation lookup tables).
 
 ![Search and details](images/search_results.png)
 
@@ -35,6 +36,16 @@ Open `PCB Editor > Tools > External Plugins > JLCImport`.
 
 If `sym-lib-table` or `fp-lib-table` is created for the first time, reopen the project once.
 
+### JLCPCB Production Export
+
+Open `PCB Editor > Tools > External Plugins > JLCPCB Production Export`.
+
+1. Set the number of boards to assemble.
+2. Click **Check**. Every LCSC part is looked up (stock, basic/extended, price), and each part's CPL rotation and position is solved against JLC's footprint. Problems are highlighted.
+3. Click **Generate**. This writes `<board>-gerbers.zip`, `<board>-bom.csv`, `<board>-cpl.csv` and a report to `<project>/production/`.
+
+To correct a part by hand, add a `JLCPCB Rotation Offset` field (degrees) and/or a `JLCPCB Position Offset` field (`dx, dy` mm) to the footprint. See the [production export guide](docs/production-export.md) for the solver, the coordinate conventions and the CLI (`jlcimport-cli production board.kicad_pcb`).
+
 ## CLI, GUI, And TUI
 
 This repo also ships standalone tools:
@@ -48,6 +59,7 @@ Quick examples:
 ```bash
 jlcimport-cli search "100nF 0402" -t basic
 jlcimport-cli import C427602 -p /path/to/project
+jlcimport-cli production board.kicad_pcb -n 10
 jlcimport-gui -p /path/to/project
 jlcimport-tui --kicad-version 9
 ```
@@ -95,6 +107,7 @@ On Windows with KiCad 9, symbol preview may fail if `wx.svg._nanosvg` is missing
 
 - [Full usage guide](docs/usage.md)
 - [3D model notes](docs/3d-models.md)
+- [JLCPCB production export](docs/production-export.md)
 - [Architecture overview](docs/architecture.md)
 - [Visual comparison output](https://jvanderberg.github.io/kicad_jlcimport/)
 

@@ -13,3 +13,12 @@ else:
         import traceback
 
         traceback.print_exc()
+
+    try:
+        from .production_plugin import JLCProductionExportPlugin
+
+        JLCProductionExportPlugin().register()
+    except Exception:
+        import traceback
+
+        traceback.print_exc()

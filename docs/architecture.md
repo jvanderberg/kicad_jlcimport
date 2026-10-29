@@ -23,6 +23,21 @@ src/kicad_jlcimport/
 │   ├── library.py        #   Library structure and table management
 │   ├── version.py        #   KiCad version constants and feature flags
 │   └── _format.py        #   Float formatting, escaping, UUID helpers
+├── production/           # JLCPCB production export (pure Python, no pcbnew)
+│   ├── conventions.py    #   Coordinate frames and the placement model (single source of truth)
+│   ├── models.py         #   FootprintRecord / PadRecord, LCSC field names
+│   ├── solver.py         #   Least-squares rigid fit of JLC's footprint onto board pads
+│   ├── placement.py      #   Solved vs KiCad fallback vs manual override
+│   ├── jlc_footprints.py #   Fetch JLC's EasyEDA footprint as pad centres
+│   ├── availability.py   #   Stock / basic-extended / price evaluation
+│   ├── report.py         #   run_check() orchestration and report model
+│   ├── outputs.py        #   BOM/CPL rows, CSV and zip writers
+│   ├── kicad_pcb.py      #   .kicad_pcb reader for the CLI
+│   ├── cache.py          #   Thread-safe per-LCSC lookup cache
+│   └── export.py         #   Output paths and file writing helpers
+├── production_pcbnew.py  # Thin pcbnew adapter: board → records, Gerber/drill plotting
+├── production_dialog.py  # Production export dialog (wxPython)
+├── production_plugin.py  # Production export ActionPlugin
 ├── gui/                  # Standalone wxPython GUI
 ├── tui/                  # Terminal UI (Textual)
 ├── importer.py           # Import pipeline orchestrator
@@ -49,6 +64,7 @@ The codebase is organized in layers from top to bottom:
 ### User Interface
 
 - **`plugin.py`** — KiCad ActionPlugin registration. Defines the menu entry under Tools > External Plugins > JLCImport and spawns the dialog.
+- **`production_plugin.py` / `production_dialog.py`** — The separate "JLCPCB Production Export" ActionPlugin and its dialog: board quantity, check results table, Check/Generate. Board reads and plotting run on the UI thread; network lookups run in a worker thread.
 - **`dialog.py`** — wxPython dialog with search input, results list, detail panel, image gallery, import options, and status log. Long-running operations (search, import, image fetch) run in background threads to keep the UI responsive.
 - **`cli.py`** — Command-line interface with `search` and `import` subcommands for scripted or batch use outside KiCad. Supports `--lib-name` for custom library names.
 - **`gui/`** — Standalone wxPython GUI for use outside KiCad. Provides the same workflow as the plugin dialog with a directory picker for project selection.
@@ -73,6 +89,12 @@ The codebase is organized in layers from top to bottom:
 - **`kicad/version.py`** — Central version management. Defines supported KiCad versions (8, 9, 10), format version constants, feature flags (`has_generator_version`, `has_embedded_fonts`), and directory name mapping. Auto-detection from `pcbnew` for plugin use; explicit selection for standalone tools.
 - **`kicad/_format.py`** — Small helpers for float formatting, S-expression string escaping, and UUID generation.
 
+### `production/` — JLCPCB Production Export
+
+Pure Python with no `pcbnew` import, so all of it is unit-tested. `production_pcbnew.py` is the only module that touches the KiCad API. It turns the live board into `FootprintRecord`s (reference, value, footprint, LCSC field, pose, side, DNP and exclusion flags, pads with board positions) and drives `PLOT_CONTROLLER` / `EXCELLON_WRITER`. Differences between KiCad versions are handled with `getattr` fallbacks. The CLI reads the same records from a `.kicad_pcb` file via `production/kicad_pcb.py`.
+
+`report.run_check()` looks up each unique LCSC number in parallel through two caches: `api.lookup_part` for stock and type, and `jlc_footprints.fetch_jlc_footprint` for JLC's footprint. It then solves every placement and collects issues. Network failures become report entries and are never raised. See [production-export.md](production-export.md) for the solver math and the coordinate conventions.
+
 ## Data Flow
 
 ### Search
@@ -88,6 +110,13 @@ When the user triggers an import, `importer.py` orchestrates the following steps
 3. **Write KiCad files** — `kicad/symbol_writer.py` generates `.kicad_sym` S-expression text and `kicad/footprint_writer.py` generates `.kicad_mod` text, both adapting output to the target KiCad version.
 4. **Download 3D models** — `kicad/model3d.py` fetches STEP binary and WRL mesh data from EasyEDA endpoints, computes transforms, and saves the files.
 5. **Update library** — `kicad/library.py` appends the symbol to `<lib_name>.kicad_sym`, saves the footprint to `<lib_name>.pretty/`, and updates `sym-lib-table` / `fp-lib-table` so KiCad discovers the imported part.
+
+### Production Export
+
+1. **Extract**: `production_pcbnew.extract_footprints()` (plugin) or `production/kicad_pcb.read_board()` (CLI) produces `FootprintRecord`s.
+2. **Check**: for each unique LCSC number, `api.lookup_part()` (exact-match JLCPCB search) gives stock, type and price breaks, and `fetch_jlc_footprint()` gets JLC's EasyEDA footprint, which `parse_footprint_shapes` reduces to pad centres.
+3. **Solve**: `solver.solve_placement()` fits JLC's pads onto the board pads. `placement.compute_placement()` then picks the solved pose, KiCad's own pose (marked unverified), or a manual override.
+4. **Generate**: `outputs` builds the BOM and CPL rows, and `production_pcbnew.generate_fabrication_zip()` plots the Gerbers and drill files and zips them.
 
 ## External APIs
 
@@ -196,7 +225,11 @@ tests/
 ├── test_cli_extended.py     # CLI edge cases, filters, output formats (cli.py)
 ├── test_importer.py         # Component import orchestration (importer.py)
 ├── test_integration.py      # End-to-end integration tests
-└── test_convert_all.py      # Batch conversion of test data
+├── test_convert_all.py      # Batch conversion of test data
+├── test_production_solver.py   # Solver math, conventions, self-tests via footprint_writer
+├── test_production_report.py   # Availability, overrides, BOM/CPL, run_check (mocked network)
+├── test_production_kicad_pcb.py # .kicad_pcb reader and `production` CLI
+└── test_production_pcbnew.py   # pcbnew adapter against a fake pcbnew module
 ```
 
 Run with:

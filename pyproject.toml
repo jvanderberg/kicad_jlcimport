@@ -27,7 +27,7 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 source = ["kicad_jlcimport"]
-omit = ["**/tests/*", "**/tui/*", "**/gui/*", "**/tui_entry.py", "**/gui_entry.py", "**/dialog.py", "**/plugin.py", "**/categories.py", "**/convert_testdata.py", "**/kicad_mod_to_svg.py", "**/kicad_sym_to_svg.py", "**/preview_part.py", "**/fetch_cacerts.py"]
+omit = ["**/tests/*", "**/tui/*", "**/gui/*", "**/tui_entry.py", "**/gui_entry.py", "**/dialog.py", "**/plugin.py", "**/production_dialog.py", "**/production_plugin.py", "**/categories.py", "**/convert_testdata.py", "**/kicad_mod_to_svg.py", "**/kicad_sym_to_svg.py", "**/preview_part.py", "**/fetch_cacerts.py"]
 
 [tool.coverage.report]
 fail_under = 80

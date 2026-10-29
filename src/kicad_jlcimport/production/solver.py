@@ -1,0 +1,277 @@
+"""Solve a part's CPL rotation and centre by fitting JLC's footprint onto the board pads.
+
+JLCPCB places a part using the orientation and origin of its own EasyEDA
+footprint.  The footprint on the board may use a different 0° orientation and
+origin, so instead of a rotation lookup table we compute the rigid transform
+that maps JLC's footprint onto the actual pads:
+
+1. Pads are paired by number.  Pads sharing a number (thermal pads split
+   into segments, several GND pins, …) are reduced to the centroid of their
+   group on each side, so one group contributes one point.
+2. JLC's local points ``q`` (Y up, mirrored for bottom-side parts — see
+   :mod:`.conventions`) and board points ``p`` (CPL frame) are fitted with
+   the closed-form 2D least-squares rigid transform::
+
+       qc, pc = centroids;  a = q - qc;  b = p - pc
+       phi = atan2(sum(a x b), sum(a . b))
+       t   = pc - R(phi) qc
+
+   ``t`` is where JLC's footprint origin lands; ``phi`` is the rotation.
+3. The angle snaps to the nearest 90° step (or KiCad's own orientation plus a
+   90° step) when within :attr:`Tolerances.snap_deg`, and the residual is
+   recomputed with the snapped angle.
+4. The opposite-handedness fit (mirror applied/removed) is also computed; if
+   it fits clearly better, the pad numbering is mirrored and we refuse to
+   guess.
+"""
+
+import math
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from .conventions import Point, board_to_cpl, local_to_up, normalize_angle, rotate, side_mirror
+from .models import PadRecord
+
+# Flag codes.  Severity is decided by FitResult.confidence; FLAG_TEXT holds the
+# human-readable explanation shown in reports.
+TOO_FEW_PADS = "too_few_pads"
+DEGENERATE = "orientation_undetermined"
+PAD_MISMATCH = "pad_mismatch"
+GROUP_SIZE_MISMATCH = "group_size_mismatch"
+GEOMETRY_DIFFERS = "geometry_differs"
+HIGH_RESIDUAL = "high_residual"
+MIRRORED = "mirrored_numbering"
+POLARITY_BY_NUMBERING = "polarity_by_numbering"
+NOT_SNAPPED = "angle_not_snapped"
+
+FLAG_TEXT = {
+    TOO_FEW_PADS: "fewer than 2 pad numbers in common with the JLC footprint",
+    DEGENERATE: "paired pads do not determine an orientation",
+    PAD_MISMATCH: "pad numbers differ between board and JLC footprints",
+    GROUP_SIZE_MISMATCH: "a repeated pad number has a different pad count on each footprint",
+    GEOMETRY_DIFFERS: "pad positions differ slightly from the JLC footprint",
+    HIGH_RESIDUAL: "pads do not match the JLC footprint (wrong package?)",
+    MIRRORED: "pad numbering is mirrored relative to the JLC footprint",
+    POLARITY_BY_NUMBERING: "symmetric 2-terminal part: polarity relies on pad numbering only",
+    NOT_SNAPPED: "solved angle is not a multiple of 90° from KiCad's",
+}
+
+HIGH = "high"
+MEDIUM = "medium"
+LOW = "low"
+
+
+@dataclass
+class Tolerances:
+    """Thresholds used by :func:`solve_placement` (millimetres / degrees)."""
+
+    high_rms: float = 0.05  # residual for a confident match
+    medium_rms: float = 0.25  # land-pattern differences that don't move the centre/rotation
+    mirror_margin: float = 0.05  # how much better the mirrored fit must be to flag it
+    snap_deg: float = 1.0
+    min_spread: float = 0.01  # points closer than this don't determine an orientation
+    symmetry_tol: float = 0.05
+    min_matched_fraction: float = 0.5
+
+
+DEFAULT_TOLERANCES = Tolerances()
+
+
+@dataclass
+class FitResult:
+    """Outcome of fitting a JLC footprint onto a board footprint."""
+
+    angle: float = 0.0  # placement-model angle (degrees, [0, 360))
+    raw_angle: float = 0.0  # angle before snapping
+    origin: Point = (0.0, 0.0)  # JLC footprint origin in CPL coordinates
+    rms: float = 0.0
+    max_error: float = 0.0
+    pairs_used: int = 0
+    alt_rms: Optional[float] = None  # residual of the opposite-handedness fit
+    snapped: bool = False
+    confidence: str = LOW
+    flags: List[str] = field(default_factory=list)
+
+    @property
+    def usable(self) -> bool:
+        """True when the solved placement should be written to the CPL."""
+        return self.confidence in (HIGH, MEDIUM)
+
+
+def normalize_pad_number(number: str) -> str:
+    return (number or "").strip().upper()
+
+
+def group_pads(pads: Sequence[PadRecord]) -> Dict[str, List[Point]]:
+    """Group pad positions by normalized number, skipping unnumbered pads."""
+    groups: Dict[str, List[Point]] = {}
+    for pad in pads:
+        num = normalize_pad_number(pad.number)
+        if num:
+            groups.setdefault(num, []).append((pad.x, pad.y))
+    return groups
+
+
+def _centroid(points: Sequence[Point]) -> Point:
+    n = float(len(points))
+    return (sum(p[0] for p in points) / n, sum(p[1] for p in points) / n)
+
+
+def _fit_rotation(q: Sequence[Point], p: Sequence[Point]) -> Tuple[float, Point, Point, float, float]:
+    """Closed-form least-squares rotation.  Returns (deg, qc, pc, spread_q, spread_p)."""
+    qc = _centroid(q)
+    pc = _centroid(p)
+    s_cos = s_sin = spread_q = spread_p = 0.0
+    for (qx, qy), (px, py) in zip(q, p):
+        ax, ay = qx - qc[0], qy - qc[1]
+        bx, by = px - pc[0], py - pc[1]
+        s_cos += ax * bx + ay * by
+        s_sin += ax * by - ay * bx
+        spread_q += ax * ax + ay * ay
+        spread_p += bx * bx + by * by
+    return math.degrees(math.atan2(s_sin, s_cos)), qc, pc, spread_q, spread_p
+
+
+def _residuals(q: Sequence[Point], p: Sequence[Point], deg: float, t: Point) -> Tuple[float, float]:
+    errs = []
+    for qi, pi in zip(q, p):
+        rx, ry = rotate(qi, deg)
+        errs.append(math.hypot(rx + t[0] - pi[0], ry + t[1] - pi[1]))
+    rms = math.sqrt(sum(e * e for e in errs) / len(errs))
+    return rms, max(errs)
+
+
+def _translation(qc: Point, pc: Point, deg: float) -> Point:
+    rx, ry = rotate(qc, deg)
+    return (pc[0] - rx, pc[1] - ry)
+
+
+def _is_collinear(points: Sequence[Point]) -> bool:
+    """True when the points' covariance is (nearly) rank one."""
+    cx, cy = _centroid(points)
+    sxx = sum((x - cx) ** 2 for x, _ in points)
+    syy = sum((y - cy) ** 2 for _, y in points)
+    sxy = sum((x - cx) * (y - cy) for x, y in points)
+    tr = sxx + syy
+    if tr <= 0:
+        return True
+    det = sxx * syy - sxy * sxy
+    disc = math.sqrt(max(tr * tr / 4 - det, 0.0))
+    small = tr / 2 - disc
+    return small / tr < 1e-4
+
+
+def _angle_delta(a: float, b: float) -> float:
+    d = math.fmod(a - b, 360.0)
+    if d > 180:
+        d -= 360
+    elif d < -180:
+        d += 360
+    return abs(d)
+
+
+def _snap(angle: float, kicad_orientation: Optional[float], tol: float) -> Tuple[float, bool]:
+    candidates = [k * 90.0 for k in range(4)]
+    if kicad_orientation is not None:
+        candidates += [normalize_angle(kicad_orientation + k * 90.0) for k in range(4)]
+    best = min(candidates, key=lambda c: _angle_delta(angle, c))
+    if _angle_delta(angle, best) <= tol:
+        return best, True
+    return angle, False
+
+
+def _is_point_symmetric(points: Sequence[Point], tol: float) -> bool:
+    """True when the point set is invariant under a 180° turn about its centroid."""
+    cx, cy = _centroid(points)
+    for x, y in points:
+        mx, my = 2 * cx - x, 2 * cy - y
+        if not any(math.hypot(mx - ox, my - oy) <= tol for ox, oy in points):
+            return False
+    return True
+
+
+def solve_placement(
+    board_pads: Sequence[PadRecord],
+    jlc_pads: Sequence[PadRecord],
+    side: str,
+    kicad_orientation: Optional[float] = None,
+    tol: Tolerances = DEFAULT_TOLERANCES,
+) -> FitResult:
+    """Fit JLC's footprint (local pads) onto a board footprint's pads.
+
+    *board_pads* are in board coordinates (Y down), *jlc_pads* in the JLC
+    footprint's local frame (Y down).  *side* selects the bottom-side mirror.
+    *kicad_orientation* adds KiCad's own angle (plus 90° steps) as snapping
+    candidates, which helps parts placed at odd angles.
+    """
+    result = FitResult()
+    board_groups = group_pads(board_pads)
+    jlc_groups = group_pads(jlc_pads)
+    common = sorted(set(board_groups) & set(jlc_groups))
+    only_one_side = set(board_groups) ^ set(jlc_groups)
+
+    if only_one_side:
+        result.flags.append(PAD_MISMATCH)
+    if any(len(board_groups[n]) != len(jlc_groups[n]) for n in common):
+        result.flags.append(GROUP_SIZE_MISMATCH)
+
+    result.pairs_used = len(common)
+    if len(common) < 2:
+        result.flags.append(TOO_FEW_PADS)
+        return result
+
+    q = [side_mirror(local_to_up(*_centroid(jlc_groups[n])), side) for n in common]
+    p = [board_to_cpl(*_centroid(board_groups[n])) for n in common]
+
+    raw, qc, pc, spread_q, spread_p = _fit_rotation(q, p)
+    min_spread_sq = tol.min_spread * tol.min_spread
+    if spread_q < min_spread_sq or spread_p < min_spread_sq:
+        result.flags.append(DEGENERATE)
+        return result
+
+    raw = normalize_angle(raw)
+    angle, snapped = _snap(raw, kicad_orientation, tol.snap_deg)
+    origin = _translation(qc, pc, angle)
+    rms, max_err = _residuals(q, p, angle, origin)
+
+    result.raw_angle = raw
+    result.angle = normalize_angle(angle)
+    result.snapped = snapped
+    result.origin = origin
+    result.rms = rms
+    result.max_error = max_err
+    if not snapped:
+        result.flags.append(NOT_SNAPPED)
+
+    # Opposite handedness: undo the bottom mirror (or apply it on top).
+    if not _is_collinear(q):
+        q_alt = [(x, -y) for x, y in q]
+        alt_raw, aqc, apc, _, _ = _fit_rotation(q_alt, p)
+        alt_rms, _ = _residuals(q_alt, p, alt_raw, _translation(aqc, apc, alt_raw))
+        result.alt_rms = alt_rms
+
+    matched_fraction = len(common) / float(max(len(board_groups), len(jlc_groups)))
+    jlc_points = [(pad.x, pad.y) for pad in jlc_pads if normalize_pad_number(pad.number)]
+    if len(jlc_groups) == 2 and _is_point_symmetric(jlc_points, tol.symmetry_tol):
+        result.flags.append(POLARITY_BY_NUMBERING)
+
+    if result.alt_rms is not None and result.alt_rms + tol.mirror_margin < rms and result.alt_rms <= tol.medium_rms:
+        result.flags.append(MIRRORED)
+        result.confidence = LOW
+    elif rms > tol.medium_rms:
+        result.flags.append(HIGH_RESIDUAL)
+        result.confidence = LOW
+    elif matched_fraction < tol.min_matched_fraction:
+        result.confidence = LOW
+    elif rms > tol.high_rms:
+        result.flags.append(GEOMETRY_DIFFERS)
+        result.confidence = MEDIUM
+    elif PAD_MISMATCH in result.flags:
+        result.confidence = MEDIUM
+    else:
+        result.confidence = HIGH
+    return result
+
+
+def describe_flags(flags: Sequence[str]) -> List[str]:
+    return [FLAG_TEXT.get(f, f) for f in flags]
