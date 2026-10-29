@@ -834,6 +834,16 @@ def _parse_pin(shape_str: str, origin_x: float, origin_y: float) -> EEPin:
     kicad_y = -mil_to_mm(y - origin_y)
 
     electrical_type = PIN_TYPES.get(elec_code, "unspecified")
+    has_dot = _pin_marker_visible(sections, 5)
+    has_clock = _pin_marker_visible(sections, 6)
+    if has_dot and has_clock:
+        pin_style = "inverted_clock"
+    elif has_dot:
+        pin_style = "inverted"
+    elif has_clock:
+        pin_style = "clock"
+    else:
+        pin_style = "line"
 
     return EEPin(
         number=number,
@@ -843,9 +853,19 @@ def _parse_pin(shape_str: str, origin_x: float, origin_y: float) -> EEPin:
         rotation=kicad_rotation,
         length=mil_to_mm(length),
         electrical_type=electrical_type,
+        style=pin_style,
         name_visible=name_visible,
         number_visible=number_visible,
     )
+
+
+def _pin_marker_visible(sections: list[str], index: int) -> bool:
+    if len(sections) <= index:
+        return False
+    parts = sections[index].split("~")
+    if not parts:
+        return False
+    return parts[0].strip().lower() in {"1", "show", "true"}
 
 
 def _parse_sym_rect(shape_str: str, origin_x: float, origin_y: float) -> EERectangle:
