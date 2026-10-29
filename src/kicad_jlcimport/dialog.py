@@ -27,7 +27,7 @@ from .easyeda.api import (
 from .gui.symbol_renderer import has_svg_support, render_svg_bitmap
 from .importer import import_component
 from .kicad.footprint_parser import _parse_kicad_mod
-from .kicad.library import get_global_lib_dir, load_config, save_config
+from .kicad.library import SymbolLibraryError, get_global_lib_dir, load_config, save_config
 from .kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
 
 
@@ -2662,6 +2662,10 @@ class JLCImportDialog(wx.Dialog):
             if not self._closing:
                 _dispatched = True
                 wx.CallAfter(self._on_import_error, f"API Error: {e}")
+        except SymbolLibraryError as e:
+            if not self._closing:
+                _dispatched = True
+                wx.CallAfter(self._on_import_error, f"Error: {e}")
         except Exception as e:
             if not self._closing:
                 _dispatched = True

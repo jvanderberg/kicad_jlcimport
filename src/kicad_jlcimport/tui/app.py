@@ -41,6 +41,7 @@ from kicad_jlcimport.easyeda.api import (
 )
 from kicad_jlcimport.importer import import_component
 from kicad_jlcimport.kicad.library import (
+    SymbolLibraryError,
     get_global_lib_dir,
     load_config,
     save_config,
@@ -1292,6 +1293,8 @@ class JLCImportTUI(App):
                 self._do_import(lcsc_id, lib_dir, use_global, kicad_version, search_result)
         except APIError as e:
             self.app.call_from_thread(self._log, f"[red]API Error: {e}[/red]")
+        except SymbolLibraryError as e:
+            self.app.call_from_thread(self._log, f"[red]Error: {e}[/red]")
         except Exception as e:
             self.app.call_from_thread(self._log, f"[red]Error: {e}[/red]")
             self.app.call_from_thread(self._log, traceback.format_exc())
