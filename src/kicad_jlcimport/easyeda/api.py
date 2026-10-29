@@ -811,7 +811,7 @@ def fetch_full_component(lcsc_id: str) -> Dict[str, Any]:
     if prefix.endswith("?"):
         prefix = prefix[:-1]
 
-    datasheet = c_para.get("link", fp_c_para.get("link", ""))
+    datasheet = (c_para.get("link", fp_c_para.get("link", "")) or "").strip().rstrip("\\")
     if datasheet and not datasheet.startswith("http"):
         datasheet = "https:" + datasheet if datasheet.startswith("//") else ""
 
