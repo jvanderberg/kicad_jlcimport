@@ -1252,7 +1252,9 @@ class _SpinnerOverlay(wx.Window):
 
 class JLCImportDialog(wx.Dialog):
     def __init__(self, parent, board, project_dir=None, kicad_version=None, global_lib_dir="", on_close=None):
-        super().__init__(parent, title="JLCImport", size=(700, 640), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        # Extra height in the PCB editor for the notebook tab row (Import Parts / Production Files)
+        size = (700, 640) if board is None else (720, 680)
+        super().__init__(parent, title="JLCImport", size=size, style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.board = board
         self._project_dir = project_dir  # Used when board is None (standalone mode)
         self._kicad_version = kicad_version or DEFAULT_KICAD_VERSION
@@ -1310,6 +1312,8 @@ class JLCImportDialog(wx.Dialog):
         self._gallery_request_id += 1
         self._gallery_svg_request_id += 1
         self._symbol_request_id += 1
+        if self._production_panel is not None:
+            self._production_panel.shutdown()
         if self._on_close_callback:
             self._on_close_callback()
         if self.IsModal():
@@ -1320,8 +1324,21 @@ class JLCImportDialog(wx.Dialog):
     def _init_ui(self):
         self._root_sizer = wx.BoxSizer(wx.VERTICAL)
 
+        # With a board (PCB editor), the import UI and the production export
+        # live on separate notebook tabs.  Standalone mode has no board, so
+        # the import UI sits directly in the dialog.
+        self._production_panel = None
+        if self.board is not None:
+            self._notebook = wx.Notebook(self)
+            self._import_page = wx.Panel(self._notebook)
+            host = self._import_page
+        else:
+            self._notebook = None
+            self._import_page = None
+            host = self
+
         # --- Main panel (search/results/details/import) ---
-        panel = wx.Panel(self)
+        panel = wx.Panel(host)
         self._main_panel = panel
         vbox = wx.BoxSizer(wx.VERTICAL)
 
@@ -1548,7 +1565,7 @@ class JLCImportDialog(wx.Dialog):
         self._category_popup = _CategoryPopup(self, on_select=lambda: self._on_category_selected(None))
 
         # --- Gallery panel (hidden by default) ---
-        self._gallery_panel = wx.Panel(self)
+        self._gallery_panel = wx.Panel(host)
         self._gallery_panel.Hide()
         gbox = wx.BoxSizer(wx.VERTICAL)
 
@@ -1595,7 +1612,20 @@ class JLCImportDialog(wx.Dialog):
         # Root sizer holds both panels
         self._root_sizer.Add(panel, 1, wx.EXPAND)
         self._root_sizer.Add(self._gallery_panel, 1, wx.EXPAND)
-        self.SetSizer(self._root_sizer)
+        if self._notebook is not None:
+            from .production_panel import ProductionPanel
+
+            self._import_page.SetSizer(self._root_sizer)
+            self._notebook.AddPage(self._import_page, "Import Parts")
+            self._production_panel = ProductionPanel(
+                self._notebook, self.board, on_ssl_error=self._handle_ssl_cert_error
+            )
+            self._notebook.AddPage(self._production_panel, "Production Files")
+            dialog_sizer = wx.BoxSizer(wx.VERTICAL)
+            dialog_sizer.Add(self._notebook, 1, wx.EXPAND)
+            self.SetSizer(dialog_sizer)
+        else:
+            self.SetSizer(self._root_sizer)
 
         # Escape key to close gallery
         self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
@@ -2117,7 +2147,7 @@ class JLCImportDialog(wx.Dialog):
             daemon=True,
         ).start()
 
-        self.Layout()
+        self._relayout()
 
     def _show_skeleton(self):
         """Show an animated skeleton placeholder while image loads."""
@@ -2478,7 +2508,7 @@ class JLCImportDialog(wx.Dialog):
 
     def _on_key(self, event):
         key = event.GetKeyCode()
-        if self._gallery_panel.IsShown():
+        if self._gallery_panel.IsShown() and self._import_tab_active():
             if key == wx.WXK_ESCAPE:
                 self._exit_gallery()
                 return
@@ -2492,6 +2522,15 @@ class JLCImportDialog(wx.Dialog):
             self.Close()
             return
         event.Skip()
+
+    def _import_tab_active(self) -> bool:
+        return self._notebook is None or self._notebook.GetCurrentPage() is self._import_page
+
+    def _relayout(self):
+        """Re-layout after detail-pane changes (the import UI may sit inside a notebook page)."""
+        self.Layout()
+        if self._import_page is not None:
+            self._import_page.Layout()
 
     def _on_datasheet(self, event):
         """Open datasheet URL in browser."""
@@ -2528,7 +2567,7 @@ class JLCImportDialog(wx.Dialog):
             self._photo_bitmap = None
             if self._detail_page == 0:
                 self._show_no_image()
-            self.Layout()
+            self._relayout()
             return
         try:
             stream = io.BytesIO(img_data)
@@ -2546,13 +2585,13 @@ class JLCImportDialog(wx.Dialog):
                 self._photo_bitmap = None
                 if self._detail_page == 0:
                     self._show_no_image()
-            self.Layout()
+            self._relayout()
         except Exception:
             self._full_image_data = None
             self._photo_bitmap = None
             if self._detail_page == 0:
                 self._show_no_image()
-            self.Layout()
+            self._relayout()
 
     def _fetch_footprint_svg(self, lcsc_id, request_id):
         """Background thread: fetch footprint SVG from the API."""

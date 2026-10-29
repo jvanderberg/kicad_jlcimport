@@ -15,7 +15,7 @@ class JLCImportPlugin(pcbnew.ActionPlugin):
     def defaults(self):
         self.name = "JLCImport"
         self.category = "Import"
-        self.description = "Import symbols, footprints, and 3D models from LCSC/EasyEDA"
+        self.description = "Import parts from LCSC/EasyEDA and generate JLCPCB production files"
         self.show_toolbar_button = True
         self.icon_file_name = os.path.join(os.path.dirname(__file__), "icon.png")
 

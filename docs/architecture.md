@@ -36,8 +36,7 @@ src/kicad_jlcimport/
 │   ├── cache.py          #   Thread-safe per-LCSC lookup cache
 │   └── export.py         #   Output paths and file writing helpers
 ├── production_pcbnew.py  # Thin pcbnew adapter: board → records, Gerber/drill plotting
-├── production_dialog.py  # Production export dialog (wxPython)
-├── production_plugin.py  # Production export ActionPlugin
+├── production_panel.py   # "Production Files" tab of the plugin dialog (wxPython)
 ├── gui/                  # Standalone wxPython GUI
 ├── tui/                  # Terminal UI (Textual)
 ├── importer.py           # Import pipeline orchestrator
@@ -64,7 +63,7 @@ The codebase is organized in layers from top to bottom:
 ### User Interface
 
 - **`plugin.py`** — KiCad ActionPlugin registration. Defines the menu entry under Tools > External Plugins > JLCImport and spawns the dialog.
-- **`production_plugin.py` / `production_dialog.py`** — The separate "JLCPCB Production Export" ActionPlugin and its dialog: board quantity, check results table, Check/Generate. Board reads and plotting run on the UI thread; network lookups run in a worker thread.
+- **`production_panel.py`** — The "Production Files" notebook tab that `JLCImportDialog` adds when it is opened with a board (PCB editor only; standalone mode has no board, so no tab): board quantity, check results table, Check/Generate. Board reads and plotting run on the UI thread; network lookups run in a worker thread.
 - **`dialog.py`** — wxPython dialog with search input, results list, detail panel, image gallery, import options, and status log. Long-running operations (search, import, image fetch) run in background threads to keep the UI responsive.
 - **`cli.py`** — Command-line interface with `search` and `import` subcommands for scripted or batch use outside KiCad. Supports `--lib-name` for custom library names.
 - **`gui/`** — Standalone wxPython GUI for use outside KiCad. Provides the same workflow as the plugin dialog with a directory picker for project selection.

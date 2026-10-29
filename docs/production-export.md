@@ -1,6 +1,6 @@
 # JLCPCB Production Export
 
-The **JLCPCB Production Export** plugin (PCB Editor > Tools > External Plugins) produces everything a JLCPCB PCBA order needs:
+The **Production Files** tab of the JLCImport dialog (PCB Editor > Tools > External Plugins > JLCImport) produces everything a JLCPCB PCBA order needs:
 
 - `<board>-gerbers.zip`: Gerbers for every copper layer, the masks, paste, silkscreen and Edge.Cuts, plus Excellon drill files (mm, separate PTH/NPTH)
 - `<board>-bom.csv`: `Comment,Designator,Footprint,JLCPCB Part #`, grouped by value + footprint + LCSC number

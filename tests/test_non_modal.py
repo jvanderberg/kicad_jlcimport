@@ -39,6 +39,7 @@ class TestOnCloseCleanup:
             _stop_skeleton=MagicMock(),
             _stop_gallery_skeleton=MagicMock(),
             _category_popup=MagicMock(),
+            _production_panel=None,
             IsModal=MagicMock(return_value=False),
             Destroy=MagicMock(),
         )
@@ -79,6 +80,14 @@ class TestOnCloseCleanup:
         assert dlg._gallery_request_id == 1
         assert dlg._gallery_svg_request_id == 1
         assert dlg._symbol_request_id == 1
+
+    def test_on_close_shuts_down_production_tab(self):
+        from kicad_jlcimport.dialog import JLCImportDialog
+
+        dlg = self._make_dialog()
+        dlg._production_panel = MagicMock()
+        JLCImportDialog._on_close(dlg, None)
+        dlg._production_panel.shutdown.assert_called_once()
 
     def test_on_close_sets_closing_flag(self):
         from kicad_jlcimport.dialog import JLCImportDialog
@@ -146,6 +155,7 @@ class TestCloseBlockedDuringImport:
             _stop_skeleton=MagicMock(),
             _stop_gallery_skeleton=MagicMock(),
             _category_popup=MagicMock(),
+            _production_panel=None,
             IsModal=MagicMock(return_value=False),
             Destroy=MagicMock(),
         )

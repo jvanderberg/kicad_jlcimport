@@ -1,5 +1,6 @@
-"""wxPython dialog for JLCPCB production export (availability check, BOM, CPL, Gerbers).
+"""Production tab of the JLCImport dialog: availability check, BOM, CPL, Gerbers.
 
+Shown only when the dialog is opened from the PCB editor (a board is loaded).
 Board access (reading footprints, plotting) happens on the UI thread because
 pcbnew is not thread-safe; only the network-bound check runs in a worker
 thread, reporting back through ``wx.CallAfter`` with a request id so stale
@@ -13,7 +14,6 @@ import traceback
 import wx
 
 from . import production_pcbnew as adapter
-from .easyeda import api as _api_module
 from .production.export import board_basename, default_output_dir, make_caches, write_bom_cpl
 from .production.placement import POSITION_OFFSET_FIELD, ROTATION_OFFSET_FIELD
 from .production.report import ERROR, WARNING, row_cells, run_check
@@ -35,31 +35,37 @@ _ROW_COLOURS = {
 }
 
 
-class ProductionExportDialog(wx.Dialog):
-    def __init__(self, parent, board, on_close=None):
-        super().__init__(
-            parent,
-            title="JLCPCB Production Export",
-            size=(1050, 660),
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
-        )
+_TITLE = "JLCPCB Production Files"
+
+
+class ProductionPanel(wx.Panel):
+    """Notebook page hosted by ``JLCImportDialog``.
+
+    ``on_ssl_error`` is the host dialog's TLS-warning handler (safe to call
+    from worker threads).  The host calls :meth:`shutdown` when it closes.
+    """
+
+    def __init__(self, parent, board, on_ssl_error=None):
+        super().__init__(parent)
         self.board = board
-        self._on_close_callback = on_close
+        self._on_ssl_error = on_ssl_error
         self._closing = False
         self._busy = False
         self._request_id = 0
-        self._ssl_warning_shown = False
         self._part_cache, self._footprint_cache = make_caches()
         board_file = adapter.board_path(board)
         self._basename = board_basename(board_file) if board_file else "board"
         self._init_ui(default_output_dir(board_file) if board_file else "")
-        self.Centre()
-        self.Bind(wx.EVT_CLOSE, self._on_close)
+
+    def shutdown(self):
+        """Invalidate in-flight checks so their CallAfter callbacks no-op."""
+        self._closing = True
+        self._request_id += 1
 
     # ------------------------------------------------------------------ UI
 
     def _init_ui(self, out_dir):
-        panel = wx.Panel(self)
+        panel = self
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         grid = wx.FlexGridSizer(cols=3, vgap=6, hgap=8)
@@ -85,7 +91,7 @@ class ProductionExportDialog(wx.Dialog):
             self.table.InsertColumn(i, title, width=width)
         vbox.Add(self.table, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
-        self.summary = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
+        self.summary = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 100))
         self.summary.SetValue(
             "Check looks up every LCSC part on the board (stock, basic/extended) and solves each part's "
             "CPL rotation and centre against JLCPCB's own footprint.\n"
@@ -103,9 +109,6 @@ class ProductionExportDialog(wx.Dialog):
         self.generate_btn = wx.Button(panel, label="Generate")
         self.generate_btn.Bind(wx.EVT_BUTTON, self._on_generate)
         hbox.Add(self.generate_btn, 0, wx.LEFT, 6)
-        close_btn = wx.Button(panel, wx.ID_CLOSE, "Close")
-        close_btn.Bind(wx.EVT_BUTTON, lambda e: self.Close())
-        hbox.Add(close_btn, 0, wx.LEFT, 6)
         vbox.Add(hbox, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         panel.SetSizer(vbox)
@@ -121,18 +124,6 @@ class ProductionExportDialog(wx.Dialog):
         if dlg.ShowModal() == wx.ID_OK:
             self.dir_text.SetValue(dlg.GetPath())
         dlg.Destroy()
-
-    def _on_close(self, event):
-        if self._closing:
-            return
-        self._closing = True
-        self._request_id += 1  # stale CallAfter callbacks become no-ops
-        if self._on_close_callback:
-            self._on_close_callback()
-        if self.IsModal():
-            self.EndModal(wx.ID_CANCEL)
-        else:
-            self.Destroy()
 
     # --------------------------------------------------------------- check
 
@@ -150,7 +141,7 @@ class ProductionExportDialog(wx.Dialog):
         try:
             records = adapter.extract_footprints(self.board)
         except Exception as e:
-            wx.MessageBox(f"Could not read the board:\n{e}", "JLCPCB Production Export", wx.OK | wx.ICON_ERROR)
+            wx.MessageBox(f"Could not read the board:\n{e}", _TITLE, wx.OK | wx.ICON_ERROR)
             return
         self._set_busy(True)
         self._request_id += 1
@@ -187,19 +178,8 @@ class ProductionExportDialog(wx.Dialog):
             wx.CallAfter(self._on_check_done, report, request_id, generate)
 
     def _handle_ssl_cert_error(self):
-        """Called from worker threads: warn once and continue without verification."""
-        if not self._ssl_warning_shown:
-            self._ssl_warning_shown = True
-            if not self._closing:
-                wx.CallAfter(
-                    wx.MessageBox,
-                    "TLS certificate verification failed.\n\n"
-                    "A proxy or firewall may be intercepting HTTPS traffic. "
-                    "The session will continue without certificate verification.",
-                    "TLS Certificate Warning",
-                    wx.OK | wx.ICON_WARNING,
-                )
-        _api_module.allow_unverified_ssl()
+        if self._on_ssl_error is not None:
+            self._on_ssl_error()
 
     def _on_progress(self, done, total, lcsc, request_id):
         if self._closing or request_id != self._request_id:
@@ -211,7 +191,7 @@ class ProductionExportDialog(wx.Dialog):
             return
         self._set_busy(False)
         self.status.SetLabel("Check failed")
-        wx.MessageBox(message, "JLCPCB Production Export", wx.OK | wx.ICON_ERROR)
+        wx.MessageBox(message, _TITLE, wx.OK | wx.ICON_ERROR)
 
     def _on_check_done(self, report, request_id, generate):
         if self._closing or request_id != self._request_id:
@@ -242,14 +222,14 @@ class ProductionExportDialog(wx.Dialog):
     def _generate(self, report):
         out_dir = self.dir_text.GetValue().strip()
         if not out_dir:
-            wx.MessageBox("Choose an output folder first.", "JLCPCB Production Export", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox("Choose an output folder first.", _TITLE, wx.OK | wx.ICON_WARNING)
             return
         errors, warnings = report.count(ERROR), report.count(WARNING)
         if errors or warnings:
             answer = wx.MessageBox(
                 f"The check found {errors} errors and {warnings} warnings "
                 "(see the highlighted rows).\n\nGenerate production files anyway?",
-                "JLCPCB Production Export",
+                _TITLE,
                 wx.YES_NO | wx.ICON_WARNING,
             )
             if answer != wx.YES:
@@ -266,7 +246,7 @@ class ProductionExportDialog(wx.Dialog):
             self.status.SetLabel("Generation failed")
             wx.MessageBox(
                 f"Generating files failed:\n{e}\n\n{traceback.format_exc()}",
-                "JLCPCB Production Export",
+                _TITLE,
                 wx.OK | wx.ICON_ERROR,
             )
             return
@@ -278,6 +258,6 @@ class ProductionExportDialog(wx.Dialog):
         self.summary.AppendText("\n\nWritten:\n" + "\n".join(os.path.basename(p) for p in written))
         wx.MessageBox(
             "Production files written to:\n" + out_dir + "\n\n" + "\n".join(os.path.basename(p) for p in written),
-            "JLCPCB Production Export",
+            _TITLE,
             wx.OK | wx.ICON_INFORMATION,
         )

@@ -36,9 +36,9 @@ Open `PCB Editor > Tools > External Plugins > JLCImport`.
 
 If `sym-lib-table` or `fp-lib-table` is created for the first time, reopen the project once.
 
-### JLCPCB Production Export
+### JLCPCB Production Files
 
-Open `PCB Editor > Tools > External Plugins > JLCPCB Production Export`.
+Open JLCImport from the PCB Editor and switch to the **Production Files** tab.
 
 1. Set the number of boards to assemble.
 2. Click **Check**. Every LCSC part is looked up (stock, basic/extended, price), and each part's CPL rotation and position is solved against JLC's footprint. Problems are highlighted.
