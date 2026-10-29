@@ -13,6 +13,7 @@ import sys
 import urllib.request
 import warnings
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -771,6 +772,29 @@ def _strip_cjk_parens(text: str) -> str:
     return re.sub(r"\([^\x00-\x7F]+\)", "", text).strip()
 
 
+def _looks_like_datasheet_url(url: str) -> bool:
+    """Return True when *url* appears to point to a datasheet, not a product page."""
+    try:
+        path = urlparse(url).path.lower()
+    except ValueError:
+        return False
+    return path.endswith(".pdf") or "datasheet" in path
+
+
+def _normalize_datasheet_url(url: str) -> str:
+    """Normalize an EasyEDA datasheet link, returning empty for non-datasheet URLs."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("//"):
+        url = "https:" + url
+    elif not url.startswith(("http://", "https://")):
+        return ""
+    if not _looks_like_datasheet_url(url):
+        return ""
+    return url
+
+
 def fetch_full_component(lcsc_id: str) -> Dict[str, Any]:
     """High-level: fetch all data needed for a component.
 
@@ -811,9 +835,11 @@ def fetch_full_component(lcsc_id: str) -> Dict[str, Any]:
     if prefix.endswith("?"):
         prefix = prefix[:-1]
 
-    datasheet = c_para.get("link", fp_c_para.get("link", ""))
-    if datasheet and not datasheet.startswith("http"):
-        datasheet = "https:" + datasheet if datasheet.startswith("//") else ""
+    datasheet = _normalize_datasheet_url(c_para.get("link", ""))
+    if not datasheet:
+        # Footprint records are commonly shared between parts; their link may
+        # point to whichever product originally contributed the footprint.
+        datasheet = _normalize_datasheet_url(fp_c_para.get("link", ""))
 
     # 3D model UUID from footprint head
     uuid_3d = fp_data.get("dataStr", {}).get("head", {}).get("uuid_3d", "")
