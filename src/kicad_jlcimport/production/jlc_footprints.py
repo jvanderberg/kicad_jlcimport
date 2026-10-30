@@ -121,7 +121,7 @@ def jlc_footprint_from_data(lcsc: str, fp_data: Dict[str, Any]) -> JlcFootprint:
     """Build a :class:`JlcFootprint` from an EasyEDA component-data result."""
     shapes, origin_x, origin_y = _data_shapes(fp_data)
     fp = parse_footprint_shapes(shapes, origin_x, origin_y)
-    pads = [PadRecord(number=p.number, x=p.x, y=p.y) for p in fp.pads]
+    pads = [PadRecord(number=p.number, x=p.x, y=p.y, width=p.width, height=p.height, drill=p.drill) for p in fp.pads]
     return JlcFootprint(lcsc=lcsc, title=fp_data.get("title", ""), pads=pads, pad_marks=polarity_marks(shapes))
 
 

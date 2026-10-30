@@ -6,6 +6,7 @@ import os
 from kicad_jlcimport import importer
 from kicad_jlcimport.easyeda.ee_types import EEFootprint, EEPad, EEPin, EESymbol
 from kicad_jlcimport.kicad import library
+from kicad_jlcimport.kicad.footprint_match import FootprintMatch
 
 # ---------------------------------------------------------------------------
 # Helpers shared across test classes
@@ -683,7 +684,7 @@ class TestManuallyChosenFootprint:
             return '  (symbol "TestPart")\n'
 
         _patch_importer(monkeypatch, _make_fake_comp(), capture_sym=capture_sym)
-        monkeypatch.setattr(importer, "find_best_matching_footprint", lambda *a, **k: None)
+        monkeypatch.setattr(importer, "_suggest_footprint", lambda *a, **k: None)
 
         def metadata_choose_kicad(metadata):
             metadata["__manually_chosen_footprint"] = "Resistor_SMD:R_0805_2012Metric"
@@ -712,7 +713,7 @@ class TestManuallyChosenFootprint:
             return "(footprint)\n"
 
         _patch_importer(monkeypatch, _make_fake_comp(), capture_fp=capture_fp)
-        monkeypatch.setattr(importer, "find_best_matching_footprint", lambda *a, **k: None)
+        monkeypatch.setattr(importer, "_suggest_footprint", lambda *a, **k: None)
 
         def metadata_choose_kicad(metadata):
             metadata["__manually_chosen_footprint"] = "Package_SO:SOIC-8"
@@ -739,7 +740,11 @@ class TestManuallyChosenFootprint:
             return '  (symbol "TestPart")\n'
 
         _patch_importer(monkeypatch, _make_fake_comp(), capture_sym=capture_sym)
-        monkeypatch.setattr(importer, "find_best_matching_footprint", lambda *a, **k: "Auto:Match")
+        monkeypatch.setattr(
+            importer,
+            "_suggest_footprint",
+            lambda *a, **k: FootprintMatch(ref="Auto:Match", rms=0.01, max_error=0.02, pad_groups=8, size_error=0.0),
+        )
 
         def metadata_choose_different(metadata):
             assert metadata["__footprint_candidate_ref"] == "Auto:Match"

@@ -21,6 +21,7 @@ src/kicad_jlcimport/
 │   ├── footprint_writer.py # .kicad_mod S-expression output
 │   ├── model3d.py        #   STEP/WRL saving, transforms, VRML conversion
 │   ├── library.py        #   Library structure and table management
+│   ├── footprint_match.py #  KiCad library footprint with the same pads as JLC's (import dialog suggestion)
 │   ├── version.py        #   KiCad version constants and feature flags
 │   └── _format.py        #   Float formatting, escaping, UUID helpers
 ├── production/           # JLCPCB production export (pure Python, no pcbnew)
@@ -88,6 +89,7 @@ The codebase is organized in layers from top to bottom:
 - **`kicad/footprint_writer.py`** — Generates KiCad footprint files in S-expression format. Writes pads, tracks, arcs, circles, holes, zones, and 3D model references. Auto-detects SMD vs through-hole placement. Output format adapts to the selected KiCad version.
 - **`kicad/model3d.py`** — Computes 3D model transforms (offset, rotation, scale), saves STEP files, and converts OBJ-like mesh data to VRML 2.0 format. Downloads are handled by `importer.py` via `easyeda/api.py`.
 - **`kicad/library.py`** — Manages the on-disk library structure. Creates directories, appends symbols to `.kicad_sym` files, saves `.kicad_mod` footprints, and updates `sym-lib-table` / `fp-lib-table` so KiCad can find imported parts. Handles cross-platform path differences. Also manages persistent configuration (library name preference) via `jlcimport.json`.
+- **`kicad/footprint_match.py`** — Finds a KiCad library footprint the import dialog can offer in place of JLC's. Candidates come from package tokens in the footprint names of every library in the project and global `fp-lib-table`. A candidate must have the same pad numbers and through-hole pads as JLC's footprint and fit JLC's pad centres within `Tolerances.high_rms` using `production/solver.py`. For polarized two-terminal parts it reports whether KiCad's pad 1 has the same polarity as JLC's (`production/polarity.py`). `importer.py` builds the input from the component data it has already fetched, so there are no extra network calls. See [usage.md](usage.md#using-a-kicad-library-footprint-instead-of-jlcs).
 - **`kicad/version.py`** — Central version management. Defines supported KiCad versions (8, 9, 10), format version constants, feature flags (`has_generator_version`, `has_embedded_fonts`), and directory name mapping. Auto-detection from `pcbnew` for plugin use; explicit selection for standalone tools.
 - **`kicad/_format.py`** — Small helpers for float formatting, S-expression string escaping, and UUID generation.
 
@@ -224,6 +226,7 @@ tests/
 ├── test_kicad_format.py     # Float formatting, UUID generation (kicad/format.py)
 ├── test_kicad_version.py    # Version constants, feature flags (kicad/version.py)
 ├── test_library.py          # File I/O, library table management (kicad/library.py)
+├── test_footprint_match.py  # KiCad footprint suggestion: name candidates, pad fit, polarity (kicad/footprint_match.py)
 ├── test_library_extended.py # Global paths, config dirs (kicad/library.py)
 ├── test_cli.py              # CLI import/search commands (cli.py)
 ├── test_cli_extended.py     # CLI edge cases, filters, output formats (cli.py)

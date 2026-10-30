@@ -9,7 +9,14 @@ import pytest
 from kicad_jlcimport import importer
 from kicad_jlcimport.easyeda.ee_types import EE3DModel, EEFootprint, EEPad, EEPin, EESymbol
 from kicad_jlcimport.importer import _build_description, _build_keywords
+from kicad_jlcimport.kicad.footprint_match import POLARITY_REVERSED, FootprintMatch
 from kicad_jlcimport.kicad.library import SymbolLibraryError
+
+
+def _match(ref, polarity=""):
+    """A FootprintMatch as the geometry matcher returns it."""
+    return FootprintMatch(ref=ref, rms=0.01, max_error=0.02, pad_groups=8, size_error=0.05, polarity=polarity)
+
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -1317,7 +1324,7 @@ class TestReuseFootprint:
         write_footprint_called = []
 
         monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
-        monkeypatch.setattr(importer, "find_best_matching_footprint", lambda *a, **k: "Package_DIP:DIP-8_W7.62mm")
+        monkeypatch.setattr(importer, "_suggest_footprint", lambda *a, **k: _match("Package_DIP:DIP-8_W7.62mm"))
         monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
         monkeypatch.setattr(
             importer, "write_symbol", lambda *a, **k: symbol_kwargs.update(k) or '  (symbol "TestPart")\n'
@@ -1352,7 +1359,7 @@ class TestReuseFootprint:
         )
 
         monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
-        monkeypatch.setattr(importer, "find_best_matching_footprint", lambda *a, **k: "Package_DIP:DIP-8_W7.62mm")
+        monkeypatch.setattr(importer, "_suggest_footprint", lambda *a, **k: _match("Package_DIP:DIP-8_W7.62mm"))
         monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
         monkeypatch.setattr(
             importer, "write_symbol", lambda *a, **k: symbol_kwargs.update(k) or '  (symbol "TestPart")\n'
@@ -1383,7 +1390,7 @@ class TestReuseFootprint:
         write_footprint_called = []
 
         monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
-        monkeypatch.setattr(importer, "find_best_matching_footprint", lambda *a, **k: "Diode_SMD:D_SOD-323")
+        monkeypatch.setattr(importer, "_suggest_footprint", lambda *a, **k: _match("Diode_SMD:D_SOD-323"))
         monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
         monkeypatch.setattr(
             importer, "write_symbol", lambda *a, **k: symbol_kwargs.update(k) or '  (symbol "TestPart")\n'
@@ -1435,11 +1442,11 @@ class TestReuseFootprint:
         monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
         monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
 
-        def capture_package(package, project_dir="", kicad_version=9):
+        def capture_package(comp, package, project_dir, kicad_version):
             seen_packages.append(package)
-            return "Package_DFN_QFN:QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"
+            return _match("Package_DFN_QFN:QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm")
 
-        monkeypatch.setattr(importer, "find_best_matching_footprint", capture_package)
+        monkeypatch.setattr(importer, "_suggest_footprint", capture_package)
 
         result = importer.import_component(
             "C123",
@@ -1454,6 +1461,50 @@ class TestReuseFootprint:
         assert result is not None
         assert seen_packages == ["QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"]
         assert symbol_kwargs["footprint_ref"] == "Package_DFN_QFN:QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"
+
+    def test_metadata_carries_fit_and_recommendation(self, tmp_path, monkeypatch):
+        fake_comp = self._make_fake_comp()
+        seen = {}
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(
+            importer, "_suggest_footprint", lambda *a, **k: _match("LED_SMD:LED_0603_1608Metric", POLARITY_REVERSED)
+        )
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: '  (symbol "TestPart")\n')
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: None)
+
+        def capture(metadata):
+            seen.update(metadata)
+            metadata["__reuse_existing_footprint"] = True
+            return metadata
+
+        result = importer.import_component(
+            "C123", str(tmp_path), "TestLib", log=lambda msg: None, confirm_metadata=capture
+        )
+
+        assert result is not None
+        assert seen["__footprint_candidate_ref"] == "LED_SMD:LED_0603_1608Metric"
+        assert "polarity reversed" in seen["__footprint_candidate_fit"]
+        assert seen["__footprint_candidate_recommended"] is False
+
+    def test_no_match_lookup_without_a_callback_to_offer_it(self, tmp_path, monkeypatch):
+        fake_comp = self._make_fake_comp()
+        fake_fp = EEFootprint()
+        fake_fp.pads.append(
+            EEPad(shape="RECT", x=0, y=0, width=1, height=1, layer="1", number="1", drill=0, rotation=0)
+        )
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(
+            importer, "_suggest_footprint", lambda *a, **k: (_ for _ in ()).throw(AssertionError("not offered"))
+        )
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: '  (symbol "TestPart")\n')
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
+
+        result = importer.import_component("C123", str(tmp_path), "TestLib", log=lambda msg: None)
+
+        assert result is not None
 
 
 class TestExistingModelFilesRespectOverwrite:

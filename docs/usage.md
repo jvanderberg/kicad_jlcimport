@@ -41,6 +41,20 @@ Open `PCB Editor > Tools > External Plugins > JLCImport`.
 
 If `sym-lib-table` or `fp-lib-table` is created for the first time, reopen the project.
 
+### Using a KiCad library footprint instead of JLC's
+
+Before an import, the metadata dialog (plugin, GUI and TUI) can offer a footprint from your KiCad libraries in place of the one converted from JLC's EasyEDA footprint. JLCPCB places parts by its own footprint, so a footprint is only offered when it has the same land pattern:
+
+1. **Name.** Footprints whose names share a package token with JLC's package (`SOT-363`, `QFN-24`, `SMA`, `0603`, ...) or a part number (`B4B-PH-K`) are considered, unless the name states a different pitch, body size or exposed pad. For two-pad parts only the kind of footprint the symbol's designator implies is considered: `R_` for `R`, `C_` / `CP_` for `C`, `LED_` for `LED`, `D_` for `D`, and so on. Two-pad parts with any other designator get no suggestion.
+2. **Pads.** The footprint must have the same pad numbers as JLC's (pads sharing a number count once) and the same through-hole pads, because the symbol's pins connect by number.
+3. **Fit.** JLC's pad centres are fitted onto the footprint's pads with the same solver production export uses. The fit must be within 0.05 mm RMS at a 90° rotation step, with numbering that isn't mirrored and pad sizes within 50%. That is the fit production export needs for a high-confidence placement.
+
+When several footprints pass, standard variants beat HandSolder ones, then the lowest residual and the closest pad sizes win. The dialog shows the fit (pad count, RMS residual, pad-size difference).
+
+For polarized two-terminal parts (LEDs, diodes, polarized capacitors), the `+` / `-` marks on JLC's footprint, or else its symbol's pin names, are checked against KiCad's convention for the suggested footprint: pad 1 is the cathode on `LED_` / `D_` footprints and `+` on `CP_` footprints, and `_AK` / `_KA` in the name states the order. A polarized part only gets a polarized footprint. If KiCad's pad 1 is the other polarity from JLC's pad 1, the dialog says the polarity is reversed: the imported symbol's pins would land on the opposite pads.
+
+JLC's footprint is the default choice unless the suggestion fits with no polarity caveat. When no footprint fits, none is offered and JLC's footprint is imported. **Browse…** lets you pick any footprint, but a footprint you pick yourself is not checked against JLC's pads.
+
 ## Local Development Environment
 
 ```bash
