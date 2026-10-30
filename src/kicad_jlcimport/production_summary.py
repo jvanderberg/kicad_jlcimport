@@ -31,23 +31,14 @@ _DARK_ROW_COLOURS = {ERROR: wx.Colour(115, 35, 35), WARNING: wx.Colour(105, 80, 
 _SEVERITY_LABEL = {ERROR: "Error", WARNING: "Warning", INFO: "Note"}
 _SEVERITY_TEXT = {ERROR: wx.Colour(200, 40, 40), WARNING: wx.Colour(190, 120, 0)}
 _OK_TEXT = wx.Colour(30, 140, 60)
-_MAX_REFS_SHOWN = 12
 _MARGIN = 16
+_SUMMARY_WIDTH = 820  # the summary is a centred column at most this wide
 
 
 def row_colours(background: wx.Colour) -> dict:
     """Issue-row tints matched to the list's theme (only the background is tinted)."""
     luma = 0.299 * background.Red() + 0.587 * background.Green() + 0.114 * background.Blue()
     return _DARK_ROW_COLOURS if luma < 128 else _LIGHT_ROW_COLOURS
-
-
-def refs_text(refs: Sequence[str]) -> str:
-    """The references, or the first few and a count when there are many."""
-    if not refs:
-        return "Board"
-    if len(refs) <= _MAX_REFS_SHOWN:
-        return ", ".join(refs)
-    return ", ".join(refs[:_MAX_REFS_SHOWN]) + f" and {len(refs) - _MAX_REFS_SHOWN} more"
 
 
 def headline(report: ProductionReport) -> tuple:
@@ -101,6 +92,86 @@ class _Wrapped(wx.StaticText):
     def rewrap(self, page_width: int) -> None:
         self.SetLabel(self._text)
         self.Wrap(max(int(page_width * self.share), 80))
+
+
+class BigButton(wx.Control):
+    """A large rounded button in the system accent colour (native buttons have a fixed height on macOS).
+
+    Sends ``wx.EVT_BUTTON`` when clicked, or when focused and Return or Space is pressed.
+    """
+
+    def __init__(self, parent, label: str, size=(320, 84)):
+        super().__init__(parent, style=wx.BORDER_NONE | wx.WANTS_CHARS, size=size)
+        self.SetMinSize(size)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self._label = label
+        self._hover = self._pressed = False
+        font = self.GetFont().Bold()
+        font.SetPointSize(int(round(font.GetPointSize() * 1.6)))
+        self.SetFont(font)
+        self.SetCursor(wx.Cursor(wx.CURSOR_HAND))
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set(hover=True))
+        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set(hover=False, pressed=False))
+        self.Bind(wx.EVT_LEFT_DOWN, lambda e: self._set(pressed=True))
+        self.Bind(wx.EVT_LEFT_UP, self._on_left_up)
+        self.Bind(wx.EVT_KEY_DOWN, self._on_key)
+
+    def AcceptsFocus(self):  # noqa: N802 - wx override
+        return self.IsEnabled()
+
+    def Enable(self, enable=True):  # noqa: N802 - wx override
+        result = super().Enable(enable)
+        self.Refresh()
+        return result
+
+    def _set(self, hover=None, pressed=None):
+        if hover is not None:
+            self._hover = hover
+        if pressed is not None:
+            self._pressed = pressed
+        self.Refresh()
+
+    def _click(self):
+        if self.IsEnabled():
+            event = wx.CommandEvent(wx.wxEVT_BUTTON, self.GetId())
+            event.SetEventObject(self)
+            self.GetEventHandler().ProcessEvent(event)
+
+    def _on_left_up(self, event):
+        clicked = self._pressed and self.GetClientRect().Contains(event.GetPosition())
+        self._set(pressed=False)
+        if clicked:
+            self._click()
+
+    def _on_key(self, event):
+        if event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_SPACE):
+            self._click()
+        else:
+            event.Skip()
+
+    def _on_paint(self, _event):
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
+        dc.Clear()
+        gc = wx.GraphicsContext.Create(dc)
+        w, h = self.GetClientSize()
+        if self.IsEnabled():
+            colour = wx.SystemSettings.GetColour(wx.SYS_COLOUR_HIGHLIGHT)
+            if self._pressed:
+                colour = colour.ChangeLightness(85)
+            elif self._hover:
+                colour = colour.ChangeLightness(110)
+            text = wx.WHITE
+        else:
+            colour = wx.Colour(128, 128, 128)
+            text = wx.Colour(220, 220, 220)
+        gc.SetPen(wx.TRANSPARENT_PEN)
+        gc.SetBrush(wx.Brush(colour))
+        gc.DrawRoundedRectangle(0, 0, w - 1, h - 1, 12)
+        gc.SetFont(self.GetFont(), text)
+        tw, th = gc.GetTextExtent(self._label)[:2]
+        gc.DrawText(self._label, (w - tw) / 2, (h - th) / 2)
 
 
 # --------------------------------------------------------------------- start
@@ -157,8 +228,7 @@ class StartScreen(wx.Panel):
         vbox.Add(self.stock_cb, 0, wx.LEFT | wx.RIGHT, _MARGIN)
 
         vbox.AddStretchSpacer(1)
-        self.check_btn = wx.Button(self, label="Check JLCPCB", size=(260, 56))
-        self.check_btn.SetFont(self.check_btn.GetFont().Bold().Larger().Larger())
+        self.check_btn = BigButton(self, label="Check JLCPCB")
         self.check_btn.Bind(wx.EVT_BUTTON, lambda _e: on_check())
         vbox.Add(self.check_btn, 0, wx.ALIGN_CENTER_HORIZONTAL)
         self.gauge = wx.Gauge(self, range=1, size=(360, -1))
@@ -214,10 +284,13 @@ class SummaryScreen(wx.ScrolledWindow):
     def set_report(self, report: ProductionReport, out_dir: str) -> None:
         self.DestroyChildren()
         self._wrapped = []
-        vbox = wx.BoxSizer(wx.VERTICAL)
+        col = wx.BoxSizer(wx.VERTICAL)
 
         text, colour = headline(report)
-        title = _heading(self, text, 1.4)
+        title = self._wrap(text, 0.55, bold=True)
+        font = title.GetFont()
+        font.SetPointSize(int(round(font.GetPointSize() * 1.3)))
+        title.SetFont(font)
         title.SetForegroundColour(colour)
         cancel = wx.Button(self, label="Cancel")
         cancel.Bind(wx.EVT_BUTTON, lambda _e: self._on_cancel())
@@ -226,53 +299,57 @@ class SummaryScreen(wx.ScrolledWindow):
         generate = wx.Button(self, label="Generate")
         generate.Bind(wx.EVT_BUTTON, lambda _e: self._on_generate())
         generate.SetDefault()
-        vbox.Add(_button_row(self, title, [cancel, review, generate]), 0, wx.EXPAND | wx.ALL, _MARGIN)
-        vbox.Add(
-            self._wrap(f"Files go to {out_dir}" if out_dir else "Choose an output folder on the start screen.", 0.9),
-            0,
-            wx.LEFT | wx.RIGHT,
-            _MARGIN,
-        )
+        col.Add(_button_row(self, title, [cancel, review, generate]), 0, wx.EXPAND | wx.TOP | wx.BOTTOM, _MARGIN)
+        folder = f"Files go to {out_dir}" if out_dir else "Choose an output folder on the start screen."
+        col.Add(self._wrap(folder, 1.0), 0, wx.BOTTOM, _MARGIN)
 
         cards = wx.BoxSizer(wx.HORIZONTAL)
-        sections = report.summary_sections()
-        share = 0.9 / max(len(sections), 1)
-        for i, (name, rows) in enumerate(sections):
+        for i, (name, rows) in enumerate(report.summary_sections()):
             box = wx.StaticBoxSizer(wx.VERTICAL, self, name)
             grid = wx.FlexGridSizer(cols=2, vgap=6, hgap=12)
-            grid.AddGrowableCol(1)
+            grid.AddGrowableCol(0)
             for label, value in rows:
-                grid.Add(wx.StaticText(box.GetStaticBox(), label=label), 0, wx.ALIGN_TOP)
-                grid.Add(self._wrap(value, share * 0.5, parent=box.GetStaticBox(), bold=True), 1, wx.EXPAND)
+                grid.Add(wx.StaticText(box.GetStaticBox(), label=label), 0)
+                strong = wx.StaticText(box.GetStaticBox(), label=value)
+                strong.SetFont(strong.GetFont().Bold())
+                grid.Add(strong, 0, wx.ALIGN_RIGHT)
             box.Add(grid, 1, wx.EXPAND | wx.ALL, 10)
             cards.Add(box, 1, wx.EXPAND | (wx.LEFT if i else 0), 12)
-        vbox.Add(cards, 0, wx.EXPAND | wx.ALL, _MARGIN)
+        col.Add(cards, 0, wx.EXPAND | wx.BOTTOM, _MARGIN)
 
         groups = report.issue_groups()
-        issues = wx.StaticBoxSizer(wx.VERTICAL, self, f"Issues ({len(groups)})" if groups else "Issues")
+        issues = wx.StaticBoxSizer(wx.VERTICAL, self, "Issues")
         parent = issues.GetStaticBox()
         if groups:
             grid = wx.FlexGridSizer(cols=3, vgap=10, hgap=16)
             grid.AddGrowableCol(2)
-            for head in ("Severity", "Parts", "Issue"):
-                grid.Add(wx.StaticText(parent, label=head), 0)
             for severity, refs, message in groups:
                 sev = wx.StaticText(parent, label=_SEVERITY_LABEL.get(severity, severity))
                 sev.SetFont(sev.GetFont().Bold())
                 if severity in _SEVERITY_TEXT:
                     sev.SetForegroundColour(_SEVERITY_TEXT[severity])
                 grid.Add(sev, 0, wx.ALIGN_TOP)
-                count = f"{len(refs)} part{'s' if len(refs) != 1 else ''}: " if len(refs) > 1 else ""
-                grid.Add(self._wrap(count + refs_text(refs), 0.28, parent=parent), 0, wx.ALIGN_TOP)
-                grid.Add(self._wrap(message, 0.5, parent=parent), 1, wx.EXPAND)
+                grid.Add(wx.StaticText(parent, label=_part_count(refs)), 0, wx.ALIGN_TOP)
+                grid.Add(self._wrap(message, 0.7, parent=parent), 1, wx.EXPAND)
             issues.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
+            issues.Add(
+                wx.StaticText(parent, label="Review details lists the parts and every note."),
+                0,
+                wx.LEFT | wx.RIGHT | wx.BOTTOM,
+                10,
+            )
         else:
             ok = wx.StaticText(parent, label="No errors or warnings.")
             ok.SetForegroundColour(_OK_TEXT)
             issues.Add(ok, 0, wx.ALL, 10)
-        vbox.Add(issues, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, _MARGIN)
+        col.Add(issues, 0, wx.EXPAND | wx.BOTTOM, _MARGIN)
 
-        self.SetSizer(vbox)
+        # A centred column of readable width, however wide the window is.
+        outer = wx.BoxSizer(wx.HORIZONTAL)
+        outer.AddStretchSpacer(1)
+        self._column = outer.Add(col, 0, wx.EXPAND)
+        outer.AddStretchSpacer(1)
+        self.SetSizer(outer)
         self._rewrap()
 
     def _wrap(self, text: str, share: float, parent=None, bold: bool = False) -> _Wrapped:
@@ -281,7 +358,10 @@ class SummaryScreen(wx.ScrolledWindow):
         return label
 
     def _rewrap(self) -> None:
-        width = self.GetClientSize().width
+        width = min(self.GetClientSize().width - 2 * _MARGIN, _SUMMARY_WIDTH)
+        width = max(width, 400)
+        if getattr(self, "_column", None) is not None:
+            self._column.SetMinSize((width, -1))
         for label in self._wrapped:
             label.rewrap(width)
         self.FitInside()
@@ -290,6 +370,12 @@ class SummaryScreen(wx.ScrolledWindow):
     def _on_size(self, event) -> None:
         event.Skip()
         wx.CallAfter(self._rewrap)
+
+
+def _part_count(refs: Sequence[str]) -> str:
+    if not refs:
+        return "Board"
+    return f"{len(refs)} part{'s' if len(refs) != 1 else ''}"
 
 
 # ------------------------------------------------------------------- details

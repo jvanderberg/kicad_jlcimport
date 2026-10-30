@@ -205,11 +205,11 @@ class ProductionReport:
             order.append(("Estimated parts cost", f"${cost:.2f} (excl. fees)" if cost is not None else "Unknown"))
         sections = [("Order", order)]
         if not not_checked:
-            fees = [("Extended parts (loading fee each)", _count_list(self.extended_parts))]
+            fees = [("Extended parts (loading fee each)", str(len(self.extended_parts)))]
             if self.preferred_parts:
-                fees.append(("Preferred extended (no loading fee)", _count_list(self.preferred_parts)))
+                fees.append(("Preferred extended (no loading fee)", str(len(self.preferred_parts))))
             if self.double_sided:
-                fees.append(("Both sides", "Standard PCBA charges a loading fee for every unique part"))
+                fees.append(("Both sides (Standard PCBA)", "Fee for every unique part"))
             sections.append(("Fees", fees))
         placements = self.placements
         solved = [p for p in placements if p.source == SOLVED]
@@ -238,10 +238,6 @@ class ProductionReport:
         for row in self.rows:
             lines.append(format_row(row))
         return "\n".join(lines) + "\n"
-
-
-def _count_list(parts: List[str]) -> str:
-    return f"{len(parts)}: {', '.join(parts)}" if parts else "None"
 
 
 def _clip(text: str, width: int) -> str:
