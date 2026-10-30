@@ -1,12 +1,15 @@
-"""Decide each part's CPL position and rotation: solved, KiCad fallback, or manual override.
+"""Decide each part's CPL position and rotation: solved, estimated, KiCad fallback, or manual override.
 
 Manual override fields (footprint properties, case-insensitive):
 
 ``JLCPCB Rotation Offset``
-    Degrees, counter-clockwise as viewed from the top, e.g. ``90`` or ``-90``.
+    Degrees added to the CPL ``Rotation`` value of KiCad's own orientation,
+    e.g. ``90`` or ``-90``.  On the top side a positive offset turns the part
+    counter-clockwise as viewed from the top; on the bottom side JLCPCB
+    counts rotation the other way, so it turns the part clockwise.
 ``JLCPCB Position Offset``
     ``dx, dy`` in millimetres in CPL coordinates (X right, Y up, viewed from
-    the top), e.g. ``0.5, -0.25``.
+    the top, on both sides), e.g. ``0.5, -0.25``.
 
 When either field is present the solver result is **not** used for the CPL:
 the row is KiCad's own position/rotation plus the offsets.  This keeps an
@@ -154,14 +157,16 @@ def compute_placement(
     override, override_errors = parse_override(fp)
     if override is not None:
         placement = kicad_placement(fp, "manual override")
+        base_rotation = placement.rotation
         placement.x += override.dx
         placement.y += override.dy
-        placement.rotation = normalize_angle(placement.rotation + override.rotation_offset)
+        placement.rotation = normalize_angle(base_rotation + override.rotation_offset)
         placement.source = MANUAL
         placement.confidence = MANUAL_CONFIDENCE
         placement.fit = fit
         placement.notes = [
-            f"Manual override: rotation {override.rotation_offset:+g}°, offset ({override.dx:+g}, {override.dy:+g}) mm"
+            f"Manual override: rotation {base_rotation:g}° (KiCad) {override.rotation_offset:+g}° = "
+            f"{placement.rotation:g}°, position offset ({override.dx:+g}, {override.dy:+g}) mm"
         ]
         if fit is not None and fit.usable:
             placement.notes.append(

@@ -202,7 +202,15 @@ class TestOverrides:
         pl = compute_placement(rec, jlc)
         assert pl.source == MANUAL and pl.verified
         assert (pl.x, pl.y, pl.rotation) == (11.0, -18.0, 0.0)
+        assert pl.notes[0].startswith("Manual override: rotation 90° (KiCad) -90° = 0°")
         assert any("Solver suggests" in n for n in pl.notes)
+
+    def test_bottom_override_offsets_the_bottom_cpl_rotation(self):
+        # KiCad orientation 0 on the bottom is CPL rotation 180; the offset is added to that.
+        rec = fp("R1", theta=0, side="bottom", props={ROTATION_OFFSET_FIELD: "90"})
+        pl = compute_placement(rec)
+        assert pl.rotation == 270.0
+        assert pl.notes[0].startswith("Manual override: rotation 180° (KiCad) +90° = 270°")
 
     def test_override_with_error_note(self):
         pl = compute_placement(fp("R1", props={ROTATION_OFFSET_FIELD: "x"}))

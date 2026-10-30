@@ -12,7 +12,7 @@ Files go to `<project>/production/` unless you choose another folder.
 ## Workflow
 
 1. Set **Boards to assemble**.
-2. Click **Check**. Every unique LCSC part is looked up in the JLCPCB assembly library, and JLC's own footprint for that part is fetched. The table then shows, for each footprint:
+2. Click **Check**. Every unique LCSC part is looked up in the JLCPCB assembly library, and JLC's own footprint for that part is fetched. Untick **Check stock and prices** to skip the parts-library lookup when you only need placements; the check is then faster, and stock is reported as not checked. The table then shows, for each footprint:
    - stock status: missing or invalid LCSC number, not found, out of stock, or stock lower than quantity per board × boards
    - Basic or Extended (each Extended part adds a JLCPCB setup fee)
    - the solved CPL rotation, and how much to trust it (confidence plus notes)
@@ -23,6 +23,8 @@ Files go to `<project>/production/` unless you choose another folder.
 **Refill zones before plotting** (on by default) refills every zone on the open board, the same as pressing B in the editor, so the Gerbers match the copper. KiCad's Python API has no undo for this, so save the board afterwards if you want to keep the new fills.
 
 DNP footprints and footprints excluded from the BOM are left out of both the BOM and the CPL. Footprints excluded from position files stay in the BOM but are left out of the CPL.
+
+JLCPCB accepts at most 300 BOM line items per order.
 
 The LCSC number is read from the first non-empty footprint field named `LCSC`, `LCSC Part`, `LCSC Part #`, `LCSC Part Number`, `LCSC#`, `JLCPCB Part #`, `JLCPCB Part`, `JLCPCB`, `JLC` or `JLC Part` (case-insensitive).
 
@@ -78,14 +80,25 @@ Every polarized two-pad part gets the "check its polarity in JLC's placement pre
 
 ## Manual overrides
 
-You can add these fields to a footprint (in footprint properties):
+If the placement preview shows a part turned or shifted, you can fix it for good in KiCad instead of correcting it in the preview on every order. Add one or both of these fields to the footprint (Footprint Properties > Fields, or on the symbol, which carries the field to the board on the next update):
 
 | Field | Value |
 | --- | --- |
-| `JLCPCB Rotation Offset` | degrees, CCW as viewed from the top, e.g. `90`, `-90`, `180` |
-| `JLCPCB Position Offset` | `dx, dy` in mm, in CPL coordinates (X right, Y up, viewed from the top), e.g. `0.5, -0.25` |
+| `JLCPCB Rotation Offset` | degrees added to KiCad's own rotation, e.g. `90`, `-90`, `180` |
+| `JLCPCB Position Offset` | `dx, dy` in mm, in CPL coordinates (X right, Y up, viewed from the top, on both sides), e.g. `0.5, -0.25` |
 
-If either field is present, the CPL row is **KiCad's own position and rotation plus these offsets**, and the solver result is ignored. The solver's suggestion is still shown in the notes. The result therefore doesn't depend on network access. A rotation offset of `0` means "trust KiCad for this part".
+If either field is present, the CPL row is **KiCad's own position and rotation plus these offsets**, and the solver result is ignored. The result therefore doesn't depend on network access or on JLC changing its footprint. A rotation offset of `0` means "trust KiCad for this part".
+
+The offset is added to the CPL Rotation value that KiCad's orientation gives, which is not necessarily the rotation the solver wrote. The row's notes spell out the arithmetic and the solver's own suggestion, for example:
+
+```
+Manual override: rotation 90° (KiCad) -90° = 0°, position offset (+1, +2) mm
+Solver suggests rotation 180° at (11.000, -18.000)
+```
+
+So if the preview looks right at some rotation R, the offset is R minus the KiCad rotation shown in the note. On the top side a positive offset turns the part counter-clockwise as seen from the top. On the bottom side JLCPCB counts rotation the other way (see [Coordinate conventions](#coordinate-conventions)), so a positive offset turns it clockwise as seen from the top.
+
+The row shows as **manual** in the table and the report. A field whose value can't be read (not a number, or a position offset that isn't `dx, dy`) is ignored, with a warning on that row.
 
 ## Coordinate conventions
 
@@ -107,4 +120,15 @@ All conventions are defined in `src/kicad_jlcimport/production/conventions.py`:
 jlcimport-cli production board.kicad_pcb -n 10          # check + write to <project>/production
 jlcimport-cli production board.kicad_pcb --check-only   # exit 1 if errors
 jlcimport-cli production board.kicad_pcb --force -o out # write even with errors
+jlcimport-cli production board.kicad_pcb --no-stock     # placements only, skip stock/price lookup
 ```
+
+| Option | Meaning |
+| --- | --- |
+| `-n`, `--boards N` | boards to assemble, for the stock check (default 5) |
+| `-o`, `--output DIR` | output folder (default `<project>/production`) |
+| `--check-only` | print the report and write nothing; exit status 1 if there are errors |
+| `--force` | write the files even when the check reports errors |
+| `--no-stock` | skip the stock and price lookup; placements are still solved |
+
+Pass `--insecure` before the command (`jlcimport-cli --insecure production ...`) if certificate checks fail behind a proxy.
