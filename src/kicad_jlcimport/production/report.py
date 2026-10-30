@@ -164,11 +164,12 @@ class ProductionReport:
             lines.append("Stock, part type and prices not checked")
         return lines
 
-    def issue_lines(self, min_severity: str = WARNING) -> List[str]:
-        """One line per distinct issue, worst first, e.g. ``[WARNING] TP1, TP2: No LCSC...``.
+    def issue_groups(self, min_severity: str = WARNING) -> List[Tuple[str, List[str], str]]:
+        """(severity, references, message) per distinct issue, worst first.
 
-        Rows sharing the same severity and message are merged into one line so
-        a handful of identical warnings (test points, say) don't drown the rest.
+        Rows sharing the same severity and message are merged so a handful of
+        identical warnings (test points, say) don't drown the rest.  Board-level
+        issues have no references.
         """
         limit = _SEVERITY_RANK[min_severity]
         grouped: Dict[Tuple[str, str], List[str]] = {}
@@ -177,13 +178,41 @@ class ProductionReport:
         for row in self.rows:
             for issue in row.issues:
                 grouped.setdefault((issue.severity, issue.message), []).append(row.reference)
-        lines = []
-        for (severity, message), refs in sorted(grouped.items(), key=lambda kv: _SEVERITY_RANK[kv[0][0]]):
-            if _SEVERITY_RANK[severity] > limit:
-                continue
-            prefix = f"[{severity.upper()}] " + (", ".join(refs) + ": " if refs else "")
-            lines.append(prefix + message)
-        return lines
+        ordered = sorted(grouped.items(), key=lambda kv: _SEVERITY_RANK[kv[0][0]])
+        return [(sev, refs, msg) for (sev, msg), refs in ordered if _SEVERITY_RANK[sev] <= limit]
+
+    def issue_lines(self, min_severity: str = WARNING) -> List[str]:
+        """One line per distinct issue, worst first, e.g. ``[WARNING] TP1, TP2: No LCSC...``."""
+        return [
+            f"[{sev.upper()}] " + (", ".join(refs) + ": " if refs else "") + msg
+            for sev, refs, msg in self.issue_groups(min_severity)
+        ]
+
+    def summary_items(self) -> List[Tuple[str, str]]:
+        """(label, value) pairs summarising the check, for a two-column table."""
+        n_unverified = sum(1 for p in self.placements if p.source == KICAD)
+        n_estimated = sum(1 for p in self.placements if p.source == ESTIMATED)
+        items = [
+            ("Boards", str(self.boards)),
+            ("Footprints", str(len(self.rows))),
+            ("Unique LCSC parts", str(len(self.availability))),
+            ("Errors", str(self.count(ERROR))),
+            ("Warnings", str(self.count(WARNING))),
+        ]
+        if any(a.status == av.NOT_CHECKED for a in self.availability.values()):
+            items.append(("Stock and prices", "Not checked"))
+        else:
+            cost = self.estimated_parts_cost()
+            items.append(("Estimated parts cost", f"${cost:.2f} (excl. fees)" if cost is not None else "Unknown"))
+            items.append(("Extended parts (loading fee each)", _count_list(self.extended_parts)))
+            if self.preferred_parts:
+                items.append(("Preferred extended (no loading fee)", _count_list(self.preferred_parts)))
+        items.append(("Assembly", "Both sides (Standard PCBA)" if self.double_sided else "One side"))
+        if n_estimated:
+            items.append(("Estimated placements", f"{n_estimated} (check in JLC's preview)"))
+        if n_unverified:
+            items.append(("Unverified placements", f"{n_unverified} (KiCad position/rotation)"))
+        return items
 
     def to_text(self) -> str:
         """Plain-text report for the CLI and the report file."""
@@ -200,6 +229,10 @@ class ProductionReport:
         for row in self.rows:
             lines.append(format_row(row))
         return "\n".join(lines) + "\n"
+
+
+def _count_list(parts: List[str]) -> str:
+    return f"{len(parts)}: {', '.join(parts)}" if parts else "None"
 
 
 def _clip(text: str, width: int) -> str:

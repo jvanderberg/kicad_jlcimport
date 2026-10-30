@@ -18,6 +18,7 @@ from .part_detail import PartDetailPanel
 from .production.export import board_basename, default_output_dir, make_caches, resolve_output_dir, write_bom_cpl
 from .production.placement import POSITION_OFFSET_FIELD, ROTATION_OFFSET_FIELD
 from .production.report import ERROR, WARNING, row_cells, run_check
+from .production_summary import GenerateConfirmDialog, ReportSummaryView, row_colours
 
 # The last column (Notes) is stretched to fill whatever width is left.
 COLUMNS = [
@@ -31,27 +32,14 @@ COLUMNS = [
     ("Notes", "notes", 120),
 ]
 
-_LIGHT_ROW_COLOURS = {
-    ERROR: wx.Colour(255, 215, 215),
-    WARNING: wx.Colour(255, 240, 200),
-}
-_DARK_ROW_COLOURS = {
-    ERROR: wx.Colour(115, 35, 35),
-    WARNING: wx.Colour(105, 80, 15),
-}
-
-
-def _row_colours(background):
-    """Issue-row tints matched to the list's theme.
-
-    Only the background is tinted; the theme's own text colour stays, so it
-    contrasts in both light and dark mode.
-    """
-    luma = 0.299 * background.Red() + 0.587 * background.Green() + 0.114 * background.Blue()
-    return _DARK_ROW_COLOURS if luma < 128 else _LIGHT_ROW_COLOURS
-
-
 _TITLE = "JLCPCB Production Files"
+
+_HINT = (
+    "Select a row to see the part and all of its notes.\n\n"
+    "Manual corrections: add the footprint fields "
+    f'"{ROTATION_OFFSET_FIELD}" (degrees) and/or "{POSITION_OFFSET_FIELD}" ("dx, dy" mm, Y up) '
+    "to use KiCad's placement plus that offset."
+)
 
 
 class ProductionPanel(wx.Panel):
@@ -69,7 +57,6 @@ class ProductionPanel(wx.Panel):
         self._busy = False
         self._request_id = 0
         self._report = None
-        self._pending = None  # (report, records) waiting for Continue / Cancel after Generate's check
         self._part_cache, self._footprint_cache = make_caches()
         board_file = adapter.board_path(board)
         self._default_dir = default_output_dir(board_file) if board_file else ""
@@ -143,17 +130,12 @@ class ProductionPanel(wx.Panel):
         self.part_detail = PartDetailPanel(panel, on_ssl_error=self._handle_ssl_cert_error)
         detail_box.Add(self.part_detail, 3, wx.EXPAND)
         self.details = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY)
-        self.details.SetValue("Select a row to see the part and all of its notes.")
+        self.details.SetValue(_HINT)
         detail_box.Add(self.details, 2, wx.EXPAND | wx.LEFT, 8)
         vbox.Add(detail_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
-        self.summary = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
-        self.summary.SetValue(
-            "Check looks up every LCSC part on the board (stock, basic/extended) and solves each part's "
-            "CPL rotation and centre against JLCPCB's own footprint.\n"
-            f'Manual corrections: add footprint fields "{ROTATION_OFFSET_FIELD}" (degrees) and/or '
-            f'"{POSITION_OFFSET_FIELD}" ("dx, dy" mm, Y up) to use KiCad\'s placement plus that offset.'
-        )
+        self.summary = ReportSummaryView(panel, height=130)
+        self.summary.clear("Click Check to look up the parts and solve their placements.")
         vbox.Add(self.summary, 0, wx.EXPAND | wx.ALL, 8)
 
         hbox = wx.BoxSizer(wx.HORIZONTAL)
@@ -165,15 +147,6 @@ class ProductionPanel(wx.Panel):
         self.generate_btn = wx.Button(panel, label="Generate")
         self.generate_btn.Bind(wx.EVT_BUTTON, self._on_generate)
         hbox.Add(self.generate_btn, 0, wx.LEFT, 6)
-        # Shown after Generate's check, so the results can be reviewed first.
-        self.cancel_btn = wx.Button(panel, label="Cancel")
-        self.cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_generate)
-        hbox.Add(self.cancel_btn, 0, wx.LEFT, 6)
-        self.continue_btn = wx.Button(panel, label="Continue")
-        self.continue_btn.Bind(wx.EVT_BUTTON, self._on_continue_generate)
-        hbox.Add(self.continue_btn, 0, wx.LEFT, 6)
-        self.cancel_btn.Hide()
-        self.continue_btn.Hide()
         vbox.Add(hbox, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         panel.SetSizer(vbox)
@@ -204,21 +177,10 @@ class ProductionPanel(wx.Panel):
 
     def _set_busy(self, busy):
         self._busy = busy
-        self._update_controls()
-
-    def _update_controls(self):
-        """Busy: nothing to click.  Waiting to generate: only Continue / Cancel."""
-        waiting = self._pending is not None
-        idle = not self._busy and not waiting
-        self.check_btn.Enable(idle)
-        self.generate_btn.Enable(idle)
-        self.qty_spin.Enable(idle)
-        self.stock_cb.Enable(idle)
-        self.check_btn.Show(not waiting)
-        self.generate_btn.Show(not waiting)
-        self.cancel_btn.Show(waiting)
-        self.continue_btn.Show(waiting)
-        self.Layout()
+        self.check_btn.Enable(not busy)
+        self.generate_btn.Enable(not busy)
+        self.qty_spin.Enable(not busy)
+        self.stock_cb.Enable(not busy)
 
     def _on_browse(self, event):
         dlg = wx.DirDialog(self, "Choose output folder", self.dir_text.GetValue())
@@ -305,48 +267,25 @@ class ProductionPanel(wx.Panel):
             return
         self._set_busy(False)
         self._show_report(report)
-        counts = f"{report.count(ERROR)} errors, {report.count(WARNING)} warnings"
+        self.status.SetLabel(f"{report.count(ERROR)} errors, {report.count(WARNING)} warnings")
         if generate:
-            # Every board has some warnings: show the results and let the user decide.
-            self._pending = (report, records)
-            self._update_controls()
-            self.status.SetLabel(f"{counts}. Review the results, then Continue to write the files or Cancel.")
-            self.continue_btn.SetFocus()
-        else:
-            self.status.SetLabel(counts)
-
-    def _on_continue_generate(self, event):
-        if self._pending is None:
-            return
-        report, records = self._pending
-        self._pending = None
-        self._update_controls()
-        self._generate(report, records)
-
-    def _on_cancel_generate(self, event):
-        self._pending = None
-        self._update_controls()
-        self.status.SetLabel("Generation cancelled")
+            self._generate(report, records)
 
     def _show_report(self, report):
         self._report = report
         self.table.DeleteAllItems()
-        self.details.SetValue("Select a row to see the part and all of its notes.")
+        self.details.SetValue(_HINT)
         self.part_detail.clear()
-        row_colours = _row_colours(self.table.GetBackgroundColour())
+        colours = row_colours(self.table.GetBackgroundColour())
         for row in report.rows:
             cells = row_cells(row)
             idx = self.table.InsertItem(self.table.GetItemCount(), cells["ref"])
             for col, (_title, key, _width) in enumerate(COLUMNS[1:], start=1):
                 self.table.SetItem(idx, col, cells[key])
-            colour = row_colours.get(row.severity)
+            colour = colours.get(row.severity)
             if colour is not None:
                 self.table.SetItemBackgroundColour(idx, colour)
-        # Issues first: they are what the user has to act on.
-        issues = report.issue_lines()
-        lines = issues + [""] if issues else []
-        lines.extend(report.summary_lines())
-        self.summary.SetValue("\n".join(lines))
+        self.summary.set_report(report)
 
     # ------------------------------------------------------------ generate
 
@@ -379,6 +318,15 @@ class ProductionPanel(wx.Panel):
                 wx.OK | wx.ICON_WARNING,
             )
             return
+        names = [f"{basename}-gerbers.zip", f"{basename}-bom.csv", f"{basename}-cpl.csv", f"{basename}-report.txt"]
+        dlg = GenerateConfirmDialog(self, report, out_dir, names)
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                self.status.SetLabel("Generation cancelled")
+                return
+        finally:
+            dlg.Destroy()
+
         self.status.SetLabel("Generating files...")
         wx.BeginBusyCursor()
         try:
@@ -400,7 +348,6 @@ class ProductionPanel(wx.Panel):
 
         self.status.SetLabel(f"Files written to {out_dir}")
         written = [zip_path, paths["bom"], paths["cpl"], paths["report"]]
-        self.summary.AppendText("\n\nWritten:\n" + "\n".join(os.path.basename(p) for p in written))
         wx.MessageBox(
             "Production files written to:\n" + out_dir + "\n\n" + "\n".join(os.path.basename(p) for p in written),
             _TITLE,

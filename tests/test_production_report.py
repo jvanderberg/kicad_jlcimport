@@ -625,3 +625,28 @@ class TestApiLookupPart:
     def test_invalid_number(self):
         with pytest.raises(ValueError):
             api.lookup_part("xyz")
+
+
+class TestStructuredSummary:
+    def test_issue_groups_merge_refs_worst_first(self):
+        fps = [fp("TP1", lcsc=None), fp("TP2", lcsc=None), fp("R1"), fp("R1")]
+        report = run_check(fps, 1, *caches({"C25804": part_info("C25804")}))
+        groups = report.issue_groups()
+        assert groups[0][0] == ERROR and groups[0][1] == []  # duplicate designators: a board-level issue
+        assert any(refs[:2] == ["TP1", "TP2"] for _sev, refs, _msg in groups)
+        assert report.issue_lines()[0].startswith("[ERROR] ")
+
+    def test_summary_items(self):
+        parts = {"C1": part_info("C1", kind="Extended")}
+        report = run_check([fp("U1", lcsc="C1")], 2, *caches(parts))
+        items = dict(report.summary_items())
+        assert items["Boards"] == "2" and items["Footprints"] == "1"
+        assert items["Extended parts (loading fee each)"] == "1: C1"
+        assert items["Assembly"] == "One side"
+        assert items["Estimated parts cost"].startswith("$")
+
+    def test_summary_items_without_stock(self):
+        report = run_check([fp("U1", lcsc="C1")], 1, *caches({}), check_stock=False)
+        items = dict(report.summary_items())
+        assert items["Stock and prices"] == "Not checked"
+        assert "Estimated parts cost" not in items
