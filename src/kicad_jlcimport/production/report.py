@@ -23,6 +23,7 @@ from .solver import (
     POLARITY_BY_FOOTPRINT_NAME,
     POLARITY_BY_NUMBERING,
     POLARITY_BY_PIN_NAMES,
+    POLARITY_JLC_UNNAMED,
     POLARITY_NAMES_UNAVAILABLE,
     POLARITY_SWAPPED,
     POLARITY_UNRESOLVED,
@@ -30,9 +31,9 @@ from .solver import (
 
 # Solver flags that make a solved placement a warning rather than a note.
 _WARNING_FLAGS = (POLARITY_UNRESOLVED, POLARITY_NAMES_UNAVAILABLE)
-# Polarized two-pad parts whose pads were paired by role: worth a look, because
-# JLC's symbol pin names don't always match how JLC places the part.
-_POLARIZED_FLAGS = (POLARITY_BY_PIN_NAMES, POLARITY_BY_FOOTPRINT_NAME, POLARITY_BY_CONVENTION)
+# Polarized parts: worth a look, because JLC's symbol pin names don't always
+# match how JLC places the part (or name the pins at all).
+_POLARIZED_FLAGS = (POLARITY_BY_PIN_NAMES, POLARITY_BY_FOOTPRINT_NAME, POLARITY_BY_CONVENTION, POLARITY_JLC_UNNAMED)
 
 # Fixed texts so the issue list groups them into one line each.
 ESTIMATED_TEXT = (
@@ -96,7 +97,18 @@ class ProductionReport:
 
     @property
     def extended_parts(self) -> List[str]:
-        return sorted(lcsc for lcsc, a in self.availability.items() if a.is_extended)
+        """Extended parts that carry a feeder loading fee."""
+        return sorted((lcsc for lcsc, a in self.availability.items() if a.is_extended), key=natural_key)
+
+    @property
+    def preferred_parts(self) -> List[str]:
+        return sorted((lcsc for lcsc, a in self.availability.items() if a.is_preferred), key=natural_key)
+
+    @property
+    def double_sided(self) -> bool:
+        """True when assembled parts sit on both sides of the board."""
+        sides = {r.footprint.side for r in self.rows if r.footprint.in_cpl and r.footprint.lcsc}
+        return len(sides) > 1
 
     @property
     def placements(self) -> List[Placement]:
@@ -126,8 +138,18 @@ class ProductionReport:
         ]
         if self.extended_parts:
             lines.append(
-                f"{len(self.extended_parts)} extended parts (each adds a JLCPCB setup fee): "
+                f"{len(self.extended_parts)} extended parts (each adds a feeder loading fee): "
                 + ", ".join(self.extended_parts)
+            )
+        if self.preferred_parts:
+            lines.append(
+                f"{len(self.preferred_parts)} preferred extended parts (no loading fee on Economic assembly): "
+                + ", ".join(self.preferred_parts)
+            )
+        if self.double_sided:
+            lines.append(
+                "Parts on both sides: JLCPCB assembles both sides only with Standard PCBA, "
+                "which charges a loading fee for every unique part"
             )
         cost = self.estimated_parts_cost()
         if cost is not None:
@@ -166,8 +188,10 @@ class ProductionReport:
         lines = ["JLCPCB production check", "=" * 23]
         lines.extend(self.summary_lines())
         lines.append("")
-        for issue in self.board_issues:
-            lines.append(f"[{issue.severity.upper()}] {issue.message}")
+        issues = self.issue_lines()
+        if issues:
+            lines.extend(issues)
+            lines.append("")
         header = f"{'Ref':<8} {'Value':<16} {'LCSC':<11} {'Stock':<26} {'Type':<9} {'Rot':>7} {'Conf':<10} Notes"
         lines.append(header)
         lines.append("-" * len(header))
@@ -322,8 +346,10 @@ def _build_row(
         # A failed lookup is an error too: nothing about the part was checked.
         if a.status in (av.NOT_FOUND, av.OUT_OF_STOCK, av.LOW_STOCK, av.LOOKUP_FAILED):
             row.add(ERROR, a.message)
+        elif a.status == av.STOCK_TIGHT:
+            row.add(WARNING, a.message)
         if a.is_extended:
-            row.add(INFO, "Extended part (setup fee)")
+            row.add(INFO, "Extended part (loading fee)")
 
     if not fp.in_cpl:
         return row
@@ -333,6 +359,8 @@ def _build_row(
         fetch_err = f"JLC footprint unavailable ({fetch_err})" if fetch_err else "JLC footprint unavailable"
     pl = compute_placement(fp, jlc_fp, fetch_err)
     row.placement = pl
+    for error in pl.override_errors:
+        row.add(WARNING, error)
     if pl.source == KICAD:
         if lcsc:
             row.add(WARNING, "; ".join(pl.notes))

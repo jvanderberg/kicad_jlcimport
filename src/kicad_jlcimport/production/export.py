@@ -1,7 +1,7 @@
 """File-level helpers shared by the plugin and the CLI."""
 
 import os
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from ..easyeda.api import lookup_part
 from .cache import KeyedCache
@@ -19,6 +19,28 @@ def default_output_dir(board_path: str) -> str:
 
 def board_basename(board_path: str) -> str:
     return os.path.splitext(os.path.basename(board_path))[0] or "board"
+
+
+def resolve_output_dir(text: str, board_path: Optional[str]) -> Optional[str]:
+    """Absolute output folder for what the user typed.
+
+    ``${KIPRJMOD}`` (the board's folder), environment variables and ``~`` are
+    expanded, and a relative path is taken relative to the board's folder,
+    the way KiCad resolves plot output folders.  Returns None for an empty
+    entry, or a relative one when the board has never been saved.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    project_dir = os.path.dirname(os.path.abspath(board_path)) if board_path else None
+    if project_dir:
+        text = text.replace("${KIPRJMOD}", project_dir).replace("$(KIPRJMOD)", project_dir)
+    path = os.path.expanduser(os.path.expandvars(text))
+    if not os.path.isabs(path):
+        if not project_dir:
+            return None
+        path = os.path.join(project_dir, path)
+    return os.path.normpath(path)
 
 
 def make_caches() -> Tuple[KeyedCache, KeyedCache]:

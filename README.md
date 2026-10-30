@@ -42,7 +42,7 @@ Open JLCImport from the PCB Editor and switch to the **Production Files** tab.
 
 1. Set the number of boards to assemble.
 2. Click **Check**. Every LCSC part is looked up (stock, basic/extended, price), and each part's CPL rotation and position is solved against JLC's footprint. Problems are highlighted, and polarized two-pad parts are flagged for a look in JLC's placement preview. Untick **Check stock and prices** if you only need placements.
-3. Click **Generate**. This writes `<board>-gerbers.zip`, `<board>-bom.csv`, `<board>-cpl.csv` and a report to `<project>/production/`.
+3. Click **Generate**. This writes `<board>-gerbers.zip`, `<board>-bom.csv`, `<board>-cpl.csv` and a report to `<project>/production/`, and leaves the individual Gerber and drill files in `<project>/production/gerbers/`.
 
 To correct a part by hand, add a `JLCPCB Rotation Offset` field (degrees, added to KiCad's rotation) and/or a `JLCPCB Position Offset` field (`dx, dy` mm) to the footprint. See the [production export guide](docs/production-export.md) for the solver, the coordinate conventions and the CLI (`jlcimport-cli production board.kicad_pcb`).
 

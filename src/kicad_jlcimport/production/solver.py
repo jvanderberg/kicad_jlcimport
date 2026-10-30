@@ -44,6 +44,7 @@ from .polarity import (
     BY_CONVENTION,
     BY_FOOTPRINT_NAME,
     BY_NAMES,
+    JLC_UNNAMED,
     NAMES_UNAVAILABLE,
     NOT_POLARIZED,
     UNRESOLVED,
@@ -68,6 +69,7 @@ POLARITY_SWAPPED = "polarity_swapped"
 POLARITY_UNRESOLVED = "polarity_unresolved"
 POLARITY_NAMES_UNAVAILABLE = "polarity_names_unavailable"
 POLARITY_BY_FOOTPRINT_NAME = "polarity_by_footprint_name"
+POLARITY_JLC_UNNAMED = "polarity_jlc_unnamed"
 
 FLAG_TEXT = {
     TOO_FEW_PADS: "fewer than 2 pad numbers in common with the JLC footprint",
@@ -91,6 +93,7 @@ FLAG_TEXT = {
     POLARITY_NAMES_UNAVAILABLE: (
         "JLC's pin names could not be fetched, so polarity relies on pad numbering; check its orientation"
     ),
+    POLARITY_JLC_UNNAMED: "polarized part, but JLC's symbol doesn't name its pins; paired by pad number",
 }
 
 _POLARITY_FLAG = {
@@ -99,6 +102,7 @@ _POLARITY_FLAG = {
     BY_CONVENTION: POLARITY_BY_CONVENTION,
     UNRESOLVED: POLARITY_UNRESOLVED,
     NAMES_UNAVAILABLE: POLARITY_NAMES_UNAVAILABLE,
+    JLC_UNNAMED: POLARITY_JLC_UNNAMED,
 }
 
 HIGH = "high"

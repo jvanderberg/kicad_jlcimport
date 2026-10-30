@@ -304,10 +304,26 @@ class TestPlotting:
         adapter.generate_fabrication_zip(fake_board(2), str(tmp_path), "b", refill=False, pcbnew=pcb)
         assert controllers[0].opts.calls["SetDrillMarksType"] == (7,)
 
-    def test_open_plotfile_failure(self, tmp_path):
-        pcb = plotting_pcbnew([], fail_on="B_Cu")
+    def test_open_plotfile_failure_still_closes_the_plot(self, tmp_path):
+        controllers = []
+        pcb = plotting_pcbnew(controllers, fail_on="B_Cu")
         with pytest.raises(RuntimeError, match="B_Cu"):
             adapter.plot_gerbers(fake_board(2), str(tmp_path), pcb)
+        assert controllers[0].closed
+
+    def test_failed_refill_stops_plotting(self, tmp_path):
+        controllers = []
+        pcb = plotting_pcbnew(controllers)
+        pcb.ZONE_FILLER = lambda board: SimpleNamespace(Fill=lambda zones: False)
+        with pytest.raises(RuntimeError, match="refill"):
+            adapter.generate_fabrication_zip(fake_board(2), str(tmp_path), "b", refill=True, pcbnew=pcb)
+        assert controllers == []
+
+    def test_current_board_prefers_the_open_board(self):
+        old, new = object(), object()
+        assert adapter.current_board(old, fake_pcbnew(GetBoard=lambda: new)) is new
+        assert adapter.current_board(old, fake_pcbnew(GetBoard=lambda: None)) is old
+        assert adapter.current_board(old, fake_pcbnew()) is old  # no GetBoard
 
     def test_try_call(self):
         def bad(*_a):

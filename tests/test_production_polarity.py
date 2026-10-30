@@ -9,18 +9,25 @@ from kicad_jlcimport.easyeda import api
 from kicad_jlcimport.production import polarity as pol
 from kicad_jlcimport.production.cache import KeyedCache
 from kicad_jlcimport.production.conventions import BOTTOM, TOP
-from kicad_jlcimport.production.jlc_footprints import JlcFootprint, fetch_jlc_footprint, pin_names_from_data
+from kicad_jlcimport.production.jlc_footprints import (
+    JlcFootprint,
+    fetch_jlc_footprint,
+    needs_pin_names,
+    pin_names_from_data,
+)
 from kicad_jlcimport.production.kicad_pcb import read_board_text
 from kicad_jlcimport.production.models import FootprintRecord, PadRecord
 from kicad_jlcimport.production.placement import SOLVED, compute_placement
 from kicad_jlcimport.production.report import POLARITY_CHECK_TEXT, WARNING, run_check
 from kicad_jlcimport.production.solver import (
+    HIGH,
     MATCHED_BY_POSITION,
     MEDIUM,
     POLARITY_BY_CONVENTION,
     POLARITY_BY_FOOTPRINT_NAME,
     POLARITY_BY_NUMBERING,
     POLARITY_BY_PIN_NAMES,
+    POLARITY_JLC_UNNAMED,
     POLARITY_NAMES_UNAVAILABLE,
     POLARITY_SWAPPED,
     POLARITY_UNRESOLVED,
@@ -122,9 +129,52 @@ class TestMatchPolarity:
         assert m.source == pol.NOT_POLARIZED
         assert [p.number for p in m.jlc_pads] == ["2", "1"]
 
-    def test_more_than_two_pads_ignored(self):
+    def test_asymmetric_third_pad_ignored(self):
+        # Geometry already fixes which pad is which, so numbers decide.
         jlc = JLC_LED_PADS + [PadRecord("3", 0.0, 1.0)]
         assert pol.match_polarity(self.board(), jlc, JLC_LED_NAMES).source == pol.NOT_POLARIZED
+
+    def test_jlc_centred_thermal_pad_still_pairs_by_role(self):
+        jlc = JLC_LED_PADS + [PadRecord("3", 0.0, 0.0)]
+        m = pol.match_polarity(self.board(), jlc, dict(JLC_LED_NAMES, **{"3": "EP"}))
+        assert m.source == pol.BY_CONVENTION and m.swapped
+        assert [p.number for p in m.jlc_pads] == ["1", "2", "3"]
+
+    def test_board_centred_thermal_pad_pairs_by_pin_function(self):
+        board = self.board(("K", "A")) + [PadRecord("3", 10.0, 10.0)]
+        m = pol.match_polarity(board, JLC_LED_PADS, JLC_LED_NAMES)
+        assert m.source == pol.BY_NAMES
+        assert [p.number for p in m.jlc_pads] == ["1", "2"]
+
+    def test_board_with_extra_pads_and_no_names_is_unresolved(self):
+        # KiCad's pad-1 convention is only assumed for footprints with pads 1 and 2 alone.
+        board = self.board() + [PadRecord("3", 10.0, 10.0)]
+        assert pol.match_polarity(board, JLC_LED_PADS, JLC_LED_NAMES).source == pol.UNRESOLVED
+
+    def test_dual_diode_common_pin_is_not_two_terminal(self):
+        jlc = [PadRecord("1", -1.0, 0.0), PadRecord("3", 0.0, 0.0), PadRecord("2", 1.0, 0.0)]
+        board = self.board(("A", "K")) + [PadRecord("3", 10.0, 10.0)]
+        m = pol.match_polarity(board, jlc, {"1": "A", "2": "K", "3": "K/A"})
+        assert m.source == pol.NOT_POLARIZED
+
+    def test_unpolarized_jlc_pad_does_not_take_a_polarized_number(self):
+        # Board: K on pad 1 (left), A on pad 3 (right), pad 2 in the middle.
+        board = [PadRecord("1", 9.25, 10.0, "K"), PadRecord("3", 10.75, 10.0, "A"), PadRecord("2", 10.0, 10.0)]
+        jlc = JLC_LED_PADS + [PadRecord("3", 0.0, 0.0)]
+        m = pol.match_polarity(board, jlc, JLC_LED_NAMES)
+        assert [p.number for p in m.jlc_pads] == ["1", "3", "jlc:3"]
+
+    def test_board_polarized_but_jlc_names_missing(self):
+        m = pol.match_polarity(self.board(("K", "A")), JLC_LED_PADS, {"1": "1", "2": "2"})
+        assert m.source == pol.JLC_UNNAMED
+        assert [p.number for p in m.jlc_pads] == ["2", "1"]
+
+    @pytest.mark.parametrize("name", ["LED_0603_1608Metric", "Diode_SMD:D_SOD-123", "CP_Elec_4x5.4", "LED_X_AK"])
+    def test_polarized_footprint_names(self, name):
+        assert pol.board_says_polarized(self.board(), name)
+
+    def test_resistor_is_not_polarized(self):
+        assert not pol.board_says_polarized(self.board(), "R_0603_1608Metric")
 
     def test_board_pad_numbers_as_names(self):
         m = pol.match_polarity(self.board(numbers=("K", "A")), JLC_LED_PADS, JLC_LED_NAMES)
@@ -189,10 +239,29 @@ class TestPolarityPlacement:
         fp.footprint = "LED_X_KA"
         assert compute_placement(fp, self.jlc()).rotation == pytest.approx(0.0)
 
-    def test_without_jlc_names_pairs_by_number(self):
-        pl = compute_placement(led(), self.jlc(names={}))
+    def test_without_jlc_names_pairs_by_number_and_asks_for_a_check(self):
+        # The board footprint (LED_0603) is polarized, so pairing by number is a guess.
+        fp = led()
+        pl = compute_placement(fp, self.jlc(names={}))
         assert pl.rotation == pytest.approx(180.0)
+        assert pl.confidence == MEDIUM
+        assert POLARITY_JLC_UNNAMED in pl.fit.flags
+        report = run_check([fp], 1, *caches("C2286", self.jlc(names={})))
+        assert f"[WARNING] D1: {POLARITY_CHECK_TEXT}" in report.issue_lines()
+
+    def test_unpolarized_part_without_names_stays_high(self):
+        fp = led()
+        fp.footprint = "R_0603_1608Metric"
+        pl = compute_placement(fp, self.jlc(names={}))
+        assert pl.confidence == HIGH
         assert POLARITY_BY_NUMBERING in pl.fit.flags
+
+    def test_led_with_thermal_pad_follows_cathode(self):
+        fp = led(functions=("K", "A"))
+        fp.pads.append(PadRecord("3", 10.0, 10.0))
+        pl = compute_placement(fp, self.jlc())
+        assert pl.rotation == pytest.approx(0.0)
+        assert POLARITY_BY_PIN_NAMES in pl.fit.flags
 
     def test_unresolved_is_medium_and_a_report_warning(self):
         # Pads numbered A/C on both sides: numbers pair up, but nothing says
@@ -320,6 +389,13 @@ class TestJlcPinNames:
         jlc, fetch_data = self.fetch(lambda uuid: TWO_PAD_FP if uuid == "f" else SYMBOL)
         assert jlc.pin_names == {"2": "K", "1": "A"}
         assert [c.args[0] for c in fetch_data.call_args_list] == ["f", "s"]
+
+    def test_which_parts_need_pin_names(self):
+        assert needs_pin_names(JLC_LED_PADS)
+        assert needs_pin_names(JLC_LED_PADS + [PadRecord("3", 0.0, 0.0)])
+        sot23 = [PadRecord("1", -0.95, 1.0), PadRecord("2", 0.95, 1.0), PadRecord("3", 0.0, -1.0)]
+        assert not needs_pin_names(sot23)
+        assert not needs_pin_names([PadRecord(str(i), i, 0.0) for i in range(1, 5)])
 
     def test_symbol_failure_is_not_fatal(self):
         def data(uuid):

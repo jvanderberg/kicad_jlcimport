@@ -7,18 +7,20 @@ The **Production Files** tab of the JLCImport dialog (PCB Editor > Tools > Exter
 - `<board>-cpl.csv`: `Designator,Mid X,Mid Y,Rotation,Layer`
 - `<board>-report.txt`: the check results
 
-Files go to `<project>/production/` unless you choose another folder.
+Files go to `<project>/production/` unless you choose another folder. A relative folder, or one starting with `${KIPRJMOD}`, is taken relative to the board's folder, the way KiCad resolves plot output folders. The individual Gerber and drill files are also left in a `gerbers/` folder inside it.
 
 ## Workflow
 
 1. Set **Boards to assemble**.
 2. Click **Check**. Every unique LCSC part is looked up in the JLCPCB assembly library, and JLC's own footprint for that part is fetched. Untick **Check stock and prices** to skip the parts-library lookup when you only need placements; the check is then faster, and stock is reported as not checked. The table then shows, for each footprint:
-   - stock status: missing or invalid LCSC number, not found, out of stock, or stock lower than quantity per board × boards
-   - Basic or Extended (each Extended part adds a JLCPCB setup fee)
+   - stock status: missing or invalid LCSC number, not found, out of stock, or stock lower than quantity per board × boards (all errors). Stock that covers the order by less than 10% (or 10 parts, whichever is more) is a warning, because JLCPCB orders extra parts to cover machine losses.
+   - Basic, Preferred (Preferred Extended) or Extended. See [Part types and fees](#part-types-and-fees).
    - the solved CPL rotation, and how much to trust it (confidence plus notes)
 
-   Rows with errors are shown in red and rows with warnings in yellow. A part whose lookup failed (network error, for example) counts as an error, because nothing about it was checked. Select a row to see all of its notes. The list under the table shows every error and warning, followed by the extended parts and an estimated parts cost.
-3. Click **Generate**. The check runs again (cached lookups make this fast). If it finds problems, they are listed and you are asked before any files are written; you can always go ahead anyway. If the board changes while the check runs, Generate stops and asks you to click it again, so the placement file always matches the Gerbers.
+   Rows with errors are shown in red and rows with warnings in yellow. A part whose lookup failed (network error, or an error answer from JLCPCB) counts as an error, because nothing about it was checked. Select a row to see all of its notes. The list under the table shows every error and warning, followed by the extended parts and an estimated parts cost.
+3. Click **Generate**. The check runs again (cached lookups make this fast). If it finds problems, they are listed and you are asked before any files are written; you can always go ahead anyway. If the board changes while the check runs, Generate stops and asks you to click it again, so the placement file always matches the Gerbers. The Gerbers are plotted first, so if plotting fails no new BOM or CPL is written either.
+
+The tab always works on the board that is open now, so File > Revert, Open or Save As while the dialog is open is fine; the default output folder and file names follow the board.
 
 **Refill zones before plotting** (on by default) refills every zone on the open board, the same as pressing B in the editor, so the Gerbers match the copper. KiCad's Python API has no undo for this, so save the board afterwards if you want to keep the new fills.
 
@@ -26,13 +28,17 @@ DNP footprints and footprints excluded from the BOM are left out of both the BOM
 
 JLCPCB accepts at most 300 BOM line items per order.
 
+### Part types and fees
+
+On Economic PCBA, JLCPCB charges a feeder loading fee (about $3) for each unique **Extended** part. **Basic** parts and **Preferred Extended** parts (shown as "Preferred") load free. Double-sided assembly is only offered as Standard PCBA, which charges a smaller loading fee for every unique part, Basic or not; the summary says so when assembled parts sit on both sides. Fees change, so the check names the parts but doesn't price the fees. JLCPCB's [PCB assembly FAQ](https://jlcpcb.com/help/article/pcb-assembly-faqs) and [assembly cost guide](https://jlcpcb.com/blog/reduce-pcb-assembly-cost-prototype) have the current figures.
+
 The LCSC number is read from the first non-empty footprint field named `LCSC`, `LCSC Part`, `LCSC Part #`, `LCSC Part Number`, `LCSC#`, `JLCPCB Part #`, `JLCPCB Part`, `JLCPCB`, `JLC` or `JLC Part` (case-insensitive).
 
 ## How CPL rotation and position are solved
 
 JLCPCB places each part using the orientation and origin of **its own EasyEDA footprint** for that LCSC part. Your KiCad footprint may use a different 0° orientation (a stock KiCad library footprint, for example) and a different origin (pin 1 instead of the centre). This plugin doesn't use a rotation lookup table. It fits JLC's footprint onto your actual pads instead:
 
-1. Pads are paired by pad number (whitespace is trimmed and case is ignored). Two-pad polarized parts are the exception (see [Polarity of two-pad parts](#polarity-of-two-pad-parts)). Unnumbered pads are ignored. Pads that share a number (split thermal pads, several GND or shield pads) are reduced to the centroid of their group on each footprint.
+1. Pads are paired by pad number (whitespace is trimmed and case is ignored). Polarized two-terminal parts are the exception (see [Polarity of two-pad parts](#polarity-of-two-pad-parts)). Unnumbered pads are ignored. Pads that share a number (split thermal pads, several GND or shield pads) are reduced to the centroid of their group on each footprint.
 2. The closed-form 2D least-squares rigid fit (rotation + translation, no scale) is computed:
 
    ```
@@ -51,8 +57,8 @@ JLCPCB places each part using the orientation and origin of **its own EasyEDA fo
 | Confidence | Meaning | CPL uses |
 | --- | --- | --- |
 | high | RMS residual ≤ 0.05 mm and all pad numbers match | solved values |
-| medium | RMS ≤ 0.25 mm (land patterns differ slightly), some pad numbers unmatched, pads matched by position, or a polarized two-pad part | solved values |
-| low | the fit was rejected (high residual, angle not near a 90° step) | the estimate (step 6), with a warning |
+| medium | RMS ≤ 0.25 mm (land patterns differ slightly), some pad numbers unmatched (at least half still match), pads matched by position, or a polarized part | solved values |
+| low | the fit was rejected: high residual, angle not near a 90° step, or fewer than half of the pad numbers match | the estimate (step 6), with a warning |
 | unverified | mirrored numbering, fewer than 2 common pad numbers, orientation undetermined, no LCSC number, or the lookup failed | KiCad's own pose, with a warning |
 | manual | override fields present | KiCad's pose plus your offsets |
 
@@ -60,23 +66,26 @@ JLCPCB places each part using the orientation and origin of **its own EasyEDA fo
 
 Two pad centres always form a symmetric pattern, so geometry can't tell a part from its 180° turn. Polarity comes only from which pad is paired with which, and pad numbers are not reliable for that. KiCad's diode and LED symbols put the cathode on pin 1. Many JLC symbols put the anode there (the C2286 0603 red LED does), and others don't (the C64885 B5819W has its cathode on pin 1). Pairing by number would mount such a part backwards.
 
-For two-pad parts the solver pairs pads by **role** (positive = anode/`+`, negative = cathode/`-`) when it can:
+The same holds for an LED or diode with a third pad in the middle (a thermal pad), on either footprint. So the rules below apply whenever JLC's pads are point-symmetric and exactly one JLC pin is named as each polarity. On any other footprint, such as a SOT-23 diode, the pad geometry already fixes which pad is which, and pads are paired by number. A part whose other pin mentions a polarity too, like the `K/A` common pin of a dual diode, isn't treated as two-terminal.
 
-- **JLC side:** JLC's own symbol pin names (`A`/`K`, `Anode`/`Cathode`, `+`/`-`). The symbol is only fetched for two-pad parts.
-- **Board side:** the pad's pin function, which is the schematic pin name KiCad stores on each pad (`K`, `A_2`, …), or else pad numbers that are themselves polarity names (`A`/`K`, `+`/`-`). If neither works and the pads are numbered 1 and 2, the footprint name decides when it says so (KiCad's `_AK` suffix means pad 1 = anode, `_KA` pad 1 = cathode). Otherwise KiCad's library convention is assumed: diode/LED pad 1 = cathode, polarized capacitor pad 1 = `+`.
+For these parts the solver pairs pads by **role** (positive = anode/`+`, negative = cathode/`-`) when it can:
+
+- **JLC side:** JLC's own symbol pin names (`A`/`K`, `Anode`/`Cathode`, `+`/`-`). The symbol is only fetched for two-pad parts and point-symmetric three-pad parts.
+- **Board side:** the pad's pin function, which is the schematic pin name KiCad stores on each pad (`K`, `A_2`, …), or else pad numbers that are themselves polarity names (`A`/`K`, `+`/`-`). If neither works and the pads are exactly 1 and 2, the footprint name decides when it says so (KiCad's `_AK` suffix means pad 1 = anode, `_KA` pad 1 = cathode). Otherwise KiCad's library convention is assumed: diode/LED pad 1 = cathode, polarized capacitor pad 1 = `+`. A footprint with more pads and no names is left unresolved rather than guessed.
 
 | JLC symbol | Board pads | Result |
 | --- | --- | --- |
-| no polarity names (e.g. pins `1`/`2`) | any | paired by number, with a note to check polarity |
+| no polarity names (e.g. pins `1`/`2`), board footprint polarized | pin names with polarity, an `_AK`/`_KA` name, or an `LED_`/`D_`/`CP_` footprint | paired by number, medium, **warning** to check polarity |
+| no polarity names, board footprint not polarized | any | paired by number, with a note |
 | polarity names | pin names or pad numbers with polarity | paired by role, medium, **warning** to check polarity |
 | polarity names | numbered 1/2, `_AK`/`_KA` footprint name | paired by role from the name, medium, **warning** to check polarity |
-| polarity names | numbered 1/2, no names | paired by role using KiCad's convention, medium, **warning** to check polarity |
-| polarity names | other numbering, no names | paired by number, medium, **warning** to check orientation |
+| polarity names | numbered 1/2 only, no names | paired by role using KiCad's convention, medium, **warning** to check polarity |
+| polarity names | other numbering or extra pads, no names | paired by number, medium, **warning** to check orientation |
 | symbol couldn't be fetched | any | paired by number, medium, **warning** to check orientation (**Check** tries the symbol again) |
 
 When pairing by role turns out to be the reverse of the pad numbering, the report says so ("JLC numbers this part's pads the other way round").
 
-Every polarized two-pad part gets the "check its polarity in JLC's placement preview" warning, because JLC's own symbol pin names sometimes contradict how JLCPCB places the part. In the preview tests, two of the parts (C64872, an SMAF diode, and C2900159, a PLCC-2 LED) had pin names the wrong way round. JLC's footprint silkscreen was checked as an alternative source and doesn't reliably mark the cathode either. JLC parts whose pins are named `A`/`C` are not read as anode/cathode: on the parts tested, that reading put every one of them on backwards.
+Every polarized part handled here gets the "check its polarity in JLC's placement preview" warning, because JLC's own symbol pin names sometimes contradict how JLCPCB places the part. In the preview tests, two of the parts (C64872, an SMAF diode, and C2900159, a PLCC-2 LED) had pin names the wrong way round. JLC's footprint silkscreen was checked as an alternative source and doesn't reliably mark the cathode either. JLC parts whose pins are named `A`/`C` are not read as anode/cathode: on the parts tested, that reading put every one of them on backwards.
 
 ## Manual overrides
 
@@ -98,7 +107,7 @@ Solver suggests rotation 180° at (11.000, -18.000)
 
 So if the preview looks right at some rotation R, the offset is R minus the KiCad rotation shown in the note. On the top side a positive offset turns the part counter-clockwise as seen from the top. On the bottom side JLCPCB counts rotation the other way (see [Coordinate conventions](#coordinate-conventions)), so a positive offset turns it clockwise as seen from the top.
 
-The row shows as **manual** in the table and the report. A field whose value can't be read (not a number, or a position offset that isn't `dx, dy`) is ignored, with a warning on that row.
+The row shows as **manual** in the table and the report. A field whose value can't be read (not a number, or a position offset that isn't `dx, dy`) is ignored, with a warning on that row. If no override field can be read, the row keeps the solver's placement.
 
 ## Coordinate conventions
 
@@ -127,7 +136,7 @@ jlcimport-cli production board.kicad_pcb --no-stock     # placements only, skip 
 | --- | --- |
 | `-n`, `--boards N` | boards to assemble, for the stock check (default 5) |
 | `-o`, `--output DIR` | output folder (default `<project>/production`) |
-| `--check-only` | print the report and write nothing; exit status 1 if there are errors |
+| `--check-only` | print the report and write nothing; exit status 1 if there are errors (invalid LCSC number, part not found, out of stock, stock short, lookup failed, duplicate designators). A missing LCSC number is only a warning. |
 | `--force` | write the files even when the check reports errors |
 | `--no-stock` | skip the stock and price lookup; placements are still solved |
 

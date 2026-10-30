@@ -123,14 +123,15 @@ Check every LCSC part on a board (stock for the board quantity, Basic/Extended, 
 # Check for 10 boards and write files to <project>/production/
 jlcimport-cli production board.kicad_pcb -n 10
 
-# Report only; exit status 1 if there are errors (missing LCSC numbers, out of stock, ...)
+# Report only; exit status 1 on errors (invalid LCSC number, not found, out of stock, ...).
+# Parts with no LCSC number at all are only warnings.
 jlcimport-cli production board.kicad_pcb --check-only
 
 # Placements only, skipping the stock/price lookup
 jlcimport-cli production board.kicad_pcb --no-stock
 ```
 
-Read the report before ordering: low-confidence placements and every polarized two-pad part (LEDs, diodes, tantalum caps) are listed for checking in JLCPCB's placement preview. Per-part corrections are footprint fields (`JLCPCB Rotation Offset`, `JLCPCB Position Offset`); see `docs/production-export.md`.
+Read the report before ordering: low-confidence placements and every polarized part (LEDs, diodes, tantalum caps) are listed for checking in JLCPCB's placement preview, and stock that only just covers the order is a warning. Per-part corrections are footprint fields (`JLCPCB Rotation Offset`, `JLCPCB Position Offset`); see `docs/production-export.md`.
 
 ## Verification
 

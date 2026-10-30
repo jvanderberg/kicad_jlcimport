@@ -231,13 +231,15 @@ def plot_gerbers(board, out_dir: str, pcbnew=None) -> List[str]:
     pctl = pcbnew.PLOT_CONTROLLER(board)
     _configure_plot_options(pctl.GetPlotOptions(), pcbnew, out_dir)
     files = []
-    for layer, suffix, desc in gerber_layers(board, pcbnew):
-        pctl.SetLayer(layer)
-        if not pctl.OpenPlotfile(suffix, pcbnew.PLOT_FORMAT_GERBER, desc):
-            raise RuntimeError(f"Could not open plot file for {suffix}")
-        files.append(_str(pctl.GetPlotFileName()))
-        pctl.PlotLayer()
-    pctl.ClosePlot()
+    try:
+        for layer, suffix, desc in gerber_layers(board, pcbnew):
+            pctl.SetLayer(layer)
+            if not pctl.OpenPlotfile(suffix, pcbnew.PLOT_FORMAT_GERBER, desc):
+                raise RuntimeError(f"Could not open plot file for {suffix}")
+            files.append(_str(pctl.GetPlotFileName()))
+            pctl.PlotLayer()
+    finally:
+        pctl.ClosePlot()
     return files
 
 
@@ -276,7 +278,8 @@ def refill_zones(board, pcbnew=None) -> None:
     the panel says so next to the checkbox.
     """
     pcbnew = _pcbnew(pcbnew)
-    pcbnew.ZONE_FILLER(board).Fill(board.Zones())
+    if pcbnew.ZONE_FILLER(board).Fill(board.Zones()) is False:
+        raise RuntimeError("KiCad could not refill the zones; Gerbers were not plotted")
     _try_call(pcbnew, "Refresh")
 
 
@@ -296,3 +299,16 @@ def generate_fabrication_zip(
 def board_path(board) -> Optional[str]:
     path = _str(board.GetFileName())
     return path or None
+
+
+def current_board(fallback=None, pcbnew=None):
+    """The board open in the editor now, else *fallback*.
+
+    pcbnew replaces its BOARD object on File > Revert or Open, so a board
+    held since the dialog opened may already be deleted.
+    """
+    try:
+        board = _pcbnew(pcbnew).GetBoard()
+    except Exception:
+        board = None
+    return board or fallback

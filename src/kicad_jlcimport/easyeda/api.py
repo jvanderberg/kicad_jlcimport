@@ -456,6 +456,13 @@ def search_components(
     except (urllib.error.HTTPError, urllib.error.URLError) as e:
         raise APIError(f"Search failed: {e}") from e
 
+    # A failed request can still come back as HTTP 200, with
+    # ``success: false`` and no data; that is an error, not "no results".
+    if not isinstance(raw, dict) or raw.get("success") is False or raw.get("code", 200) != 200:
+        message = raw.get("message") if isinstance(raw, dict) else None
+        code = raw.get("code") if isinstance(raw, dict) else None
+        raise APIError(f"Search failed: {message or 'JLCPCB returned an error'} (code {code})")
+
     page_info = raw.get("data") or {}
     page_info = page_info.get("componentPageInfo") or {}
     total = page_info.get("total", 0)
@@ -479,6 +486,8 @@ def search_components(
                 "category": item.get("componentTypeEn", ""),
                 "stock": item.get("stockCount", 0),
                 "type": "Basic" if item.get("componentLibraryType") == "base" else "Extended",
+                # Preferred Extended: no feeder loading fee on Economic PCBA.
+                "preferred": bool(item.get("preferredComponentFlag")),
                 "price": unit_price,
                 "price_breaks": _price_breaks(prices),
                 "description": item.get("describe", ""),

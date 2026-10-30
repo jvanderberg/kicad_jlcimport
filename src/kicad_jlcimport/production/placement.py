@@ -69,6 +69,7 @@ class Placement:
     confidence: str  # HIGH / MEDIUM / LOW from the solver, MANUAL_CONFIDENCE, or UNVERIFIED
     fit: Optional[FitResult] = None
     notes: List[str] = field(default_factory=list)
+    override_errors: List[str] = field(default_factory=list)  # unreadable override fields (ignored)
 
     @property
     def verified(self) -> bool:
@@ -86,7 +87,11 @@ def _parse_number(text: str) -> float:
 
 
 def parse_override(fp: FootprintRecord) -> Tuple[Optional[ManualOverride], List[str]]:
-    """Read the manual override fields.  Returns (override or None, error messages)."""
+    """Read the manual override fields.  Returns (override or None, error messages).
+
+    The override is None unless at least one field could be read, so a typo
+    never replaces the solver with KiCad's pose.
+    """
     rot_text = fp.get_property(ROTATION_OFFSET_FIELD)
     pos_text = fp.get_property(POSITION_OFFSET_FIELD)
     if not rot_text and not pos_text:
@@ -94,9 +99,11 @@ def parse_override(fp: FootprintRecord) -> Tuple[Optional[ManualOverride], List[
 
     errors: List[str] = []
     ov = ManualOverride()
+    parsed = False
     if rot_text:
         try:
             ov.rotation_offset = _parse_number(rot_text)
+            parsed = True
         except ValueError:
             errors.append(f'{ROTATION_OFFSET_FIELD} "{rot_text}" is not a number; ignored')
     if pos_text:
@@ -105,9 +112,10 @@ def parse_override(fp: FootprintRecord) -> Tuple[Optional[ManualOverride], List[
             if len(parts) != 2:
                 raise ValueError(pos_text)
             ov.dx, ov.dy = _parse_number(parts[0]), _parse_number(parts[1])
+            parsed = True
         except ValueError:
             errors.append(f'{POSITION_OFFSET_FIELD} "{pos_text}" must be "dx, dy" in mm; ignored')
-    return ov, errors
+    return (ov if parsed else None), errors
 
 
 def kicad_placement(fp: FootprintRecord, reason: str) -> Placement:
@@ -156,26 +164,37 @@ def compute_placement(
 
     override, override_errors = parse_override(fp)
     if override is not None:
-        placement = kicad_placement(fp, "manual override")
-        base_rotation = placement.rotation
-        placement.x += override.dx
-        placement.y += override.dy
-        placement.rotation = normalize_angle(base_rotation + override.rotation_offset)
-        placement.source = MANUAL
-        placement.confidence = MANUAL_CONFIDENCE
-        placement.fit = fit
-        placement.notes = [
-            f"Manual override: rotation {base_rotation:g}° (KiCad) {override.rotation_offset:+g}° = "
-            f"{placement.rotation:g}°, position offset ({override.dx:+g}, {override.dy:+g}) mm"
-        ]
-        if fit is not None and fit.usable:
-            placement.notes.append(
-                f"Solver suggests rotation {cpl_rotation(fit.angle, fp.side):g}° at "
-                f"({fit.origin[0]:.3f}, {fit.origin[1]:.3f})"
-            )
-        placement.notes.extend(override_errors)
-        return placement
+        placement = _manual_placement(fp, override, fit)
+    else:
+        placement = _automatic_placement(fp, fit, fetch_error)
+    placement.override_errors = override_errors
+    return placement
 
+
+def _manual_placement(fp: FootprintRecord, override: ManualOverride, fit: Optional[FitResult]) -> Placement:
+    """KiCad's own pose plus the override offsets."""
+    placement = kicad_placement(fp, "manual override")
+    base_rotation = placement.rotation
+    placement.x += override.dx
+    placement.y += override.dy
+    placement.rotation = normalize_angle(base_rotation + override.rotation_offset)
+    placement.source = MANUAL
+    placement.confidence = MANUAL_CONFIDENCE
+    placement.fit = fit
+    placement.notes = [
+        f"Manual override: rotation {base_rotation:g}° (KiCad) {override.rotation_offset:+g}° = "
+        f"{placement.rotation:g}°, position offset ({override.dx:+g}, {override.dy:+g}) mm"
+    ]
+    if fit is not None and fit.usable:
+        placement.notes.append(
+            f"Solver suggests rotation {cpl_rotation(fit.angle, fp.side):g}° at "
+            f"({fit.origin[0]:.3f}, {fit.origin[1]:.3f})"
+        )
+    return placement
+
+
+def _automatic_placement(fp: FootprintRecord, fit: Optional[FitResult], fetch_error: str) -> Placement:
+    """Solved, estimated or KiCad-fallback placement."""
     if fit is None:
         reason = fetch_error or "no LCSC part number"
         return kicad_placement(fp, reason)

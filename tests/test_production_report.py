@@ -2,6 +2,7 @@
 
 import csv
 import json
+import os
 import zipfile
 from unittest import mock
 
@@ -16,6 +17,7 @@ from kicad_jlcimport.production.export import (
     board_basename,
     default_output_dir,
     make_caches,
+    resolve_output_dir,
     write_bom_cpl,
 )
 from kicad_jlcimport.production.jlc_footprints import JlcFootprint, fetch_jlc_footprint
@@ -154,6 +156,22 @@ class TestAvailability:
     def test_out_of_stock(self):
         assert av.evaluate("C1", ["R1"], 1, part_info("C1", stock=0)).status == av.OUT_OF_STOCK
 
+    @pytest.mark.parametrize(
+        "stock,needed,expected",
+        [(25, 20, av.STOCK_TIGHT), (30, 20, av.OK), (1050, 1000, av.STOCK_TIGHT), (1100, 1000, av.OK)],
+    )
+    def test_stock_margin(self, stock, needed, expected):
+        # Warn unless stock beats the need by 10%, and by at least 10 parts.
+        a = av.evaluate("C1", ["R1"], needed, part_info("C1", stock=stock))
+        assert a.status == expected
+
+    def test_preferred_extended(self):
+        info = dict(part_info("C1", kind="Extended"), preferred=True)
+        a = av.evaluate("C1", ["U1"], 1, info)
+        assert a.part_type == av.PREFERRED and a.is_preferred and not a.is_extended
+        basic = dict(part_info("C2"), preferred=True)
+        assert av.evaluate("C2", ["R1"], 1, basic).part_type == av.BASIC
+
     def test_not_found(self):
         a = av.evaluate("C1", ["R1"], 1, None)
         assert a.status == av.NOT_FOUND and a.is_problem and a.total_price is None
@@ -193,7 +211,7 @@ class TestOverrides:
 
     def test_bad_values_reported(self):
         ov, errors = parse_override(fp("R1", props={ROTATION_OFFSET_FIELD: "abc", POSITION_OFFSET_FIELD: "1"}))
-        assert ov.rotation_offset == 0 and (ov.dx, ov.dy) == (0, 0)
+        assert ov is None  # nothing readable: no override
         assert len(errors) == 2
 
     def test_override_uses_kicad_pose_plus_offsets(self):
@@ -212,10 +230,22 @@ class TestOverrides:
         assert pl.rotation == 270.0
         assert pl.notes[0].startswith("Manual override: rotation 180° (KiCad) +90° = 270°")
 
-    def test_override_with_error_note(self):
-        pl = compute_placement(fp("R1", props={ROTATION_OFFSET_FIELD: "x"}))
-        assert pl.source == MANUAL
-        assert any("not a number" in n for n in pl.notes)
+    def test_unreadable_override_keeps_the_solver_and_warns(self):
+        # KiCad says 90°, the solver says 0°: a typo in the field must not switch to KiCad's pose.
+        rec = fp("R1", theta=0, props={ROTATION_OFFSET_FIELD: "ninety"})
+        rec.orientation = 90.0
+        pl = compute_placement(rec, JlcFootprint("C25804", pads=RES_PADS))
+        assert pl.source != MANUAL and pl.rotation == 0.0
+        assert any("not a number" in e for e in pl.override_errors)
+        jlc = JlcFootprint("C25804", pads=RES_PADS)
+        report = run_check([rec], 1, *caches({"C25804": part_info("C25804")}, {"C25804": jlc}))
+        assert any(i.severity == WARNING and "not a number" in i.message for i in report.rows[0].issues)
+
+    def test_partly_readable_override_applies_the_readable_field(self):
+        rec = fp("R1", props={ROTATION_OFFSET_FIELD: "90", POSITION_OFFSET_FIELD: "oops"})
+        pl = compute_placement(rec, JlcFootprint("C25804", pads=RES_PADS))
+        assert pl.source == MANUAL and pl.rotation == 90.0
+        assert len(pl.override_errors) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -312,12 +342,31 @@ class TestRunCheck:
         assert rows["TP1"].placement is None
 
         assert report.extended_parts == ["C999"]
+        assert not report.double_sided
         assert report.estimated_parts_cost() == pytest.approx(6 * 0.01 + 2 * 0.01)
         assert len(report.cpl_rows()) == 5
         text = report.to_text()
         assert "extended parts" in text and "unverified" in text
         assert "U1" in format_row(rows["U1"])
         assert row_cells(rows["R9"])["stock"] == "DNP"
+
+    def test_fee_summary_and_tight_stock(self):
+        parts = {
+            "C1": dict(part_info("C1", kind="Extended"), preferred=True),
+            "C2": part_info("C2", kind="Extended"),
+            "C3": part_info("C3", stock=5),
+        }
+        footprints = [fp("U1", lcsc="C1"), fp("U2", lcsc="C2"), fp("R1", lcsc="C3", side=cv.BOTTOM)]
+        report = run_check(footprints, 1, *caches(parts))
+        assert report.preferred_parts == ["C1"] and report.extended_parts == ["C2"]
+        assert report.double_sided
+        text = report.to_text()
+        assert "1 preferred extended parts (no loading fee on Economic assembly): C1" in text
+        assert "1 extended parts (each adds a feeder loading fee): C2" in text
+        assert "Standard PCBA" in text
+        rows = {r.reference: r for r in report.rows}
+        assert any(i.severity == WARNING and "close to the 1 needed" in i.message for i in rows["R1"].issues)
+        assert row_cells(rows["U1"])["type"] == "Preferred"
 
     def test_lookup_failures_do_not_raise(self):
         part_cache, fp_cache = caches(part_error=APIError("down"), fp_error=APIError("down"))
@@ -380,7 +429,7 @@ class TestRunCheck:
         assert any(line.startswith("[WARNING] TP1, TP2: No LCSC part number") for line in lines)
         assert any(line.startswith("[WARNING] U1: Unverified") for line in lines)
         assert not any(line.startswith("[INFO]") for line in lines)
-        assert "[INFO] U1: Extended part (setup fee)" in report.issue_lines(INFO)
+        assert "[INFO] U1: Extended part (loading fee)" in report.issue_lines(INFO)
 
     def test_issue_lines_include_board_issues(self):
         part_cache, fp_cache = caches()
@@ -442,6 +491,27 @@ class TestRunCheck:
 # ---------------------------------------------------------------------------
 # Export helpers and network wrappers (all mocked)
 # ---------------------------------------------------------------------------
+
+
+class TestResolveOutputDir:
+    BOARD = os.path.join(os.sep, "proj", "b.kicad_pcb")
+    PROJ = os.path.join(os.sep, "proj")
+
+    def test_relative_is_next_to_the_board(self):
+        assert resolve_output_dir("production", self.BOARD) == os.path.join(self.PROJ, "production")
+
+    def test_kiprjmod(self):
+        assert resolve_output_dir("${KIPRJMOD}/out", self.BOARD) == os.path.join(self.PROJ, "out")
+
+    def test_absolute_and_home(self, monkeypatch):
+        monkeypatch.setenv("HOME", os.path.join(os.sep, "home", "me"))
+        assert resolve_output_dir(os.path.join(os.sep, "x", "y"), self.BOARD) == os.path.join(os.sep, "x", "y")
+        assert resolve_output_dir("~/out", self.BOARD) == os.path.join(os.sep, "home", "me", "out")
+
+    def test_empty_or_unsaved(self):
+        assert resolve_output_dir("  ", self.BOARD) is None
+        assert resolve_output_dir("production", None) is None
+        assert resolve_output_dir(os.path.join(os.sep, "x"), None) == os.path.join(os.sep, "x")
 
 
 class TestExport:
@@ -534,6 +604,23 @@ class TestApiLookupPart:
     def test_not_found(self):
         with self._patch([{"componentCode": "C1"}]):
             assert api.lookup_part("C2") is None
+
+    def test_preferred_flag(self):
+        items = [{"componentCode": "C89811", "componentLibraryType": "expand", "preferredComponentFlag": True}]
+        with self._patch(items):
+            info = api.lookup_part("C89811")
+        assert info["type"] == "Extended" and info["preferred"] is True
+
+    def test_error_body_is_an_error_not_not_found(self):
+        # JLCPCB answers some failures with HTTP 200 and this body.
+        body = json.dumps({"success": False, "code": 101, "message": "unknown error", "data": None}).encode()
+        resp = mock.MagicMock()
+        resp.read.return_value = body
+        resp.__enter__ = mock.Mock(return_value=resp)
+        resp.__exit__ = mock.Mock(return_value=False)
+        with mock.patch.object(api, "_urlopen", return_value=resp):
+            with pytest.raises(APIError, match="code 101"):
+                api.lookup_part("C25804")
 
     def test_invalid_number(self):
         with pytest.raises(ValueError):

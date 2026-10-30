@@ -14,7 +14,7 @@ import traceback
 import wx
 
 from . import production_pcbnew as adapter
-from .production.export import board_basename, default_output_dir, make_caches, write_bom_cpl
+from .production.export import board_basename, default_output_dir, make_caches, resolve_output_dir, write_bom_cpl
 from .production.placement import POSITION_OFFSET_FIELD, ROTATION_OFFSET_FIELD
 from .production.report import ERROR, WARNING, row_cells, run_check
 
@@ -73,8 +73,20 @@ class ProductionPanel(wx.Panel):
         self._report = None
         self._part_cache, self._footprint_cache = make_caches()
         board_file = adapter.board_path(board)
-        self._basename = board_basename(board_file) if board_file else "board"
-        self._init_ui(default_output_dir(board_file) if board_file else "")
+        self._default_dir = default_output_dir(board_file) if board_file else ""
+        self._init_ui(self._default_dir)
+
+    def _current_board(self):
+        """The board open now (File > Revert or Open replaces the BOARD object)."""
+        self.board = adapter.current_board(self.board)
+        return self.board
+
+    def _follow_board_file(self, board_file):
+        """Keep the default output folder in step with Save As, unless the user chose another."""
+        new_default = default_output_dir(board_file) if board_file else ""
+        if self.dir_text.GetValue().strip() in ("", self._default_dir):
+            self.dir_text.SetValue(new_default)
+        self._default_dir = new_default
 
     def shutdown(self):
         """Invalidate in-flight checks so their CallAfter callbacks no-op."""
@@ -199,7 +211,9 @@ class ProductionPanel(wx.Panel):
         if self._busy:
             return
         try:
-            records = adapter.extract_footprints(self.board)
+            board = self._current_board()
+            self._follow_board_file(adapter.board_path(board))
+            records = adapter.extract_footprints(board)
         except Exception as e:
             wx.MessageBox(f"Could not read the board:\n{e}", _TITLE, wx.OK | wx.ICON_ERROR)
             return
@@ -286,13 +300,26 @@ class ProductionPanel(wx.Panel):
     # ------------------------------------------------------------ generate
 
     def _generate(self, report, records):
-        out_dir = self.dir_text.GetValue().strip()
-        if not out_dir:
-            wx.MessageBox("Choose an output folder first.", _TITLE, wx.OK | wx.ICON_WARNING)
+        try:
+            board = self._current_board()
+            board_file = adapter.board_path(board)
+            # The dialog is non-modal: BOM/CPL come from the snapshot taken before
+            # the check, Gerbers from the live board, so they must still agree.
+            changed = adapter.extract_footprints(board) != records
+        except Exception as e:
+            self.status.SetLabel("Generation failed")
+            wx.MessageBox(f"Could not read the board:\n{e}", _TITLE, wx.OK | wx.ICON_ERROR)
             return
-        # The dialog is non-modal: BOM/CPL come from the snapshot taken before
-        # the check, Gerbers from the live board, so they must still agree.
-        if adapter.extract_footprints(self.board) != records:
+        out_dir = resolve_output_dir(self.dir_text.GetValue(), board_file)
+        if not out_dir:
+            wx.MessageBox(
+                "Choose an output folder first (a relative folder needs a saved board).",
+                _TITLE,
+                wx.OK | wx.ICON_WARNING,
+            )
+            return
+        basename = board_basename(board_file) if board_file else "board"
+        if changed:
             self.status.SetLabel("Board changed during the check")
             wx.MessageBox(
                 "The board changed while the parts were being checked, so the placement file would not "
@@ -320,10 +347,11 @@ class ProductionPanel(wx.Panel):
         self.status.SetLabel("Generating files...")
         wx.BeginBusyCursor()
         try:
-            paths = write_bom_cpl(report, out_dir, self._basename)
+            # Gerbers first: if plotting fails, no new BOM/CPL sit next to an old zip.
             zip_path, _files = adapter.generate_fabrication_zip(
-                self.board, out_dir, self._basename, refill=self.refill_cb.GetValue()
+                board, out_dir, basename, refill=self.refill_cb.GetValue()
             )
+            paths = write_bom_cpl(report, out_dir, basename)
         except Exception as e:
             self.status.SetLabel("Generation failed")
             wx.MessageBox(

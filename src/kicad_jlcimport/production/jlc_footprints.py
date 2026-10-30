@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from ..easyeda import api
 from ..easyeda.parser import parse_footprint_shapes, parse_symbol_shapes
 from .models import PadRecord
+from .polarity import point_symmetric
 
 
 @dataclass
@@ -13,7 +14,7 @@ class JlcFootprint:
     """JLC's footprint for a part: pads in footprint-local mm (Y down, origin at JLC's origin).
 
     ``pin_names`` maps pad number to JLC's symbol pin name (e.g. ``"2": "K"``).
-    It is only fetched for two-pad parts, where it decides polarity;
+    It is only fetched where it can decide polarity (see :func:`needs_pin_names`);
     ``symbol_error`` says why it is missing when that fetch failed.
     """
 
@@ -47,11 +48,17 @@ def pin_names_from_data(symbol_data: List[Dict[str, Any]]) -> Dict[str, str]:
     return names
 
 
+def needs_pin_names(pads: List[PadRecord]) -> bool:
+    """True for two-pad parts, and three-pad parts whose pads are point-symmetric (a centred thermal pad)."""
+    count = len({p.number for p in pads if p.number})
+    return count == 2 or (count == 3 and point_symmetric(pads))
+
+
 def fetch_jlc_footprint(lcsc: str) -> JlcFootprint:
     """Download and parse the EasyEDA footprint linked to *lcsc*.
 
-    Fetches the footprint document only, plus the symbol for two-pad parts
-    (diodes, LEDs, polarized capacitors) whose pin names give polarity.
+    Fetches the footprint document only, plus the symbol for parts whose pin
+    names can give polarity (diodes, LEDs, polarized capacitors).
     Raises :class:`api.APIError` on network or lookup failure.  A failed
     symbol fetch is recorded in ``symbol_error`` (the report warns about it)
     rather than failing the whole footprint.
@@ -59,7 +66,7 @@ def fetch_jlc_footprint(lcsc: str) -> JlcFootprint:
     uuids = api.fetch_component_uuids(lcsc)
     fp_data = api.fetch_component_data(uuids[-1]["component_uuid"])
     jlc = jlc_footprint_from_data(lcsc, fp_data)
-    if len({p.number for p in jlc.pads if p.number}) == 2 and len(uuids) > 1:
+    if needs_pin_names(jlc.pads) and len(uuids) > 1:
         try:
             symbols = [api.fetch_component_data(u["component_uuid"]) for u in uuids[:-1]]
             jlc.pin_names = pin_names_from_data(symbols)
