@@ -602,7 +602,23 @@ class TestReviewFixes:
         pads = placed([PadRecord(p.number, p.x, p.y) for p in self.JLC], 10.0, 10.0)
         fp = led()
         fp.pads = pads
-        fp.footprint = "JLCImport:LED0603-RD"
-        pl = compute_placement(fp, self.jlc())
+        fp.footprint = "JLCImport:LTST-C191KRKT"
+        pl = compute_placement(fp, self.jlc(symbol_title="LTST-C191KRKT"))
         assert POLARITY_ASSUMED not in pl.fit.flags
         assert pl.rotation == pytest.approx(0.0)
+
+    @pytest.mark.parametrize("name", ["RVT1H470M0607_47UF_50V", "RVT1H470M0607", "RVT1H470M0607_C2286"])
+    def test_jlcimport_names_are_recognised(self, name):
+        from kicad_jlcimport.production.placement import own_footprint_name
+
+        assert own_footprint_name(f"JLCImport:{name}", self.jlc(symbol_title="RVT1H470M0607 47UF 50V"))
+
+    def test_same_geometry_under_another_name_is_not_trusted(self):
+        # Pads at JLC's exact pitch prove nothing for two pads (a 180° turn fits
+        # too); only JLCImport's name for the part marks it as JLC's footprint.
+        pads = placed([PadRecord(p.number, p.x, p.y) for p in self.JLC], 10.0, 10.0)
+        fp = led()
+        fp.pads = pads
+        fp.footprint = "MyLib:LTST-C191KRKT-custom"
+        pl = compute_placement(fp, self.jlc(symbol_title="LTST-C191KRKT"))
+        assert POLARITY_ASSUMED in pl.fit.flags and pl.confidence == MEDIUM

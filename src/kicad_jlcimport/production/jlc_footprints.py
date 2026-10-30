@@ -33,6 +33,7 @@ class JlcFootprint:
     pin_names: Dict[str, str] = field(default_factory=dict)
     symbol_error: str = ""
     pad_marks: Dict[str, str] = field(default_factory=dict)
+    symbol_title: str = ""  # JLC's symbol title, the name JLCImport gives an imported part
 
 
 def _data_shapes(data: Dict[str, Any]):
@@ -156,6 +157,7 @@ def fetch_jlc_footprint(lcsc: str) -> JlcFootprint:
         try:
             symbols = [api.fetch_component_data(u["component_uuid"]) for u in uuids[:-1]]
             jlc.pin_names = pin_names_from_data(symbols)
+            jlc.symbol_title = next((d.get("title", "") for d in symbols if d.get("title")), "")
         except api.SSLCertError:
             raise
         except Exception as e:

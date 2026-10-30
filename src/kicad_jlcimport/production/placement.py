@@ -18,13 +18,15 @@ rotation offset of ``0`` is therefore a way to say "trust KiCad for this
 part".
 """
 
+import itertools
 import re
 from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
 
+from ..kicad.library import sanitize_name
 from .conventions import cpl_rotation, kicad_pose_to_cpl, normalize_angle
 from .jlc_footprints import JlcFootprint
-from .models import FootprintRecord
+from .models import FootprintRecord, PadRecord
 from .polarity import match_polarity
 from .solver import (
     DEFAULT_TOLERANCES,
@@ -34,7 +36,9 @@ from .solver import (
     MIRRORED,
     MIRRORED_ARRAY,
     MIRRORED_BY_POSITION,
-    POSITION_AMBIGUOUS,
+    POSITION_CENTRED,
+    POSITION_ESTIMATE,
+    POSITION_LOOSE,
     FitResult,
     cap_confidence,
     centred_origin,
@@ -159,6 +163,7 @@ def solve_against_jlc(fp: FootprintRecord, jlc_fp: JlcFootprint) -> FitResult:
     polarity = match_polarity(
         fp.pads, jlc_fp.pads, jlc_fp.pin_names, jlc_fp.symbol_error, fp.footprint, jlc_marks=jlc_fp.pad_marks
     )
+    polarity.own_footprint = own_footprint_name(fp.footprint, jlc_fp)
     fit = solve_placement(fp.pads, polarity.jlc_pads, fp.side, kicad_orientation=fp.orientation, polarity=polarity)
     if not fit.usable:
         mirrored = MIRRORED in fit.flags
@@ -185,43 +190,91 @@ _LOOSE_POSITION_MATCH = replace(DEFAULT_TOLERANCES, medium_rms=1.5)
 
 
 def _estimate_by_position(fp: FootprintRecord, jlc_fp: JlcFootprint, fit: FitResult) -> None:
-    """Use a by-position fit as the estimate when the pattern fits more than one way round.
+    """Estimate by matching pads by position where the by-number estimate can't be trusted.
 
-    A symmetric pattern numbered differently (a tact switch's pads 1,1,2,2
-    against JLC's 1-4) has no single by-position numbering, but every one of
-    them puts the part in the right place; the by-number estimate pairs a pad
-    pair's centre with one pad and lands millimetres off.
+    That is when there is no by-number estimate, or it pairs a pad group's
+    centre with a single pad (a tact switch's pads 1,1,2,2 against JLC's 1-4,
+    which lands millimetres off).  Same-size patterns match first; then a loose
+    match, ranked by fit, centres a differently sized pattern of the same shape;
+    up to two pads that only one footprint has (a switch's centre pad) are left
+    out.  Failing that, JLC's pads are centred on the board's.
     """
-    tied = None
-    # Same-size patterns first; then a loose match, which still centres a
-    # differently sized pattern of the same shape on the board's pads.
-    for tol in (DEFAULT_TOLERANCES, _LOOSE_POSITION_MATCH):
-        tied = match_pads_by_position(
-            fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation, tol=tol, break_ties=True
-        )
-        if tied is not None:
-            break
-    if tied is None:
-        # Too different to pair pads at all.  If both are the same number of
-        # pads, at least centre JLC's pattern on the board's.
-        board = [pad for pad in fp.pads if normalize_pad_number(pad.number)]
-        jlc = [pad for pad in jlc_fp.pads if normalize_pad_number(pad.number)]
-        if fit.estimate_angle is not None and GROUP_SIZE_MISMATCH in fit.flags and len(board) == len(jlc):
-            fit.estimate_origin = centred_origin(board, jlc, fp.side, fit.estimate_angle)
-            fit.flags.append(POSITION_AMBIGUOUS)
-        return
-    by_position = solve_placement(fp.pads, tied, fp.side, kicad_orientation=fp.orientation)
-    if by_position.snapped:
-        angle, origin, rms = by_position.angle, by_position.origin, by_position.rms
-    elif by_position.estimate_angle is not None:
-        angle, origin, rms = by_position.estimate_angle, by_position.estimate_origin, by_position.estimate_rms
-    else:
-        return
-    # Only where the by-number estimate is missing or pairs a group's centre
-    # with a single pad (pad groups of different sizes); otherwise it stands.
-    if fit.estimate_angle is None or GROUP_SIZE_MISMATCH in fit.flags:
+    if fit.estimate_angle is not None and GROUP_SIZE_MISMATCH not in fit.flags:
+        return  # the by-number estimate stands
+    board = [pad for pad in fp.pads if normalize_pad_number(pad.number)]
+    jlc = [pad for pad in jlc_fp.pads if normalize_pad_number(pad.number)]
+    best = None
+    for board_sub, jlc_sub in _matching_subsets(board, jlc):
+        for tol, flag, rank_by_fit in (
+            (DEFAULT_TOLERANCES, POSITION_ESTIMATE, False),
+            (_LOOSE_POSITION_MATCH, POSITION_LOOSE, True),
+        ):
+            renumbered = match_pads_by_position(
+                board_sub,
+                jlc_sub,
+                fp.side,
+                kicad_orientation=fp.orientation,
+                tol=tol,
+                break_ties=True,
+                rank_by_fit=rank_by_fit,
+            )
+            if renumbered is None:
+                continue
+            solved = solve_placement(board_sub, renumbered, fp.side, kicad_orientation=fp.orientation)
+            if solved.snapped:
+                found = (solved.rms, solved.angle, solved.origin)
+            elif solved.estimate_angle is not None:
+                found = (solved.estimate_rms, solved.estimate_angle, solved.estimate_origin)
+            else:
+                continue
+            if len(board_sub) != len(board) or len(jlc_sub) != len(jlc):
+                flag = POSITION_LOOSE
+            if best is None or found[0] < best[0][0]:
+                best = (found, flag)
+            break  # a same-size match beats a loose one for this pairing
+    if best is not None:
+        (rms, angle, origin), flag = best
         fit.estimate_angle, fit.estimate_origin, fit.estimate_rms = angle, origin, rms
-        fit.flags.append(POSITION_AMBIGUOUS)
+        fit.flags.append(flag)
+    elif fit.estimate_angle is not None and len(board) == len(jlc):
+        fit.estimate_origin = centred_origin(board, jlc, fp.side, fit.estimate_angle)
+        fit.flags.append(POSITION_CENTRED)
+
+
+_MAX_UNPAIRED = 2  # pads only one footprint has, left out of a loose position match
+_MAX_SUBSET_PADS = 24  # above this, don't try leaving pads out
+
+
+def _matching_subsets(board: List[PadRecord], jlc: List[PadRecord]):
+    """(board pads, JLC pads) of equal count: both whole, or the larger one with up to two pads left out."""
+    extra = len(jlc) - len(board)
+    if extra == 0:
+        yield board, jlc
+        return
+    larger = jlc if extra > 0 else board
+    if abs(extra) > _MAX_UNPAIRED or len(larger) > _MAX_SUBSET_PADS:
+        return
+    for left_out in itertools.combinations(range(len(larger)), abs(extra)):
+        kept = [pad for i, pad in enumerate(larger) if i not in left_out]
+        yield (board, kept) if extra > 0 else (kept, jlc)
+
+
+def own_footprint_name(footprint: str, jlc_fp: JlcFootprint) -> bool:
+    """True when *footprint* is named the way JLCImport names JLC's own footprint for this part.
+
+    JLCImport names an imported footprint after the part (JLC's symbol title,
+    or its first word, the part number), or after JLC's footprint title when
+    the part has no symbol, optionally with the LCSC number appended.
+    """
+    name = (footprint or "").split(":")[-1].strip().lower()
+    titles = [jlc_fp.symbol_title, (jlc_fp.symbol_title or "").split(" ")[0], jlc_fp.title]
+    for title in titles:
+        if not title:
+            continue
+        base = sanitize_name(title).lower()
+        if name in (base, f"{base}_{jlc_fp.lcsc}".lower()):
+            return True
+    return False
 
 
 def compute_placement(

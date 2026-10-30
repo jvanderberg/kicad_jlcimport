@@ -28,7 +28,9 @@ from kicad_jlcimport.production.solver import (
     NOT_SNAPPED,
     PAD_MISMATCH,
     POLARITY_BY_NUMBERING,
-    POSITION_AMBIGUOUS,
+    POSITION_CENTRED,
+    POSITION_ESTIMATE,
+    POSITION_LOOSE,
     TOO_FEW_PADS,
     describe_flags,
     group_pads,
@@ -583,4 +585,33 @@ class TestSymmetricRenumberedEstimate:
         pl = compute_placement(self.board(None), jlc)
         assert pl.source == ESTIMATED
         assert (pl.x, pl.y) == (pytest.approx(100.0, abs=1e-6), pytest.approx(-50.0, abs=1e-6))
-        assert POSITION_AMBIGUOUS in pl.fit.flags
+        assert {POSITION_ESTIMATE, POSITION_LOOSE, POSITION_CENTRED} & set(pl.fit.flags)
+
+
+class TestRepeatedPadNumbers:
+    def place(self, kicad, jlc_pads):
+        pads = [PadRecord(n, 50.0 + x, 60.0 + y) for n, x, y in kicad]
+        fp = FootprintRecord("X1", "X", "Test", 50.0, 60.0, 0.0, cv.TOP, pads, {"LCSC": "C1"})
+        return compute_placement(fp, JlcFootprint("C1", pads=[PadRecord(n, x, y) for n, x, y in jlc_pads]))
+
+    def test_terminals_split_into_three_pads_still_solve(self):
+        # KiCad's Murata CSTCR resonator: each terminal is three pads; JLC's has one.
+        kicad = [(str(t), x, (t - 2) * 1.5) for t in (1, 2, 3) for x in (-1.05, 0.0, 1.05)]
+        pl = self.place(kicad, [("1", -1.5, 0.0), ("2", 0.0, 0.0), ("3", 1.5, 0.0)])
+        assert pl.source == SOLVED and pl.confidence == HIGH
+        assert (pl.x, pl.y) == (pytest.approx(50.0), pytest.approx(-60.0))
+
+    def test_extra_jlc_pad_is_left_out_of_the_estimate(self):
+        # A switch numbered 1,1,2,2 against JLC's 1-4 plus a centre pad 5.
+        kicad = [("1", -3.0, -2.25), ("1", 3.0, -2.25), ("2", -3.0, 2.25), ("2", 3.0, 2.25)]
+        jlc = [("1", -3.0, -2.25), ("2", 3.0, -2.25), ("3", -3.0, 2.25), ("4", 3.0, 2.25), ("5", 0.0, 0.0)]
+        pl = self.place(kicad, jlc)
+        assert pl.source == ESTIMATED and pl.rotation in (0.0, 180.0)
+        assert (pl.x, pl.y) == (pytest.approx(50.0, abs=1e-6), pytest.approx(-60.0, abs=1e-6))
+
+    def test_loose_match_prefers_the_better_fitting_orientation(self):
+        # JLC 6.0 x 3.7 mm pattern against a 5.6 x 4.2 mm board pattern: 0/180 fit, 90/270 would short the rows.
+        kicad = [("1", -2.8, -2.1), ("1", 2.8, -2.1), ("2", -2.8, 2.1), ("2", 2.8, 2.1)]
+        jlc = [("1", -3.0, -1.85), ("2", 3.0, -1.85), ("3", -3.0, 1.85), ("4", 3.0, 1.85)]
+        pl = self.place(kicad, jlc)
+        assert pl.rotation in (0.0, 180.0)

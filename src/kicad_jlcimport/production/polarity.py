@@ -125,6 +125,7 @@ class PolarityMatch:
     # JLC says the part is polarized, but nothing on the board does: paired by
     # number, which is right only if the board footprint is numbered like JLC's.
     assumed: bool = False
+    own_footprint: bool = False  # the board footprint is named as JLCImport names JLC's own footprint
 
 
 def _normalize(number: str) -> str:
