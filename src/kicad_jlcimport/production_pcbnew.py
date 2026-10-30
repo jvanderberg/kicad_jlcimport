@@ -133,6 +133,16 @@ def _pad_number(pad) -> str:
     return _str(fn()) if fn is not None else ""
 
 
+def _pad_function(pad) -> str:
+    fn = getattr(pad, "GetPinFunction", None)
+    if fn is None:
+        return ""
+    try:
+        return _str(fn())
+    except Exception:
+        return ""
+
+
 def footprint_record(fp, pcbnew=None) -> FootprintRecord:
     pcbnew = _pcbnew(pcbnew)
     pos = fp.GetPosition()
@@ -141,7 +151,7 @@ def footprint_record(fp, pcbnew=None) -> FootprintRecord:
     pads = []
     for pad in fp.Pads():
         ppos = pad.GetPosition()
-        pads.append(PadRecord(number=_pad_number(pad), x=_mm(ppos.x), y=_mm(ppos.y)))
+        pads.append(PadRecord(number=_pad_number(pad), x=_mm(ppos.x), y=_mm(ppos.y), function=_pad_function(pad)))
     return FootprintRecord(
         reference=_str(fp.GetReference()),
         value=_str(fp.GetValue()),

@@ -23,6 +23,10 @@ that maps JLC's footprint onto the actual pads:
 4. The opposite-handedness fit (mirror applied/removed) is also computed; if
    it fits clearly better, the pad numbering is mirrored and we refuse to
    guess.
+
+When the pad numbers don't line up at all (JLC renumbered its footprint,
+say), :func:`match_pads_by_position` pairs pads by position instead.  It
+only accepts a match that fits in exactly one orientation.
 """
 
 import math
@@ -43,6 +47,11 @@ HIGH_RESIDUAL = "high_residual"
 MIRRORED = "mirrored_numbering"
 POLARITY_BY_NUMBERING = "polarity_by_numbering"
 NOT_SNAPPED = "angle_not_snapped"
+MATCHED_BY_POSITION = "matched_by_position"
+POLARITY_BY_PIN_NAMES = "polarity_by_pin_names"
+POLARITY_BY_CONVENTION = "polarity_by_convention"
+POLARITY_SWAPPED = "polarity_swapped"
+POLARITY_UNRESOLVED = "polarity_unresolved"
 
 FLAG_TEXT = {
     TOO_FEW_PADS: "fewer than 2 pad numbers in common with the JLC footprint",
@@ -54,6 +63,14 @@ FLAG_TEXT = {
     MIRRORED: "pad numbering is mirrored relative to the JLC footprint",
     POLARITY_BY_NUMBERING: "symmetric 2-terminal part: polarity relies on pad numbering only",
     NOT_SNAPPED: "solved angle is not a multiple of 90° from KiCad's",
+    MATCHED_BY_POSITION: "pad numbers differ from the JLC footprint; pads matched by position",
+    POLARITY_BY_PIN_NAMES: "polarity matched by pin name (anode/cathode or +/-)",
+    POLARITY_BY_CONVENTION: (
+        "no pin names on the board pads; assumed KiCad's convention (diode/LED: pad 1 = cathode, "
+        "polarized capacitor: pad 1 = +)"
+    ),
+    POLARITY_SWAPPED: "JLC numbers this part's pads the other way round; paired by polarity instead",
+    POLARITY_UNRESOLVED: "polarized part, but the board pads don't say which is which; check its orientation",
 }
 
 HIGH = "high"
@@ -271,6 +288,69 @@ def solve_placement(
     else:
         result.confidence = HIGH
     return result
+
+
+def cap_confidence(result: FitResult, flag: str) -> None:
+    """Add *flag* and lower a HIGH result to MEDIUM (it rests on an assumption)."""
+    if flag not in result.flags:
+        result.flags.append(flag)
+    if result.confidence == HIGH:
+        result.confidence = MEDIUM
+
+
+def _assign_nearest(q: Sequence[Point], p: Sequence[Point], deg: float, t: Point) -> Optional[Tuple[List[int], float]]:
+    """Map each transformed q to its nearest p.  None unless the mapping is one-to-one."""
+    assignment: List[int] = []
+    sq = 0.0
+    for qi in q:
+        rx, ry = rotate(qi, deg)
+        x, y = rx + t[0], ry + t[1]
+        dists = [math.hypot(x - px, y - py) for px, py in p]
+        j = min(range(len(p)), key=dists.__getitem__)
+        assignment.append(j)
+        sq += dists[j] ** 2
+    if len(set(assignment)) != len(assignment):
+        return None
+    return assignment, math.sqrt(sq / len(q))
+
+
+def match_pads_by_position(
+    board_pads: Sequence[PadRecord],
+    jlc_pads: Sequence[PadRecord],
+    side: str,
+    kicad_orientation: Optional[float] = None,
+    tol: Tolerances = DEFAULT_TOLERANCES,
+) -> Optional[List[PadRecord]]:
+    """JLC's pads renamed with the board's pad numbers, matched by position.
+
+    For footprints with the same pads but different numbering.  Pad centroids
+    are aligned and every 90° step (and KiCad's angle plus 90° steps) is tried;
+    each JLC pad takes the number of the nearest board pad.  Returns None when
+    the pad counts differ, nothing fits within ``tol.medium_rms``, or the
+    pattern fits in more than one orientation with a different numbering, in
+    which case position alone cannot tell which way round the part goes.
+    """
+    board = [pad for pad in board_pads if normalize_pad_number(pad.number)]
+    jlc = [pad for pad in jlc_pads if normalize_pad_number(pad.number)]
+    if len(board) != len(jlc) or len(board) < 3:
+        return None
+    p = [board_to_cpl(pad.x, pad.y) for pad in board]
+    q = [side_mirror(local_to_up(pad.x, pad.y), side) for pad in jlc]
+    pc, qc = _centroid(p), _centroid(q)
+
+    angles = [k * 90.0 for k in range(4)]
+    if kicad_orientation is not None:
+        angles += [normalize_angle(kicad_orientation + k * 90.0) for k in range(4)]
+    fits = []
+    for angle in sorted({round(a, 6) for a in angles}):
+        found = _assign_nearest(q, p, angle, _translation(qc, pc, angle))
+        if found is not None and found[1] <= tol.medium_rms:
+            numbers = tuple(normalize_pad_number(board[j].number) for j in found[0])
+            fits.append((found[1], numbers, found[0]))
+    if not fits or len({numbers for _, numbers, _ in fits}) > 1:
+        return None
+    _, _, assignment = min(fits)
+    return [PadRecord(number=board[j].number, x=pad.x, y=pad.y) for pad, j in zip(jlc, assignment)]
 
 
 def describe_flags(flags: Sequence[str]) -> List[str]:

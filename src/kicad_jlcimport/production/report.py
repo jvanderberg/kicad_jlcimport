@@ -17,7 +17,7 @@ from .jlc_footprints import JlcFootprint
 from .models import FootprintRecord, natural_key
 from .outputs import build_bom_rows, build_cpl_rows
 from .placement import KICAD, MANUAL, Placement, compute_placement
-from .solver import MEDIUM, POLARITY_BY_NUMBERING
+from .solver import MEDIUM, POLARITY_BY_NUMBERING, POLARITY_SWAPPED, POLARITY_UNRESOLVED
 
 ERROR = "error"
 WARNING = "warning"
@@ -112,6 +112,27 @@ class ProductionReport:
             lines.append(f"Estimated parts cost: ${cost:.2f} (unit prices at order quantity, excl. fees)")
         if n_unverified:
             lines.append(f"{n_unverified} placements unverified (KiCad position/rotation used)")
+        return lines
+
+    def issue_lines(self, min_severity: str = WARNING) -> List[str]:
+        """One line per distinct issue, worst first, e.g. ``[WARNING] TP1, TP2: No LCSC...``.
+
+        Rows sharing the same severity and message are merged into one line so
+        a handful of identical warnings (test points, say) don't drown the rest.
+        """
+        limit = _SEVERITY_RANK[min_severity]
+        grouped: Dict[Tuple[str, str], List[str]] = {}
+        for issue in self.board_issues:
+            grouped.setdefault((issue.severity, issue.message), [])
+        for row in self.rows:
+            for issue in row.issues:
+                grouped.setdefault((issue.severity, issue.message), []).append(row.reference)
+        lines = []
+        for (severity, message), refs in sorted(grouped.items(), key=lambda kv: _SEVERITY_RANK[kv[0][0]]):
+            if _SEVERITY_RANK[severity] > limit:
+                continue
+            prefix = f"[{severity.upper()}] " + (", ".join(refs) + ": " if refs else "")
+            lines.append(prefix + message)
         return lines
 
     def to_text(self) -> str:
@@ -277,8 +298,10 @@ def _build_row(
             row.add(INFO, "Placement unverified")
     elif pl.source == MANUAL:
         row.add(INFO, "; ".join(pl.notes))
+    elif pl.fit is not None and POLARITY_UNRESOLVED in pl.fit.flags:
+        row.add(WARNING, "Placement solved: " + "; ".join(pl.notes))
     elif pl.confidence == MEDIUM:
         row.add(INFO, "Placement solved: " + "; ".join(pl.notes))
-    elif pl.fit is not None and POLARITY_BY_NUMBERING in pl.fit.flags:
+    elif pl.fit is not None and (POLARITY_BY_NUMBERING in pl.fit.flags or POLARITY_SWAPPED in pl.fit.flags):
         row.add(INFO, "; ".join(pl.notes))
     return row

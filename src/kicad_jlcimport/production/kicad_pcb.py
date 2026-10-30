@@ -124,7 +124,9 @@ def footprint_from_node(node: list) -> FootprintRecord:
         number = pad[1] if len(pad) > 1 and isinstance(pad[1], str) else ""
         px, py, _ = _at(pad)
         bx, by = _to_board(fx, fy, theta, px, py)
-        pads.append(PadRecord(number=number, x=bx, y=by))
+        pinfunction = _child(pad, "pinfunction")
+        function = pinfunction[1] if pinfunction and len(pinfunction) > 1 and isinstance(pinfunction[1], str) else ""
+        pads.append(PadRecord(number=number, x=bx, y=by, function=function))
 
     return FootprintRecord(
         reference=props.get("Reference", ""),

@@ -352,6 +352,26 @@ class TestRunCheck:
         assert "[ERROR] Duplicate" in report.to_text()
         assert report.estimated_parts_cost() is None
 
+    def test_issue_lines_grouped_worst_first(self):
+        part_cache, fp_cache = caches(parts={"C999": part_info("C999", kind="Extended")})
+        report = run_check(
+            [fp("TP1", lcsc=None), fp("TP2", lcsc=None), fp("D1", lcsc="bogus"), fp("U1", lcsc="C999")],
+            1,
+            part_cache,
+            fp_cache,
+        )
+        lines = report.issue_lines()
+        assert lines[0] == '[ERROR] D1: Invalid LCSC part number "bogus"'
+        assert any(line.startswith("[WARNING] TP1, TP2: No LCSC part number") for line in lines)
+        assert any(line.startswith("[WARNING] U1: Unverified") for line in lines)
+        assert not any(line.startswith("[INFO]") for line in lines)
+        assert "[INFO] U1: Extended part (setup fee)" in report.issue_lines(INFO)
+
+    def test_issue_lines_include_board_issues(self):
+        part_cache, fp_cache = caches()
+        report = run_check([fp("R1", lcsc=None), fp("R1", lcsc=None)], 1, part_cache, fp_cache)
+        assert report.issue_lines()[0] == "[ERROR] Duplicate designators: R1"
+
     def test_medium_confidence_and_manual_notes(self):
         wide = [PadRecord("1", -0.9, 0.0), PadRecord("2", 0.9, 0.0)]
         part_cache, fp_cache = caches(
@@ -426,7 +446,9 @@ class TestExport:
         with mock.patch.object(api, "fetch_component_uuids", return_value=uuids):
             with mock.patch.object(api, "fetch_component_data", return_value=data) as fetch_data:
                 jlc = fetch_jlc_footprint("C1")
-        fetch_data.assert_called_once_with("f")
+        # Two-pad part: footprint first, then the symbol for pin names (none here).
+        assert [c.args[0] for c in fetch_data.call_args_list] == ["f", "s"]
+        assert jlc.pin_names == {}
         assert jlc.title == "R0603"
         assert [(p.number, round(p.x, 4), p.y) for p in jlc.pads] == [("1", -0.762, 0.0), ("2", 0.762, 0.0)]
 

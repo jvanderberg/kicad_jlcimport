@@ -149,6 +149,16 @@ class TestExtract:
         rec = adapter.footprint_record(fp, fake_pcbnew())
         assert rec.lcsc is None and not rec.dnp
 
+    def test_pad_pin_function(self):
+        def boom():
+            raise RuntimeError("swig")
+
+        named, broken, plain = FakePad("1", 0, 0), FakePad("2", 1, 0), FakePad("3", 2, 0)
+        named.GetPinFunction = lambda: "K"
+        broken.GetPinFunction = boom
+        rec = adapter.footprint_record(FakeFootprint(pads=[named, broken, plain]), fake_pcbnew())
+        assert [p.function for p in rec.pads] == ["K", "", ""]
+
     def test_no_attribute_api(self):
         fp = FakeFootprint()
         rec = adapter.footprint_record(fp, SimpleNamespace(B_Cu=2))

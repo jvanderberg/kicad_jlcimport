@@ -22,7 +22,21 @@ from typing import List, Optional, Tuple
 from .conventions import cpl_rotation, kicad_pose_to_cpl, normalize_angle
 from .jlc_footprints import JlcFootprint
 from .models import FootprintRecord
-from .solver import FitResult, describe_flags, solve_placement
+from .polarity import BY_CONVENTION, BY_NAMES, UNRESOLVED, match_polarity
+from .solver import (
+    MATCHED_BY_POSITION,
+    MIRRORED,
+    POLARITY_BY_CONVENTION,
+    POLARITY_BY_NUMBERING,
+    POLARITY_BY_PIN_NAMES,
+    POLARITY_SWAPPED,
+    POLARITY_UNRESOLVED,
+    FitResult,
+    cap_confidence,
+    describe_flags,
+    match_pads_by_position,
+    solve_placement,
+)
 
 ROTATION_OFFSET_FIELD = "JLCPCB Rotation Offset"
 POSITION_OFFSET_FIELD = "JLCPCB Position Offset"
@@ -111,6 +125,32 @@ def kicad_placement(fp: FootprintRecord, reason: str) -> Placement:
     )
 
 
+def solve_against_jlc(fp: FootprintRecord, jlc_fp: JlcFootprint) -> FitResult:
+    """Fit JLC's footprint onto *fp*, pairing pads by polarity, then number, then position."""
+    polarity = match_polarity(fp.pads, jlc_fp.pads, jlc_fp.pin_names)
+    fit = solve_placement(fp.pads, polarity.jlc_pads, fp.side, kicad_orientation=fp.orientation)
+    if polarity.source in (BY_NAMES, BY_CONVENTION):
+        if POLARITY_BY_NUMBERING in fit.flags:
+            fit.flags.remove(POLARITY_BY_NUMBERING)
+        if polarity.swapped:
+            fit.flags.append(POLARITY_SWAPPED)
+        if polarity.source == BY_NAMES:
+            fit.flags.append(POLARITY_BY_PIN_NAMES)
+        else:
+            cap_confidence(fit, POLARITY_BY_CONVENTION)
+    elif polarity.source == UNRESOLVED:
+        cap_confidence(fit, POLARITY_UNRESOLVED)
+
+    if not fit.usable and MIRRORED not in fit.flags:
+        renumbered = match_pads_by_position(fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation)
+        if renumbered is not None:
+            by_position = solve_placement(fp.pads, renumbered, fp.side, kicad_orientation=fp.orientation)
+            if by_position.usable:
+                cap_confidence(by_position, MATCHED_BY_POSITION)
+                fit = by_position
+    return fit
+
+
 def compute_placement(
     fp: FootprintRecord,
     jlc_fp: Optional[JlcFootprint] = None,
@@ -124,7 +164,7 @@ def compute_placement(
     """
     fit: Optional[FitResult] = None
     if jlc_fp is not None:
-        fit = solve_placement(fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation)
+        fit = solve_against_jlc(fp, jlc_fp)
 
     override, override_errors = parse_override(fp)
     if override is not None:

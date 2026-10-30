@@ -35,11 +35,14 @@ class PadRecord:
 
     For board footprints ``x``/``y`` are board coordinates (mm, Y down).
     For JLC/EasyEDA footprints they are footprint-local (mm, Y down).
+    ``function`` is the schematic pin name KiCad attaches to a board pad
+    (e.g. ``K``); empty when unknown.
     """
 
     number: str
     x: float
     y: float
+    function: str = ""
 
 
 @dataclass

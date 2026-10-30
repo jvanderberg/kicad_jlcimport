@@ -18,21 +18,39 @@ from .production.export import board_basename, default_output_dir, make_caches, 
 from .production.placement import POSITION_OFFSET_FIELD, ROTATION_OFFSET_FIELD
 from .production.report import ERROR, WARNING, row_cells, run_check
 
+# The last column (Notes) is stretched to fill whatever width is left.
 COLUMNS = [
     ("Ref", "ref", 60),
-    ("Value", "value", 110),
-    ("LCSC", "lcsc", 85),
-    ("Stock", "stock", 180),
-    ("Type", "type", 70),
-    ("Rotation", "rotation", 65),
+    ("Value", "value", 100),
+    ("LCSC", "lcsc", 80),
+    ("Stock", "stock", 135),
+    ("Type", "type", 65),
+    ("Rotation", "rotation", 60),
     ("Confidence", "confidence", 80),
-    ("Notes", "notes", 400),
+    ("Notes", "notes", 120),
 ]
 
-_ROW_COLOURS = {
+_LIGHT_ROW_COLOURS = {
     ERROR: wx.Colour(255, 215, 215),
     WARNING: wx.Colour(255, 240, 200),
 }
+_DARK_ROW_COLOURS = {
+    ERROR: wx.Colour(115, 35, 35),
+    WARNING: wx.Colour(105, 80, 15),
+}
+
+# Generate's confirmation lists at most this many issue lines.
+_MAX_PROMPT_ISSUES = 12
+
+
+def _row_colours(background):
+    """Issue-row tints matched to the list's theme.
+
+    Only the background is tinted; the theme's own text colour stays, so it
+    contrasts in both light and dark mode.
+    """
+    luma = 0.299 * background.Red() + 0.587 * background.Green() + 0.114 * background.Blue()
+    return _DARK_ROW_COLOURS if luma < 128 else _LIGHT_ROW_COLOURS
 
 
 _TITLE = "JLCPCB Production Files"
@@ -52,6 +70,7 @@ class ProductionPanel(wx.Panel):
         self._closing = False
         self._busy = False
         self._request_id = 0
+        self._report = None
         self._part_cache, self._footprint_cache = make_caches()
         board_file = adapter.board_path(board)
         self._basename = board_basename(board_file) if board_file else "board"
@@ -89,9 +108,15 @@ class ProductionPanel(wx.Panel):
         self.table = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         for i, (title, _key, width) in enumerate(COLUMNS):
             self.table.InsertColumn(i, title, width=width)
+        self.table.Bind(wx.EVT_SIZE, self._on_table_size)
+        self.table.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_row_selected)
         vbox.Add(self.table, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
-        self.summary = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 100))
+        self.details = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 75))
+        self.details.SetValue("Select a row to see all of its notes.")
+        vbox.Add(self.details, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+
+        self.summary = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
         self.summary.SetValue(
             "Check looks up every LCSC part on the board (stock, basic/extended) and solves each part's "
             "CPL rotation and centre against JLCPCB's own footprint.\n"
@@ -112,6 +137,24 @@ class ProductionPanel(wx.Panel):
         vbox.Add(hbox, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         panel.SetSizer(vbox)
+
+    def _on_table_size(self, event):
+        event.Skip()
+        fixed = sum(self.table.GetColumnWidth(i) for i in range(len(COLUMNS) - 1))
+        notes_width = max(self.table.GetClientSize().width - fixed - 4, COLUMNS[-1][2])
+        self.table.SetColumnWidth(len(COLUMNS) - 1, notes_width)
+
+    def _on_row_selected(self, event):
+        idx = event.GetIndex()
+        if self._report is None or not 0 <= idx < len(self._report.rows):
+            return
+        row = self._report.rows[idx]
+        cells = row_cells(row)
+        head = "  ".join(v for v in (cells["ref"], cells["value"], cells["lcsc"], cells["stock"]) if v)
+        if cells["rotation"]:
+            head += f"  |  CPL rotation {cells['rotation']}, confidence {cells['confidence']}"
+        issues = [f"[{i.severity.upper()}] {i.message}" for i in row.issues] or ["No issues."]
+        self.details.SetValue("\n".join([head] + issues))
 
     def _set_busy(self, busy):
         self._busy = busy
@@ -203,18 +246,22 @@ class ProductionPanel(wx.Panel):
             self._generate(report)
 
     def _show_report(self, report):
+        self._report = report
         self.table.DeleteAllItems()
+        self.details.SetValue("Select a row to see all of its notes.")
+        row_colours = _row_colours(self.table.GetBackgroundColour())
         for row in report.rows:
             cells = row_cells(row)
             idx = self.table.InsertItem(self.table.GetItemCount(), cells["ref"])
             for col, (_title, key, _width) in enumerate(COLUMNS[1:], start=1):
                 self.table.SetItem(idx, col, cells[key])
-            colour = _ROW_COLOURS.get(row.severity)
+            colour = row_colours.get(row.severity)
             if colour is not None:
                 self.table.SetItemBackgroundColour(idx, colour)
-                self.table.SetItemTextColour(idx, wx.BLACK)
-        lines = report.summary_lines()
-        lines.extend(f"[{i.severity.upper()}] {i.message}" for i in report.board_issues)
+        # Issues first: they are what the user has to act on.
+        issues = report.issue_lines()
+        lines = issues + [""] if issues else []
+        lines.extend(report.summary_lines())
         self.summary.SetValue("\n".join(lines))
 
     # ------------------------------------------------------------ generate
@@ -226,9 +273,14 @@ class ProductionPanel(wx.Panel):
             return
         errors, warnings = report.count(ERROR), report.count(WARNING)
         if errors or warnings:
+            issues = report.issue_lines()
+            shown = issues[:_MAX_PROMPT_ISSUES]
+            if len(issues) > len(shown):
+                shown.append(f"...and {len(issues) - len(shown)} more (see the list below the table)")
             answer = wx.MessageBox(
-                f"The check found {errors} errors and {warnings} warnings "
-                "(see the highlighted rows).\n\nGenerate production files anyway?",
+                f"The check found {errors} errors and {warnings} warnings:\n\n"
+                + "\n".join(shown)
+                + "\n\nGenerate production files anyway?",
                 _TITLE,
                 wx.YES_NO | wx.ICON_WARNING,
             )
