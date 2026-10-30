@@ -122,6 +122,9 @@ class PolarityMatch:
     swapped: bool = False  # JLC numbers the pads the other way round from the board
     jlc_source: str = ""  # JLC_MARKS or JLC_NAMES: where the JLC pads' roles came from
     conflict: bool = False  # JLC's footprint marks and symbol names disagree (the marks win)
+    # JLC says the part is polarized, but nothing on the board does: paired by
+    # number, which is right only if the board footprint is numbered like JLC's.
+    assumed: bool = False
 
 
 def _normalize(number: str) -> str:
@@ -144,9 +147,17 @@ def _complete(roles: Dict[str, str]) -> Dict[str, str]:
 
 def _board_roles(board_pads: Sequence[PadRecord], numbers: List[str]) -> Dict[str, str]:
     """Board pad number -> polarity from pin functions, else from the pad numbers themselves."""
+    functions: Dict[str, str] = {}
+    for num in numbers:
+        names = {(p.function or "").strip() for p in board_pads if _normalize(p.number) == num} - {""}
+        if len(names) == 1:
+            functions[num] = names.pop()
+    functions = _cathode_named_c(numbers, functions)  # pins named A / C
     roles: Dict[str, str] = {}
     for num in numbers:
-        found = {pin_role(p.function) for p in board_pads if _normalize(p.number) == num} - {None}
+        found = {pin_role(functions.get(num, ""))} - {None}
+        if not found:  # several differently named pads with one number: each must agree
+            found = {pin_role(p.function) for p in board_pads if _normalize(p.number) == num} - {None}
         if len(found) == 1:
             roles[num] = found.pop()[0]
     if _complete(roles):
@@ -282,7 +293,9 @@ def match_polarity(
         # numbering is JLC's, so its numbers pair it.
         convention = board_kind(footprint_name)
         if not convention:
-            return unchanged
+            return PolarityMatch(
+                jlc_pads=list(jlc_pads), kind=kind, jlc_source=jlc_source, conflict=conflict, assumed=True
+            )
         pad1 = _KICAD_PAD1_ROLE[convention]
         board_roles = {"1": pad1, "2": NEGATIVE if pad1 == POSITIVE else POSITIVE}
         source = BY_CONVENTION

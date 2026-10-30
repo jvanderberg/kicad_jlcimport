@@ -52,7 +52,13 @@ def get(namespace: str, key: str, max_age: float = MAX_AGE) -> Optional[Any]:
             return None
         with gzip.open(path, "rt", encoding="utf-8") as f:
             return json.load(f)
-    except (OSError, ValueError, EOFError):
+    except FileNotFoundError:
+        return None
+    except Exception:  # corrupt or partial entry (zlib.error, BadGzipFile, bad JSON...): fetch again
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
         return None
 
 

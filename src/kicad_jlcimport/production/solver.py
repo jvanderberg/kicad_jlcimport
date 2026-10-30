@@ -76,6 +76,8 @@ POLARITY_BY_FOOTPRINT_NAME = "polarity_by_footprint_name"
 POLARITY_JLC_UNNAMED = "polarity_jlc_unnamed"
 POLARITY_BY_JLC_MARKS = "polarity_by_jlc_marks"
 POLARITY_JLC_CONFLICT = "polarity_jlc_conflict"
+POLARITY_ASSUMED = "polarity_assumed"
+POSITION_AMBIGUOUS = "position_ambiguous"
 
 FLAG_TEXT = {
     TOO_FEW_PADS: "fewer than 2 pad numbers in common with the JLC footprint",
@@ -108,6 +110,13 @@ FLAG_TEXT = {
     ),
     POLARITY_JLC_UNNAMED: "polarized part, but JLC's symbol doesn't name its pins; paired by pad number",
     POLARITY_BY_JLC_MARKS: "JLC's side from the + / - marks its footprint draws beside the pads",
+    POLARITY_ASSUMED: (
+        "polarized part on a footprint that isn't JLC's or a KiCad LED/diode/capacitor footprint; paired by pad "
+        "number, which is only right if it is numbered like JLC's"
+    ),
+    POSITION_AMBIGUOUS: (
+        "pad numbers differ from JLC's and the pads fit by position more than one way round; placed by position"
+    ),
     POLARITY_JLC_CONFLICT: (
         "JLC's symbol and footprint disagree on which pad is which; placed by the footprint's + / - marks, "
         "which JLC's preview shows. Check its orientation"
@@ -133,6 +142,7 @@ class Tolerances:
     """Thresholds used by :func:`solve_placement` (millimetres / degrees)."""
 
     high_rms: float = 0.05  # residual for a confident match
+    own_footprint_rms: float = 0.01  # below this the board footprint is JLC's own (imported), numbering included
     medium_rms: float = 0.25  # land-pattern differences that don't move the centre/rotation
     mirror_margin: float = 0.05  # how much better the mirrored fit must be to flag it
     snap_deg: float = 1.0
@@ -344,6 +354,8 @@ def solve_placement(
             result.flags.append(POLARITY_BY_JLC_MARKS)
         if polarity is not None and polarity.conflict:
             result.flags.append(POLARITY_JLC_CONFLICT)
+    elif polarity is not None and polarity.assumed and rms > tol.own_footprint_rms:
+        result.flags.append(POLARITY_ASSUMED)
     elif len(jlc_groups) == 2 and _is_point_symmetric(jlc_points, tol.symmetry_tol):
         result.flags.append(POLARITY_BY_NUMBERING)
 
@@ -366,8 +378,15 @@ def solve_placement(
         result.confidence = HIGH
     # JLC's own pin names don't always match how it places a part, so no
     # polarized two-pad result is HIGH.
-    if polarity_source != NOT_POLARIZED and result.confidence == HIGH:
+    if (polarity_source != NOT_POLARIZED or POLARITY_ASSUMED in result.flags) and result.confidence == HIGH:
         result.confidence = MEDIUM
+    # A repeated number paired with a different number of pads puts a group's
+    # centre on a single pad.  Harmless beside other pads (a split thermal pad),
+    # but with fewer than two groups that agree the fit rests on it: two points
+    # always fit when their spacing matches (a tact switch's 1,1,2,2 vs 1-4).
+    same_size = sum(1 for n in common if len(board_groups[n]) == len(jlc_groups[n]))
+    if GROUP_SIZE_MISMATCH in result.flags and same_size < 2:
+        result.confidence = LOW
     return result
 
 
@@ -457,6 +476,13 @@ def match_pads_by_position(
         return [PadRecord(number=board[j].number, x=pad.x, y=pad.y) for pad, j in zip(jlc, fits[0][2])]
     _, _, assignment = min(fits)
     return [PadRecord(number=board[j].number, x=pad.x, y=pad.y) for pad, j in zip(jlc, assignment)]
+
+
+def centred_origin(board_pads: Sequence[PadRecord], jlc_pads: Sequence[PadRecord], side: str, angle: float) -> Point:
+    """JLC origin (CPL coordinates) that puts the centre of JLC's pads on the centre of the board's at *angle*."""
+    p = [board_to_cpl(pad.x, pad.y) for pad in board_pads if normalize_pad_number(pad.number)]
+    q = [side_mirror(local_to_up(pad.x, pad.y), side) for pad in jlc_pads if normalize_pad_number(pad.number)]
+    return _translation(_centroid(q), _centroid(p), angle)
 
 
 def describe_flags(flags: Sequence[str]) -> List[str]:

@@ -21,6 +21,7 @@ from .solver import (
     HIGH,
     MEDIUM,
     MIRRORED_BY_POSITION,
+    POLARITY_ASSUMED,
     POLARITY_BY_CONVENTION,
     POLARITY_BY_FOOTPRINT_NAME,
     POLARITY_BY_NUMBERING,
@@ -36,7 +37,13 @@ from .solver import (
 _WARNING_FLAGS = (POLARITY_UNRESOLVED, POLARITY_NAMES_UNAVAILABLE, POLARITY_JLC_CONFLICT, MIRRORED_BY_POSITION)
 # Polarized parts: worth a look, because JLC's symbol pin names don't always
 # match how JLC places the part (or name the pins at all).
-_POLARIZED_FLAGS = (POLARITY_BY_PIN_NAMES, POLARITY_BY_FOOTPRINT_NAME, POLARITY_BY_CONVENTION, POLARITY_JLC_UNNAMED)
+_POLARIZED_FLAGS = (
+    POLARITY_BY_PIN_NAMES,
+    POLARITY_BY_FOOTPRINT_NAME,
+    POLARITY_BY_CONVENTION,
+    POLARITY_JLC_UNNAMED,
+    POLARITY_ASSUMED,
+)
 
 # JLCPCB's feeder loading fee per unique Extended part on Economic PCBA (USD).
 # Fees change; the summary shows this as an estimate.
@@ -44,7 +51,8 @@ EXTENDED_LOADING_FEE = 3.00
 
 # Fixed texts so the issue list groups them into one line each.
 ESTIMATED_TEXT = (
-    "Estimated placement: pads don't closely match JLC's footprint; check its orientation in JLC's placement preview"
+    "Estimated placement: pads don't closely match JLC's footprint; check its position and orientation in "
+    "JLC's placement preview"
 )
 POLARITY_CHECK_TEXT = "Polarized part: check its polarity in JLC's placement preview"
 

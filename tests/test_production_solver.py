@@ -28,6 +28,7 @@ from kicad_jlcimport.production.solver import (
     NOT_SNAPPED,
     PAD_MISMATCH,
     POLARITY_BY_NUMBERING,
+    POSITION_AMBIGUOUS,
     TOO_FEW_PADS,
     describe_flags,
     group_pads,
@@ -557,3 +558,29 @@ class TestMirroredArrays:
     )
     def test_isolated_array_names(self, footprint, title, expected):
         assert is_isolated_array(footprint, title) is expected
+
+
+class TestSymmetricRenumberedEstimate:
+    """A tact switch: KiCad numbers its pads 1,1,2,2, JLC numbers them 1-4."""
+
+    KICAD = [
+        PadRecord("1", -3.0, -2.25),
+        PadRecord("1", 3.0, -2.25),
+        PadRecord("2", -3.0, 2.25),
+        PadRecord("2", 3.0, 2.25),
+    ]
+
+    def board(self, jlc_size):
+        pads = [PadRecord(p.number, 100.0 + p.x, 50.0 + p.y) for p in self.KICAD]
+        return FootprintRecord("SW1", "SW", "SW_PUSH_6mm", 100.0, 50.0, 0.0, cv.TOP, pads, {"LCSC": "C1"})
+
+    @pytest.mark.parametrize("hx, hy", [(3.0, 2.25), (2.25, 1.5), (3.7, 3.25)])
+    def test_estimate_is_centred_on_the_pads(self, hx, hy):
+        jlc = JlcFootprint(
+            "C1",
+            pads=[PadRecord(n, x, y) for n, x, y in (("1", -hx, -hy), ("2", hx, -hy), ("3", -hx, hy), ("4", hx, hy))],
+        )
+        pl = compute_placement(self.board(None), jlc)
+        assert pl.source == ESTIMATED
+        assert (pl.x, pl.y) == (pytest.approx(100.0, abs=1e-6), pytest.approx(-50.0, abs=1e-6))
+        assert POSITION_AMBIGUOUS in pl.fit.flags

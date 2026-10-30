@@ -25,6 +25,7 @@ from kicad_jlcimport.production.solver import (
     HIGH,
     MATCHED_BY_POSITION,
     MEDIUM,
+    POLARITY_ASSUMED,
     POLARITY_BY_CONVENTION,
     POLARITY_BY_FOOTPRINT_NAME,
     POLARITY_BY_JLC_MARKS,
@@ -568,3 +569,40 @@ BOARD = """(kicad_pcb (version 20240108)
 def test_kicad_pcb_reader_reads_pin_function():
     (fp,) = read_board_text(BOARD)
     assert [(p.number, p.function) for p in fp.pads] == [("1", "K"), ("2", "")]
+
+
+class TestReviewFixes:
+    # JLC 0603 LED: pad 1 left = anode ("+"), pad 2 right = cathode ("-"), pins named A / C.
+    JLC = [PadRecord("1", -0.8, 0.0), PadRecord("2", 0.8, 0.0)]
+
+    def jlc(self, **kw):
+        return JlcFootprint(
+            "C2286", pads=self.JLC, pin_names={"1": "A", "2": "C"}, pad_marks={"1": "+", "2": "-"}, **kw
+        )
+
+    def test_board_pins_named_a_and_c(self):
+        # KiCad's LED footprint with schematic pins A (pad 1) and C (pad 2): the
+        # names, not KiCad's pad-1 = cathode convention, decide.
+        fp = led(functions=("A", "C"))
+        fp.footprint = "LED_0603_1608Metric"
+        pl = compute_placement(fp, self.jlc())
+        assert POLARITY_BY_PIN_NAMES in pl.fit.flags
+        assert pl.rotation == pytest.approx(0.0)  # JLC's anode (left) on pad 1 (left)
+
+    def test_polarized_part_on_an_unknown_footprint_is_flagged(self):
+        fp = led()
+        fp.footprint = "Vendor:LED0603"  # not KiCad's, not JLC's own geometry
+        pl = compute_placement(fp, self.jlc())
+        assert POLARITY_ASSUMED in pl.fit.flags and pl.confidence == MEDIUM
+        report = run_check([fp], 1, *caches("C2286", self.jlc()))
+        assert any(i.message == POLARITY_CHECK_TEXT for i in report.rows[0].issues)
+
+    def test_jlcs_own_footprint_keeps_its_numbering_quietly(self):
+        # An imported EasyEDA footprint is JLC's: identical pads, numbering included.
+        pads = placed([PadRecord(p.number, p.x, p.y) for p in self.JLC], 10.0, 10.0)
+        fp = led()
+        fp.pads = pads
+        fp.footprint = "JLCImport:LED0603-RD"
+        pl = compute_placement(fp, self.jlc())
+        assert POLARITY_ASSUMED not in pl.fit.flags
+        assert pl.rotation == pytest.approx(0.0)

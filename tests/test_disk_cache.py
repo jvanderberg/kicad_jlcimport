@@ -91,3 +91,14 @@ class TestApiUsesCache:
         with mock.patch.object(api, "_get_json", return_value={"success": True, "result": result}) as get:
             assert api.fetch_component_uuids("C9") == result
         assert get.call_count == 1
+
+
+def test_damaged_gzip_stream_reads_as_missing_and_is_removed():
+    disk_cache.put("components", "torn", {"a": "x" * 2000})
+    path = disk_cache._path("components", "torn")
+    data = bytearray(open(path, "rb").read())
+    data[20:40] = b"\x00" * 20  # valid gzip header, damaged deflate stream (zlib.error)
+    with open(path, "wb") as f:
+        f.write(bytes(data))
+    assert disk_cache.get("components", "torn") is None
+    assert not os.path.exists(path)

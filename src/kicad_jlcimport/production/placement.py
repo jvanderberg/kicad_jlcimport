@@ -19,7 +19,7 @@ part".
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
 
 from .conventions import cpl_rotation, kicad_pose_to_cpl, normalize_angle
@@ -27,15 +27,20 @@ from .jlc_footprints import JlcFootprint
 from .models import FootprintRecord
 from .polarity import match_polarity
 from .solver import (
+    DEFAULT_TOLERANCES,
+    GROUP_SIZE_MISMATCH,
     LOW,
     MATCHED_BY_POSITION,
     MIRRORED,
     MIRRORED_ARRAY,
     MIRRORED_BY_POSITION,
+    POSITION_AMBIGUOUS,
     FitResult,
     cap_confidence,
+    centred_origin,
     describe_flags,
     match_pads_by_position,
+    normalize_pad_number,
     solve_placement,
 )
 
@@ -171,7 +176,52 @@ def solve_against_jlc(fp: FootprintRecord, jlc_fp: JlcFootprint) -> FitResult:
                     flag = MIRRORED_BY_POSITION
                 cap_confidence(by_position, flag)
                 fit = by_position
+        elif not mirrored:
+            _estimate_by_position(fp, jlc_fp, fit)
     return fit
+
+
+_LOOSE_POSITION_MATCH = replace(DEFAULT_TOLERANCES, medium_rms=1.5)
+
+
+def _estimate_by_position(fp: FootprintRecord, jlc_fp: JlcFootprint, fit: FitResult) -> None:
+    """Use a by-position fit as the estimate when the pattern fits more than one way round.
+
+    A symmetric pattern numbered differently (a tact switch's pads 1,1,2,2
+    against JLC's 1-4) has no single by-position numbering, but every one of
+    them puts the part in the right place; the by-number estimate pairs a pad
+    pair's centre with one pad and lands millimetres off.
+    """
+    tied = None
+    # Same-size patterns first; then a loose match, which still centres a
+    # differently sized pattern of the same shape on the board's pads.
+    for tol in (DEFAULT_TOLERANCES, _LOOSE_POSITION_MATCH):
+        tied = match_pads_by_position(
+            fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation, tol=tol, break_ties=True
+        )
+        if tied is not None:
+            break
+    if tied is None:
+        # Too different to pair pads at all.  If both are the same number of
+        # pads, at least centre JLC's pattern on the board's.
+        board = [pad for pad in fp.pads if normalize_pad_number(pad.number)]
+        jlc = [pad for pad in jlc_fp.pads if normalize_pad_number(pad.number)]
+        if fit.estimate_angle is not None and GROUP_SIZE_MISMATCH in fit.flags and len(board) == len(jlc):
+            fit.estimate_origin = centred_origin(board, jlc, fp.side, fit.estimate_angle)
+            fit.flags.append(POSITION_AMBIGUOUS)
+        return
+    by_position = solve_placement(fp.pads, tied, fp.side, kicad_orientation=fp.orientation)
+    if by_position.snapped:
+        angle, origin, rms = by_position.angle, by_position.origin, by_position.rms
+    elif by_position.estimate_angle is not None:
+        angle, origin, rms = by_position.estimate_angle, by_position.estimate_origin, by_position.estimate_rms
+    else:
+        return
+    # Only where the by-number estimate is missing or pairs a group's centre
+    # with a single pad (pad groups of different sizes); otherwise it stands.
+    if fit.estimate_angle is None or GROUP_SIZE_MISMATCH in fit.flags:
+        fit.estimate_angle, fit.estimate_origin, fit.estimate_rms = angle, origin, rms
+        fit.flags.append(POSITION_AMBIGUOUS)
 
 
 def compute_placement(
