@@ -1454,3 +1454,96 @@ class TestReuseFootprint:
         assert result is not None
         assert seen_packages == ["QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"]
         assert symbol_kwargs["footprint_ref"] == "Package_DFN_QFN:QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"
+
+
+class TestExistingModelFilesRespectOverwrite:
+    """An existing .step/.wrl is only replaced when overwrite is on."""
+
+    WRL_SOURCE = "newmtl mat1\nKd 0.8 0.2 0.1\nendmtl\nv 0 0 0\nv 2.54 0 0\nv 0 2.54 0\nusemtl mat1\nf 1 2 3\n"
+    USER_WRL = "#VRML V2.0 utf8\n# hand-tuned by the user\n"
+    USER_STEP = b"ISO-10303-21; user step"
+
+    def _run(self, tmp_path, monkeypatch, overwrite, existing=("wrl", "step"), wrl_source=WRL_SOURCE):
+        comp = TestImportComponent()._make_fake_comp(with_symbol=False)
+        fp = TestImportComponent()._make_fake_footprint(with_model=True)
+        downloads = {"wrl": 0, "step": 0}
+
+        def fake_wrl(uuid):
+            downloads["wrl"] += 1
+            return wrl_source
+
+        def fake_step(uuid):
+            downloads["step"] += 1
+            return b"ISO-10303-21; downloaded step"
+
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: comp)
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fp)
+        monkeypatch.setattr(importer, "download_wrl_source", fake_wrl)
+        monkeypatch.setattr(importer, "download_step", fake_step)
+
+        models = tmp_path / "TestLib.3dshapes"
+        if existing:
+            models.mkdir()
+        if "wrl" in existing:
+            (models / "TestPart.wrl").write_text(self.USER_WRL)
+        if "step" in existing:
+            (models / "TestPart.step").write_bytes(self.USER_STEP)
+
+        log = []
+        importer.import_component("C123", str(tmp_path), "TestLib", overwrite=overwrite, log=log.append)
+        return models, downloads, log
+
+    def test_existing_models_kept_without_overwrite(self, tmp_path, monkeypatch):
+        models, downloads, log = self._run(tmp_path, monkeypatch, overwrite=False)
+
+        assert (models / "TestPart.wrl").read_text() == self.USER_WRL
+        assert (models / "TestPart.step").read_bytes() == self.USER_STEP
+        assert any("WRL skipped" in m for m in log)
+        assert any("STEP skipped" in m for m in log)
+        assert downloads == {"wrl": 1, "step": 0}  # WRL still fetched once for placement
+        fp_text = (tmp_path / "TestLib.pretty" / "TestPart.kicad_mod").read_text()
+        assert "TestLib.3dshapes/TestPart.wrl" in fp_text
+
+    def test_existing_models_replaced_with_overwrite(self, tmp_path, monkeypatch):
+        models, downloads, log = self._run(tmp_path, monkeypatch, overwrite=True)
+
+        wrl = (models / "TestPart.wrl").read_text()
+        assert wrl != self.USER_WRL
+        assert "IndexedFaceSet" in wrl
+        assert (models / "TestPart.step").read_bytes() == b"ISO-10303-21; downloaded step"
+        assert any("WRL saved" in m for m in log)
+        assert downloads == {"wrl": 1, "step": 1}  # placement download is reused
+
+    def test_new_models_written(self, tmp_path, monkeypatch):
+        models, downloads, log = self._run(tmp_path, monkeypatch, overwrite=False, existing=())
+
+        assert "IndexedFaceSet" in (models / "TestPart.wrl").read_text()
+        assert (models / "TestPart.step").exists()
+        assert downloads == {"wrl": 1, "step": 1}
+
+    def test_only_wrl_exists(self, tmp_path, monkeypatch):
+        models, downloads, log = self._run(tmp_path, monkeypatch, overwrite=False, existing=("wrl",))
+
+        assert (models / "TestPart.wrl").read_text() == self.USER_WRL
+        assert (models / "TestPart.step").read_bytes() == b"ISO-10303-21; downloaded step"
+        assert any("WRL skipped" in m for m in log)
+        assert downloads == {"wrl": 1, "step": 1}
+
+    def test_only_step_exists(self, tmp_path, monkeypatch):
+        models, downloads, log = self._run(tmp_path, monkeypatch, overwrite=False, existing=("step",))
+
+        assert "IndexedFaceSet" in (models / "TestPart.wrl").read_text()
+        assert (models / "TestPart.step").read_bytes() == self.USER_STEP
+        assert downloads == {"wrl": 1, "step": 0}  # early download reused, no second fetch
+
+    def test_missing_wrl_source_keeps_existing_without_refetch(self, tmp_path, monkeypatch):
+        models, downloads, log = self._run(tmp_path, monkeypatch, overwrite=False, wrl_source=None)
+
+        assert (models / "TestPart.wrl").read_text() == self.USER_WRL
+        assert downloads == {"wrl": 1, "step": 0}
+
+    def test_missing_wrl_source_is_retried_when_saving(self, tmp_path, monkeypatch):
+        models, downloads, log = self._run(tmp_path, monkeypatch, overwrite=False, existing=(), wrl_source=None)
+
+        assert downloads == {"wrl": 2, "step": 1}
+        assert not (models / "TestPart.wrl").exists()
