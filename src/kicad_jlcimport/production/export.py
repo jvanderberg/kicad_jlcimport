@@ -21,13 +21,14 @@ def board_basename(board_path: str) -> str:
     return os.path.splitext(os.path.basename(board_path))[0] or "board"
 
 
-def resolve_output_dir(text: str, board_path: Optional[str]) -> Optional[str]:
+def resolve_output_dir(text: str, board_path: Optional[str], relative_to: Optional[str] = None) -> Optional[str]:
     """Absolute output folder for what the user typed.
 
     ``${KIPRJMOD}`` (the board's folder), environment variables and ``~`` are
-    expanded, and a relative path is taken relative to the board's folder,
-    the way KiCad resolves plot output folders.  Returns None for an empty
-    entry, or a relative one when the board has never been saved.
+    expanded, and a relative path is taken relative to *relative_to* (the CLI
+    passes the working directory), else to the board's folder, the way KiCad
+    resolves plot output folders.  Returns None for an empty entry, or a
+    relative one when there is nothing to resolve it against.
     """
     text = (text or "").strip()
     if not text:
@@ -37,9 +38,10 @@ def resolve_output_dir(text: str, board_path: Optional[str]) -> Optional[str]:
         text = text.replace("${KIPRJMOD}", project_dir).replace("$(KIPRJMOD)", project_dir)
     path = os.path.expanduser(os.path.expandvars(text))
     if not os.path.isabs(path):
-        if not project_dir:
+        base = relative_to or project_dir
+        if not base:
             return None
-        path = os.path.join(project_dir, path)
+        path = os.path.join(base, path)
     return os.path.normpath(path)
 
 

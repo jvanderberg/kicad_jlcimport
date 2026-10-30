@@ -15,7 +15,7 @@ from . import availability as av
 from .cache import KeyedCache
 from .jlc_footprints import JlcFootprint
 from .models import FootprintRecord, natural_key
-from .outputs import build_bom_rows, build_cpl_rows
+from .outputs import BOM_HEADER, CPL_HEADER, build_bom_rows, build_cpl_rows
 from .placement import ESTIMATED, KICAD, MANUAL, SOLVED, Placement, compute_placement
 from .solver import (
     HIGH,
@@ -138,6 +138,10 @@ class ProductionReport:
         totals = [a.total_price for a in self.availability.values() if a.total_price is not None]
         return sum(totals) if totals else None
 
+    def loading_fees(self) -> float:
+        """Estimated Economic PCBA feeder loading fees (USD)."""
+        return len(self.extended_parts) * EXTENDED_LOADING_FEE
+
     def bom_rows(self) -> List[List[str]]:
         return build_bom_rows(self.footprints)
 
@@ -153,8 +157,8 @@ class ProductionReport:
         ]
         if self.extended_parts:
             lines.append(
-                f"{len(self.extended_parts)} extended parts (each adds a feeder loading fee): "
-                + ", ".join(self.extended_parts)
+                f"{len(self.extended_parts)} extended parts (each adds a feeder loading fee, "
+                f"est. ${self.loading_fees():.2f} on Economic PCBA): " + ", ".join(self.extended_parts)
             )
         if self.preferred_parts:
             lines.append(
@@ -219,7 +223,7 @@ class ProductionReport:
         if not not_checked:
             fees = [
                 ("Extended (loading fee)", str(len(self.extended_parts))),
-                ("Loading fees (est.)", f"${len(self.extended_parts) * EXTENDED_LOADING_FEE:.2f}"),
+                ("Loading fees (est.)", f"${self.loading_fees():.2f}"),
             ]
             if self.preferred_parts:
                 fees.append(("Preferred (no fee)", str(len(self.preferred_parts))))
@@ -253,6 +257,78 @@ class ProductionReport:
         for row in self.rows:
             lines.append(format_row(row))
         return "\n".join(lines) + "\n"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Everything the dialog shows, as JSON-ready data (``jlcimport-cli production --json``)."""
+        return {
+            "boards": self.boards,
+            "errors": self.count(ERROR),
+            "warnings": self.count(WARNING),
+            "summary": [
+                {"title": title, "rows": [{"label": label, "value": value} for label, value in rows]}
+                for title, rows in self.summary_sections()
+            ],
+            "issues": [
+                {"severity": sev, "references": refs, "message": msg} for sev, refs, msg in self.issue_groups(INFO)
+            ],
+            "parts": [
+                _availability_dict(self.availability[lcsc]) for lcsc in sorted(self.availability, key=natural_key)
+            ],
+            "footprints": [_row_dict(row) for row in self.rows],
+            "bom": [dict(zip(BOM_HEADER, r)) for r in self.bom_rows()],
+            "cpl": [dict(zip(CPL_HEADER, r)) for r in self.cpl_rows()],
+        }
+
+
+def _availability_dict(a: av.Availability) -> Dict[str, Any]:
+    info = a.info or {}
+    lcsc_url = f"https://www.lcsc.com/product-detail/{a.lcsc}.html"
+    return {
+        "lcsc": a.lcsc,
+        "references": a.references,
+        "qty_per_board": a.qty_per_board,
+        "qty_needed": a.qty_needed,
+        "status": a.status,
+        "message": a.message,
+        "stock": a.stock,
+        "type": a.part_type,
+        "unit_price": a.unit_price,
+        "total_price": a.total_price,
+        "description": a.description,
+        "brand": info.get("brand") or "",
+        "package": info.get("package") or "",
+        "datasheet": info.get("datasheet") or "",
+        "url": info.get("url") or lcsc_url,
+    }
+
+
+def _row_dict(row: PartRow) -> Dict[str, Any]:
+    fp, pl = row.footprint, row.placement
+    return {
+        "reference": fp.reference,
+        "value": fp.value,
+        "footprint": fp.footprint,
+        "lcsc": fp.lcsc or fp.raw_lcsc,
+        "side": fp.side,
+        "dnp": fp.dnp,
+        "in_bom": fp.in_bom,
+        "in_cpl": fp.in_cpl,
+        "stock": row_cells(row)["stock"],
+        "type": row.availability.part_type if row.availability else "",
+        "severity": row.severity,
+        "issues": [{"severity": i.severity, "message": i.message} for i in row.issues],
+        "placement": None
+        if pl is None
+        else {
+            "x": round(pl.x, 4),
+            "y": round(pl.y, 4),
+            "rotation": pl.rotation,
+            "side": pl.side,
+            "source": pl.source,
+            "confidence": pl.confidence,
+            "notes": pl.notes,
+        },
+    }
 
 
 def _clip(text: str, width: int) -> str:

@@ -35,6 +35,7 @@ src/kicad_jlcimport/
 │   ├── report.py         #   run_check() orchestration and report model
 │   ├── outputs.py        #   BOM/CPL rows, CSV and zip writers
 │   ├── kicad_pcb.py      #   .kicad_pcb reader for the CLI
+│   ├── kicad_cli.py      #   Gerber/drill plotting through kicad-cli, for the CLI
 │   ├── cache.py          #   Thread-safe per-LCSC lookup cache (in memory, per dialog)
 │   └── export.py         #   Output paths and file writing helpers
 ├── production_pcbnew.py  # Thin pcbnew adapter: board → records, Gerber/drill plotting
@@ -95,7 +96,7 @@ The codebase is organized in layers from top to bottom:
 
 ### `production/` — JLCPCB Production Export
 
-Pure Python with no `pcbnew` import, so all of it is unit-tested. `production_pcbnew.py` is the only module that touches the KiCad API. It turns the live board into `FootprintRecord`s (reference, value, footprint, LCSC field, pose, side, DNP and exclusion flags, pads with board positions) and drives `PLOT_CONTROLLER` / `EXCELLON_WRITER`. Differences between KiCad versions are handled with `getattr` fallbacks. The CLI reads the same records from a `.kicad_pcb` file via `production/kicad_pcb.py`.
+Pure Python with no `pcbnew` import, so all of it is unit-tested. `production_pcbnew.py` is the only module that touches the KiCad API. It turns the live board into `FootprintRecord`s (reference, value, footprint, LCSC field, pose, side, DNP and exclusion flags, pads with board positions) and drives `PLOT_CONTROLLER` / `EXCELLON_WRITER`. Differences between KiCad versions are handled with `getattr` fallbacks. The CLI reads the same records from a `.kicad_pcb` file via `production/kicad_pcb.py`, and plots Gerbers and drill files by running `kicad-cli pcb export gerbers` / `pcb export drill` with matching settings (`production/kicad_cli.py`). `ProductionReport.to_dict()` is the CLI's `--json` output.
 
 EasyEDA component data (`api.fetch_component_uuids` / `fetch_component_data`: footprints, symbols) is also kept on disk for a week by `easyeda/disk_cache.py`, in the user cache folder (`JLCIMPORT_CACHE_DIR` overrides it); stock and prices are always fetched live.
 
@@ -122,7 +123,7 @@ When the user triggers an import, `importer.py` orchestrates the following steps
 1. **Extract**: `production_pcbnew.extract_footprints()` (plugin) or `production/kicad_pcb.read_board()` (CLI) produces `FootprintRecord`s.
 2. **Check**: for each unique LCSC number, `api.lookup_part()` (exact-match JLCPCB search) gives stock, type and price breaks, and `fetch_jlc_footprint()` gets JLC's EasyEDA footprint, which `parse_footprint_shapes` reduces to pad centres, plus the `+`/`-` polarity marks drawn beside the pads. For two-pad parts, and three-pad parts with a centred thermal pad, it also reads the pin names from JLC's symbol, which decide polarity.
 3. **Solve**: `polarity.match_polarity()` pairs the pads of symmetric polarized parts by role, `solver.solve_placement()` fits JLC's pads onto the board pads, and `solver.match_pads_by_position()` retries a rejected fit with pads matched by position. `placement.compute_placement()` then picks the solved pose, a rounded estimate (low confidence), KiCad's own pose (marked unverified), or a manual override.
-4. **Generate**: `production_pcbnew.generate_fabrication_zip()` plots the Gerbers and drill files and zips them, then `outputs` builds the BOM and CPL rows. The panel looks up the open board with `production_pcbnew.current_board()` on every Check and Generate, because pcbnew replaces its `BOARD` object on File > Revert or Open.
+4. **Generate**: `production_pcbnew.generate_fabrication_zip()` (plugin) or `production/kicad_cli.generate_fabrication_zip()` (CLI) plots the Gerbers and drill files and zips them, then `outputs` builds the BOM and CPL rows. The panel looks up the open board with `production_pcbnew.current_board()` on every Check and Generate, because pcbnew replaces its `BOARD` object on File > Revert or Open.
 
 ## External APIs
 
@@ -237,6 +238,7 @@ tests/
 ├── test_production_polarity.py # Two-pad polarity pairing
 ├── test_production_report.py   # Availability, overrides, BOM/CPL, run_check (mocked network)
 ├── test_production_kicad_pcb.py # .kicad_pcb reader and `production` CLI
+├── test_production_kicad_cli.py # Gerbers via kicad-cli (fake runner), CLI Gerber and --json paths
 └── test_production_pcbnew.py   # pcbnew adapter against a fake pcbnew module
 ```
 

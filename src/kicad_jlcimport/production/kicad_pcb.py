@@ -149,13 +149,37 @@ def footprint_from_node(node: list) -> FootprintRecord:
     )
 
 
-def read_board_text(text: str) -> List[FootprintRecord]:
+def _board_root(text: str) -> list:
     root = parse_sexpr(text)
     if not isinstance(root, list) or not root or root[0] != "kicad_pcb":
         raise ValueError("not a KiCad board file")
+    return root
+
+
+def _footprints(root: list) -> List[FootprintRecord]:
     return [footprint_from_node(n) for n in root[1:] if isinstance(n, list) and n and n[0] in ("footprint", "module")]
 
 
+def _copper_layers(root: list) -> List[str]:
+    """Canonical copper layer names (``F.Cu``, ``In1.Cu``, …, ``B.Cu``) from the board's layer table."""
+    names = []
+    for layer in (_child(root, "layers") or [])[1:]:
+        if isinstance(layer, list) and len(layer) > 1 and isinstance(layer[1], str) and layer[1].endswith(".Cu"):
+            names.append(layer[1])
+    inner = sorted((n for n in names if n.startswith("In")), key=lambda n: int(n[2:-3]) if n[2:-3].isdigit() else 0)
+    return [n for n in ("F.Cu",) if n in names] + inner + [n for n in ("B.Cu",) if n in names]
+
+
+def read_board_text(text: str) -> List[FootprintRecord]:
+    return _footprints(_board_root(text))
+
+
 def read_board(path: str) -> List[FootprintRecord]:
+    return read_board_with_layers(path)[0]
+
+
+def read_board_with_layers(path: str) -> Tuple[List[FootprintRecord], List[str]]:
+    """Footprint records and copper layer names, from one parse of the file."""
     with open(path, encoding="utf-8") as f:
-        return read_board_text(f.read())
+        root = _board_root(f.read())
+    return _footprints(root), _copper_layers(root)

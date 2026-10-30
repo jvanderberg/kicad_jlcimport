@@ -45,7 +45,7 @@ In the PCB Editor, open JLCImport and switch to the **Production Files** tab.
 2. Click **Check JLCPCB**. Each part is looked up at JLCPCB (stock, Basic/Extended, price) and its placement rotation is worked out from JLCPCB's own footprint. Untick **Check stock and prices** if you only need placements.
 3. The summary shows the order, the fees, how well the placements solved, and any errors or warnings. Click **Review details** to see every part, or **Generate** to write the Gerber zip, BOM, CPL and a report.
 
-Before ordering, look at the parts the report warns about (polarized parts and estimated placements) in JLCPCB's placement preview. If a part is wrong, add a `JLCPCB Rotation Offset` (degrees) or `JLCPCB Position Offset` (`dx, dy` in mm) field to its footprint. The [production export guide](docs/production-export.md) covers the check, the overrides and the `jlcimport-cli production` command.
+Before ordering, look at the parts the report warns about (polarized parts and estimated placements) in JLCPCB's placement preview. If a part is wrong, add a `JLCPCB Rotation Offset` (degrees) or `JLCPCB Position Offset` (`dx, dy` in mm) field to its footprint. The [production export guide](docs/production-export.md) covers the check, the overrides and the `jlcimport-cli production` command, which does the same from the command line (Gerbers via KiCad's `kicad-cli`, and `--json` output for scripts).
 
 ## CLI, GUI, And TUI
 

@@ -78,7 +78,7 @@ These scripts create or activate the local virtual environment and install proje
 | Import to global library | `jlcimport-cli import <LCSC_ID> --global [options]` |
 | Export files only | `jlcimport-cli import <LCSC_ID> -o ./output [options]` |
 | Print generated text | `jlcimport-cli import <LCSC_ID> --show footprint|symbol|both` |
-| JLCPCB BOM/CPL + availability check | `jlcimport-cli production board.kicad_pcb [-n BOARDS] [--check-only] [--no-stock]` (see [production export](production-export.md)) |
+| JLCPCB Gerbers/BOM/CPL + availability check | `jlcimport-cli production board.kicad_pcb [-n BOARDS] [--check-only] [--json] [--no-stock] [--no-gerbers]` (see [production export](production-export.md)) |
 | Use insecure TLS mode | `jlcimport-cli --insecure <command> ...` |
 
 ### Search Examples

@@ -100,6 +100,8 @@ class TestCli:
         import kicad_jlcimport.cli as cli
 
         monkeypatch.setattr(cli, "make_caches", _fake_caches)
+        # Don't depend on whether this machine has KiCad installed.
+        monkeypatch.setattr(cli, "find_kicad_cli", lambda _explicit=None: None)
         monkeypatch.setattr("sys.argv", ["prog"] + argv)
         cli.main()
 
@@ -107,7 +109,7 @@ class TestCli:
         board = tmp_path / "proj" / "demo.kicad_pcb"
         board.parent.mkdir()
         board.write_text(BOARD_V8)
-        self._run(monkeypatch, ["production", str(board), "-n", "10"])
+        self._run(monkeypatch, ["production", str(board), "-n", "10", "--no-gerbers"])
         out = capsys.readouterr().out
         assert "JLCPCB production check" in out
         cpl = (tmp_path / "proj" / "production" / "demo-cpl.csv").read_text().splitlines()
@@ -172,12 +174,12 @@ class TestCli:
         board = tmp_path / "b.kicad_pcb"
         board.write_text(BOARD_V8.replace("C25804", "C99999"))
         with pytest.raises(SystemExit):
-            self._run(monkeypatch, ["production", str(board)])
+            self._run(monkeypatch, ["production", str(board), "--no-gerbers"])
         assert "--force" in capsys.readouterr().out
-        self._run(monkeypatch, ["production", str(board), "--force", "-o", str(tmp_path / "out")])
+        self._run(monkeypatch, ["production", str(board), "--force", "--no-gerbers", "-o", str(tmp_path / "out")])
         assert (tmp_path / "out" / "b-cpl.csv").exists()
 
     def test_bad_board(self, tmp_path, monkeypatch, capsys):
         with pytest.raises(SystemExit):
             self._run(monkeypatch, ["production", str(tmp_path / "missing.kicad_pcb")])
-        assert "Error reading" in capsys.readouterr().out
+        assert "could not read" in capsys.readouterr().out
