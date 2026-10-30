@@ -316,7 +316,7 @@ class TestRunCheck:
         report = run_check([fp("R1")], 1, part_cache, fp_cache)
         row = report.rows[0]
         assert report.availability["C25804"].status == av.LOOKUP_FAILED
-        assert row.severity == WARNING
+        assert row.severity == ERROR  # nothing about the part could be checked
         assert row.placement.source == KICAD
 
     def test_unexpected_exception_reported(self):
@@ -339,9 +339,16 @@ class TestRunCheck:
         handler.assert_called()
         assert report.availability["C25804"].status == av.OK
 
-    def test_ssl_error_without_handler_is_failure(self):
+    def test_ssl_error_without_handler_propagates(self):
         part_cache, fp_cache = caches(part_error=SSLCertError("bad cert"))
-        report = run_check([fp("R1")], 1, part_cache, fp_cache)
+        with pytest.raises(SSLCertError):
+            run_check([fp("R1")], 1, part_cache, fp_cache)
+
+    def test_ssl_error_after_handler_retry_is_failure(self):
+        handler = mock.Mock()
+        part_cache, fp_cache = caches(part_error=SSLCertError("still bad"))
+        report = run_check([fp("R1")], 1, part_cache, fp_cache, on_ssl_error=handler)
+        handler.assert_called()
         assert report.availability["C25804"].status == av.LOOKUP_FAILED
 
     def test_duplicates_and_empty_board(self):
@@ -397,9 +404,19 @@ class TestRunCheck:
         run_check([fp("R1")], 1, pc, fc)
         run_check([fp("R1")], 1, pc, fc)
         assert part_fetch.call_count == 1 and fp_fetch.call_count == 1
-        assert "C25804" in pc
         pc.clear()
-        assert "C25804" not in pc
+        run_check([fp("R1")], 1, pc, fc)
+        assert part_fetch.call_count == 2
+
+    def test_discard_where_refetches_matching_entries(self):
+        fetch = mock.Mock(side_effect=lambda key: key.lower())
+        cache = KeyedCache(fetch)
+        cache.get("A")
+        cache.get("B")
+        cache.discard_where(lambda value: value == "a")
+        cache.get("A")
+        cache.get("B")
+        assert [c.args[0] for c in fetch.call_args_list] == ["A", "B", "A"]
 
 
 # ---------------------------------------------------------------------------

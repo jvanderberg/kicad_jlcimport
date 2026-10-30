@@ -35,6 +35,15 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from .conventions import Point, board_to_cpl, local_to_up, normalize_angle, rotate, side_mirror
 from .models import PadRecord
+from .polarity import (
+    BY_CONVENTION,
+    BY_NAMES,
+    NAMES_UNAVAILABLE,
+    NOT_POLARIZED,
+    UNCERTAIN_SOURCES,
+    UNRESOLVED,
+    PolarityMatch,
+)
 
 # Flag codes.  Severity is decided by FitResult.confidence; FLAG_TEXT holds the
 # human-readable explanation shown in reports.
@@ -52,6 +61,7 @@ POLARITY_BY_PIN_NAMES = "polarity_by_pin_names"
 POLARITY_BY_CONVENTION = "polarity_by_convention"
 POLARITY_SWAPPED = "polarity_swapped"
 POLARITY_UNRESOLVED = "polarity_unresolved"
+POLARITY_NAMES_UNAVAILABLE = "polarity_names_unavailable"
 
 FLAG_TEXT = {
     TOO_FEW_PADS: "fewer than 2 pad numbers in common with the JLC footprint",
@@ -71,6 +81,16 @@ FLAG_TEXT = {
     ),
     POLARITY_SWAPPED: "JLC numbers this part's pads the other way round; paired by polarity instead",
     POLARITY_UNRESOLVED: "polarized part, but the board pads don't say which is which; check its orientation",
+    POLARITY_NAMES_UNAVAILABLE: (
+        "JLC's pin names could not be fetched, so polarity relies on pad numbering; check its orientation"
+    ),
+}
+
+_POLARITY_FLAG = {
+    BY_NAMES: POLARITY_BY_PIN_NAMES,
+    BY_CONVENTION: POLARITY_BY_CONVENTION,
+    UNRESOLVED: POLARITY_UNRESOLVED,
+    NAMES_UNAVAILABLE: POLARITY_NAMES_UNAVAILABLE,
 }
 
 HIGH = "high"
@@ -213,14 +233,18 @@ def solve_placement(
     side: str,
     kicad_orientation: Optional[float] = None,
     tol: Tolerances = DEFAULT_TOLERANCES,
+    polarity: Optional[PolarityMatch] = None,
 ) -> FitResult:
     """Fit JLC's footprint (local pads) onto a board footprint's pads.
 
     *board_pads* are in board coordinates (Y down), *jlc_pads* in the JLC
     footprint's local frame (Y down).  *side* selects the bottom-side mirror.
     *kicad_orientation* adds KiCad's own angle (plus 90° steps) as snapping
-    candidates, which helps parts placed at odd angles.
+    candidates, which helps parts placed at odd angles.  *polarity* says how
+    a two-pad part's pads were paired (see :mod:`.polarity`); *jlc_pads*
+    must already be renumbered accordingly.
     """
+    polarity_source = polarity.source if polarity is not None else NOT_POLARIZED
     result = FitResult()
     board_groups = group_pads(board_pads)
     jlc_groups = group_pads(jlc_pads)
@@ -269,7 +293,11 @@ def solve_placement(
 
     matched_fraction = len(common) / float(max(len(board_groups), len(jlc_groups)))
     jlc_points = [(pad.x, pad.y) for pad in jlc_pads if normalize_pad_number(pad.number)]
-    if len(jlc_groups) == 2 and _is_point_symmetric(jlc_points, tol.symmetry_tol):
+    if polarity_source != NOT_POLARIZED:
+        result.flags.append(_POLARITY_FLAG[polarity_source])
+        if polarity is not None and polarity.swapped:
+            result.flags.append(POLARITY_SWAPPED)
+    elif len(jlc_groups) == 2 and _is_point_symmetric(jlc_points, tol.symmetry_tol):
         result.flags.append(POLARITY_BY_NUMBERING)
 
     if result.alt_rms is not None and result.alt_rms + tol.mirror_margin < rms and result.alt_rms <= tol.medium_rms:
@@ -287,6 +315,8 @@ def solve_placement(
         result.confidence = MEDIUM
     else:
         result.confidence = HIGH
+    if polarity_source in UNCERTAIN_SOURCES and result.confidence == HIGH:
+        result.confidence = MEDIUM
     return result
 
 

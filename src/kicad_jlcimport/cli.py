@@ -215,7 +215,13 @@ def cmd_production(args):
         print(f"\r  Checking parts {done}/{total} ({lcsc})   ", end="", file=sys.stderr, flush=True)
 
     part_cache, footprint_cache = make_caches()
-    report = run_check(footprints, args.boards, part_cache, footprint_cache, progress=progress)
+    try:
+        report = run_check(footprints, args.boards, part_cache, footprint_cache, progress=progress)
+    except SSLCertError as e:
+        print(file=sys.stderr)
+        print(f"  Error: {e}")
+        print("  Use --insecure to bypass certificate verification.")
+        sys.exit(1)
     print(file=sys.stderr)
     print(report.to_text())
 

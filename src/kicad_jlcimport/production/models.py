@@ -7,6 +7,7 @@ and everything downstream works on these.
 
 import re
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Dict, List, Optional
 
 from .conventions import TOP
@@ -70,7 +71,9 @@ class FootprintRecord:
                 return (val or "").strip()
         return ""
 
-    @property
+    # Cached: records are not modified after construction, and these are read
+    # several times per footprint for every report.
+    @cached_property
     def raw_lcsc(self) -> str:
         """The first non-empty LCSC-like field value, unvalidated."""
         for name in LCSC_FIELD_NAMES:
@@ -79,7 +82,7 @@ class FootprintRecord:
                 return val
         return ""
 
-    @property
+    @cached_property
     def lcsc(self) -> Optional[str]:
         """Normalized LCSC part number, or None if absent/invalid."""
         return normalize_lcsc(self.raw_lcsc)

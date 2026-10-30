@@ -27,6 +27,8 @@ class KeyedCache(Generic[T]):
         with self._lock:
             self._cache.clear()
 
-    def __contains__(self, key: str) -> bool:
+    def discard_where(self, predicate: Callable[[T], bool]) -> None:
+        """Drop cached values for which *predicate* is true, so they are fetched again."""
         with self._lock:
-            return key in self._cache
+            for key in [k for k, v in self._cache.items() if predicate(v)]:
+                del self._cache[key]

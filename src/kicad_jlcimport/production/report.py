@@ -17,7 +17,16 @@ from .jlc_footprints import JlcFootprint
 from .models import FootprintRecord, natural_key
 from .outputs import build_bom_rows, build_cpl_rows
 from .placement import KICAD, MANUAL, Placement, compute_placement
-from .solver import MEDIUM, POLARITY_BY_NUMBERING, POLARITY_SWAPPED, POLARITY_UNRESOLVED
+from .solver import (
+    MEDIUM,
+    POLARITY_BY_NUMBERING,
+    POLARITY_NAMES_UNAVAILABLE,
+    POLARITY_SWAPPED,
+    POLARITY_UNRESOLVED,
+)
+
+# Solver flags that make a solved placement a warning rather than a note.
+_WARNING_FLAGS = (POLARITY_UNRESOLVED, POLARITY_NAMES_UNAVAILABLE)
 
 ERROR = "error"
 WARNING = "warning"
@@ -187,18 +196,29 @@ def format_row(row: PartRow) -> str:
     )
 
 
+def _error_text(e: Exception) -> str:
+    return str(e) or type(e).__name__
+
+
 def _fetch(cache: KeyedCache, lcsc: str, on_ssl_error: Optional[Callable[[], None]]) -> Tuple[Any, str]:
-    """Fetch through *cache*; returns (value, error message)."""
+    """Fetch through *cache*; returns (value, error message).
+
+    Network/parse failures become report entries.  A TLS certificate error
+    without an *on_ssl_error* handler is raised instead: it affects every
+    part, and the caller (the CLI) reports it once with its ``--insecure`` hint.
+    """
     try:
+        return cache.get(lcsc), ""
+    except SSLCertError:
+        if on_ssl_error is None:
+            raise
+        on_ssl_error()
         try:
             return cache.get(lcsc), ""
-        except SSLCertError:
-            if on_ssl_error is None:
-                raise
-            on_ssl_error()
-            return cache.get(lcsc), ""
-    except Exception as e:  # network/parse failures become report entries
-        return None, str(e) or type(e).__name__
+        except Exception as e:
+            return None, _error_text(e)
+    except Exception as e:
+        return None, _error_text(e)
 
 
 def run_check(
@@ -276,10 +296,9 @@ def _build_row(
     else:
         a = report.availability[lcsc]
         row.availability = a
-        if a.status in (av.NOT_FOUND, av.OUT_OF_STOCK, av.LOW_STOCK):
+        # A failed lookup is an error too: nothing about the part was checked.
+        if a.status in (av.NOT_FOUND, av.OUT_OF_STOCK, av.LOW_STOCK, av.LOOKUP_FAILED):
             row.add(ERROR, a.message)
-        elif a.status == av.LOOKUP_FAILED:
-            row.add(WARNING, a.message)
         if a.is_extended:
             row.add(INFO, "Extended part (setup fee)")
 
@@ -298,7 +317,7 @@ def _build_row(
             row.add(INFO, "Placement unverified")
     elif pl.source == MANUAL:
         row.add(INFO, "; ".join(pl.notes))
-    elif pl.fit is not None and POLARITY_UNRESOLVED in pl.fit.flags:
+    elif pl.fit is not None and any(f in pl.fit.flags for f in _WARNING_FLAGS):
         row.add(WARNING, "Placement solved: " + "; ".join(pl.notes))
     elif pl.confidence == MEDIUM:
         row.add(INFO, "Placement solved: " + "; ".join(pl.notes))

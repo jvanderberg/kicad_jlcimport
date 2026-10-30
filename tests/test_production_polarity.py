@@ -21,6 +21,7 @@ from kicad_jlcimport.production.solver import (
     POLARITY_BY_CONVENTION,
     POLARITY_BY_NUMBERING,
     POLARITY_BY_PIN_NAMES,
+    POLARITY_NAMES_UNAVAILABLE,
     POLARITY_SWAPPED,
     POLARITY_UNRESOLVED,
     match_pads_by_position,
@@ -125,6 +126,16 @@ class TestMatchPolarity:
         jlc = JLC_LED_PADS + [PadRecord("3", 0.0, 1.0)]
         assert pol.match_polarity(self.board(), jlc, JLC_LED_NAMES).source == pol.NOT_POLARIZED
 
+    def test_board_pad_numbers_as_names(self):
+        m = pol.match_polarity(self.board(numbers=("K", "A")), JLC_LED_PADS, JLC_LED_NAMES)
+        assert m.source == pol.BY_NAMES
+        assert [(p.number, p.x) for p in m.jlc_pads] == [("K", -0.75), ("A", 0.75)]
+
+    def test_names_unavailable(self):
+        m = pol.match_polarity(self.board(), JLC_LED_PADS, {}, names_error="timed out")
+        assert m.source == pol.NAMES_UNAVAILABLE
+        assert [p.number for p in m.jlc_pads] == ["2", "1"]
+
     def test_contradictory_board_names_fall_back_to_convention(self):
         m = pol.match_polarity(self.board(("K", "K")), JLC_LED_PADS, JLC_LED_NAMES)
         assert m.source == pol.BY_CONVENTION
@@ -170,6 +181,18 @@ class TestPolarityPlacement:
 
         part_cache, fp_cache = caches("C2286", jlc)
         report = run_check([fp], 1, part_cache, fp_cache)
+        assert report.rows[0].severity == WARNING
+
+    def test_board_pads_named_k_and_a_are_solved(self):
+        pl = compute_placement(led(numbers=("K", "A")), self.jlc())
+        assert pl.source == SOLVED and pl.rotation == pytest.approx(0.0) and pl.confidence == HIGH
+
+    def test_symbol_fetch_failure_warns_instead_of_trusting_numbers(self):
+        jlc = JlcFootprint("C2286", pads=JLC_LED_PADS, symbol_error="timed out")
+        pl = compute_placement(led(), jlc)
+        assert pl.confidence == MEDIUM
+        assert POLARITY_NAMES_UNAVAILABLE in pl.fit.flags and POLARITY_BY_NUMBERING not in pl.fit.flags
+        report = run_check([led()], 1, *caches("C2286", jlc))
         assert report.rows[0].severity == WARNING
 
     def test_swapped_note_shown_on_high_confidence_rows(self):
@@ -278,6 +301,7 @@ class TestJlcPinNames:
 
         jlc, _ = self.fetch(data)
         assert jlc.pin_names == {} and len(jlc.pads) == 2
+        assert jlc.symbol_error == "gone"
 
     def test_symbol_ssl_error_propagates(self):
         def data(uuid):

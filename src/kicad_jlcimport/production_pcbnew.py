@@ -11,7 +11,8 @@ fallbacks rather than version checks; every optional setter goes through
 """
 
 import os
-import time
+import shutil
+import tempfile
 from typing import Dict, List, Optional, Tuple
 
 from .production.conventions import BOTTOM, TOP
@@ -241,25 +242,42 @@ def plot_gerbers(board, out_dir: str, pcbnew=None) -> List[str]:
 
 
 def write_drill_files(board, out_dir: str, pcbnew=None) -> List[str]:
-    """Excellon drill files (mm, separate PTH/NPTH).  Returns the written file paths."""
+    """Excellon drill files (mm, separate PTH/NPTH).  Returns the written file paths.
+
+    KiCad picks the file names, so the writer runs in an empty staging folder
+    and whatever ``.drl`` files appear there are moved into *out_dir*.
+    """
     pcbnew = _pcbnew(pcbnew)
     os.makedirs(out_dir, exist_ok=True)
-    started = time.time() - 1.0
-    writer = pcbnew.EXCELLON_WRITER(board)
-    origin_cls = getattr(pcbnew, "VECTOR2I", None) or pcbnew.wxPoint
-    writer.SetOptions(False, False, origin_cls(0, 0), False)  # mirror, minimal header, offset, merge NPTH
-    writer.SetFormat(True)  # metric
-    writer.CreateDrillandMapFilesSet(out_dir, True, False)
-    return [
-        os.path.join(out_dir, f)
-        for f in sorted(os.listdir(out_dir))
-        if f.lower().endswith(".drl") and os.path.getmtime(os.path.join(out_dir, f)) >= started
-    ]
+    staging = tempfile.mkdtemp(prefix=".drill-", dir=out_dir)
+    try:
+        writer = pcbnew.EXCELLON_WRITER(board)
+        origin_cls = getattr(pcbnew, "VECTOR2I", None) or pcbnew.wxPoint
+        writer.SetOptions(False, False, origin_cls(0, 0), False)  # mirror, minimal header, offset, merge NPTH
+        writer.SetFormat(True)  # metric
+        writer.CreateDrillandMapFilesSet(staging, True, False)
+        files = []
+        for name in sorted(os.listdir(staging)):
+            if name.lower().endswith(".drl"):
+                dest = os.path.join(out_dir, name)
+                os.replace(os.path.join(staging, name), dest)
+                files.append(dest)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    if not files:
+        raise RuntimeError("KiCad wrote no drill files")
+    return files
 
 
 def refill_zones(board, pcbnew=None) -> None:
+    """Refill every zone on *board* (the open board) and redraw the editor.
+
+    pcbnew's Python API has no commit/undo for this, so it cannot be undone;
+    the panel says so next to the checkbox.
+    """
     pcbnew = _pcbnew(pcbnew)
     pcbnew.ZONE_FILLER(board).Fill(board.Zones())
+    _try_call(pcbnew, "Refresh")
 
 
 def generate_fabrication_zip(

@@ -17,8 +17,10 @@ Files go to `<project>/production/` unless you choose another folder.
    - Basic or Extended (each Extended part adds a JLCPCB setup fee)
    - the solved CPL rotation, and how much to trust it (confidence plus notes)
 
-   Rows with errors are shown in red and rows with warnings in yellow. The summary lists the extended parts and an estimated parts cost.
-3. Click **Generate**. If the check found problems, you are asked before any files are written. You can always go ahead anyway.
+   Rows with errors are shown in red and rows with warnings in yellow. A part whose lookup failed (network error, for example) counts as an error, because nothing about it was checked. Select a row to see all of its notes. The list under the table shows every error and warning, followed by the extended parts and an estimated parts cost.
+3. Click **Generate**. The check runs again (cached lookups make this fast). If it finds problems, they are listed and you are asked before any files are written; you can always go ahead anyway. If the board changes while the check runs, Generate stops and asks you to click it again, so the placement file always matches the Gerbers.
+
+**Refill zones before plotting** (on by default) refills every zone on the open board, the same as pressing B in the editor, so the Gerbers match the copper. KiCad's Python API has no undo for this, so save the board afterwards if you want to keep the new fills.
 
 DNP footprints and footprints excluded from the BOM are left out of both the BOM and the CPL. Footprints excluded from position files stay in the BOM but are left out of the CPL.
 
@@ -57,14 +59,15 @@ Two pad centres always form a symmetric pattern, so geometry can't tell a part f
 For two-pad parts the solver pairs pads by **role** (positive = anode/`+`, negative = cathode/`-`) when it can:
 
 - **JLC side:** JLC's own symbol pin names (`A`/`K`, `Anode`/`Cathode`, `+`/`-`). The symbol is only fetched for two-pad parts.
-- **Board side:** the pad's pin function, which is the schematic pin name KiCad stores on each pad (`K`, `A_2`, …). If the board pads carry no usable names and are numbered 1 and 2, KiCad's library convention is assumed: diode/LED pad 1 = cathode, polarized capacitor pad 1 = `+`. That assumption lowers the result to medium confidence.
+- **Board side:** the pad's pin function, which is the schematic pin name KiCad stores on each pad (`K`, `A_2`, …), or else pad numbers that are themselves polarity names (`A`/`K`, `+`/`-`). If neither works and the pads are numbered 1 and 2, KiCad's library convention is assumed: diode/LED pad 1 = cathode, polarized capacitor pad 1 = `+`. That assumption lowers the result to medium confidence.
 
 | JLC symbol | Board pads | Result |
 | --- | --- | --- |
 | no polarity names (e.g. pins `1`/`2`) | any | paired by number, with a note to check polarity |
-| polarity names | pin names with polarity | paired by role, confidence unchanged |
+| polarity names | pin names or pad numbers with polarity | paired by role, confidence unchanged |
 | polarity names | numbered 1/2, no names | paired by role using KiCad's convention, medium |
 | polarity names | other numbering, no names | paired by number, medium, **warning** to check orientation |
+| symbol couldn't be fetched | any | paired by number, medium, **warning** to check orientation (**Check** tries the symbol again) |
 
 When pairing by role turns out to be the reverse of the pad numbering, the report says so ("JLC numbers this part's pads the other way round").
 
@@ -89,7 +92,7 @@ All conventions are defined in `src/kicad_jlcimport/production/conventions.py`:
 - **Top-side placement model**: `p_cpl = t + R(phi) · q_up`.
 - **Bottom-side placement model**: `p_cpl = t + R(phi) · diag(1, -1) · q_up`. This matches how KiCad flips footprints (it mirrors local Y and negates the orientation). As a result, a footprint whose library frame already matches JLC's gets KiCad's own orientation on both sides.
 
-**Not verified:** whether JLCPCB reads bottom-side rotations with this same mirror axis. If an order preview shows bottom-side parts rotated by 180°, or with the angle sign flipped, change `BOTTOM_MIRROR` / `bottom_cpl_rotation` in `conventions.py`. Nothing else needs to change.
+- **CPL Rotation column**: `phi` on the top side, `180° − phi` on the bottom side, because JLCPCB measures bottom-side rotations in the opposite direction. This was established with a test board in JLCPCB's own placement preview: LEDs, SOD-123, SMA, 3216 tantalum, SOT-23, SOT-23-6 and SOIC-8 on the bottom at KiCad 0/90/180/270. Writing `phi` put every part with `phi` = 0° or 180° on backwards and the 90°/270° ones on correctly. `180° − phi` matches all 28. The correction lives in `cpl_rotation()` in `conventions.py`.
 
 ## CLI
 

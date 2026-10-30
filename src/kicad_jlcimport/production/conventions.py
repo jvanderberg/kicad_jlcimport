@@ -50,10 +50,14 @@ footprint with orientation ``theta``.  Consequently, for a footprint whose
 library frame already matches JLC's, the solver returns KiCad's own
 orientation on both sides.
 
-**Unverified:** that JLCPCB interprets bottom-side CPL rotations with this
-same mirror axis.  If an order preview shows bottom parts rotated by 180°
-(or mirrored by angle sign), adjust :data:`BOTTOM_MIRROR` and/or
-:func:`bottom_cpl_rotation` — nothing else needs to change.
+CPL ``Rotation`` column
+-----------------------
+Top side: ``phi``.  Bottom side: ``180° - phi``, i.e. JLCPCB measures
+bottom-side rotations in the opposite direction.  Established with a test
+board in JLCPCB's own placement preview (2026-10-29): LEDs, SOD-123, SMA,
+3216 tantalum, SOT-23, SOT-23-6 and SOIC-8 on the bottom at KiCad 0/90/180/270.
+Writing ``phi`` placed exactly the parts with ``phi`` = 0/180 rotated by 180°
+and the 90/270 ones correctly; ``180° - phi`` agrees with all 28.
 """
 
 import math
@@ -71,11 +75,6 @@ BOTTOM_MIRROR = (1.0, -1.0)
 
 def board_to_cpl(x: float, y: float) -> Point:
     """Board (Y down) → CPL (Y up)."""
-    return (x, -y)
-
-
-def cpl_to_board(x: float, y: float) -> Point:
-    """CPL (Y up) → board (Y down)."""
     return (x, -y)
 
 
@@ -109,11 +108,15 @@ def normalize_angle(degrees: float) -> float:
 
 
 def place_local(q_local: Point, t_cpl: Point, phi: float, side: str) -> Point:
-    """Map a footprint-local point to CPL coordinates using the placement model."""
+    """Map a footprint-local point to CPL coordinates using the placement model.
+
+    The forward form of the model the solver inverts; the tests check KiCad's
+    own flip and the solver against it.
+    """
     return _add(t_cpl, rotate(side_mirror(local_to_up(*q_local), side), phi))
 
 
-def kicad_pose_to_cpl(x: float, y: float, orientation: float, side: str) -> Tuple[Point, float]:
+def kicad_pose_to_cpl(x: float, y: float, orientation: float) -> Tuple[Point, float]:
     """Express a KiCad footprint's own pose in the placement model.
 
     KiCad stores ``(position, orientation)`` such that pads land at
@@ -125,18 +128,13 @@ def kicad_pose_to_cpl(x: float, y: float, orientation: float, side: str) -> Tupl
     return board_to_cpl(x, y), normalize_angle(orientation)
 
 
-def bottom_cpl_rotation(phi: float) -> float:
-    """Convert a bottom-side placement angle into the CPL Rotation column.
-
-    Identity under the current convention (see module docstring).
-    """
-    return normalize_angle(phi)
-
-
 def cpl_rotation(phi: float, side: str) -> float:
-    """Placement-model angle → value written to the CPL ``Rotation`` column."""
+    """Placement-model angle → value written to the CPL ``Rotation`` column.
+
+    Bottom-side rotations run the other way in JLCPCB's CPL (see module docstring).
+    """
     if side == BOTTOM:
-        return bottom_cpl_rotation(phi)
+        return normalize_angle(180.0 - phi)
     return normalize_angle(phi)
 
 

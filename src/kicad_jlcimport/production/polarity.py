@@ -10,9 +10,10 @@ Instead each pad gets a role (positive = anode/+, negative = cathode/-):
 
 * JLC side: from JLC's own symbol pin names (``A``/``K``, ``+``/``-``).
 * Board side: from the pad's pin function (the schematic pin name KiCad
-  stores on the pad).  When the board pads carry no usable names, KiCad's
-  library convention is assumed: diodes/LEDs have the cathode on pad 1,
-  polarized capacitors have ``+`` on pad 1.
+  stores on the pad), else from pad numbers that are themselves polarity
+  names (``A``/``K``, ``+``/``-``).  When neither works, KiCad's library
+  convention is assumed: diodes/LEDs have the cathode on pad 1, polarized
+  capacitors have ``+`` on pad 1.
 
 The JLC pads are then renumbered so that equal roles share a number, and the
 normal solver runs on that.
@@ -35,6 +36,10 @@ NOT_POLARIZED = ""  # not a two-pad part with polarity names on JLC's symbol
 BY_NAMES = "names"
 BY_CONVENTION = "convention"
 UNRESOLVED = "unresolved"
+NAMES_UNAVAILABLE = "names_unavailable"  # two-pad part, but JLC's symbol could not be fetched
+
+# Sources that rest on an assumption or on nothing: the fit is at most MEDIUM.
+UNCERTAIN_SOURCES = (BY_CONVENTION, UNRESOLVED, NAMES_UNAVAILABLE)
 
 _ROLE_TOKENS: Dict[str, Tuple[str, str]] = {
     "A": (POSITIVE, DIODE),
@@ -83,28 +88,42 @@ def _numbers(pads: Sequence[PadRecord]) -> List[str]:
     return seen
 
 
+def _complete(roles: Dict[str, str]) -> Dict[str, str]:
+    """*roles* if it names one positive and one negative pad, else {}."""
+    return roles if sorted(roles.values()) == sorted([POSITIVE, NEGATIVE]) else {}
+
+
 def _board_roles(board_pads: Sequence[PadRecord], numbers: List[str]) -> Dict[str, str]:
-    """Board pad number -> polarity from pin functions, or {} if they don't give one each."""
+    """Board pad number -> polarity from pin functions, else from the pad numbers themselves."""
     roles: Dict[str, str] = {}
     for num in numbers:
         found = {pin_role(p.function) for p in board_pads if _normalize(p.number) == num} - {None}
-        if len(found) != 1:
-            return {}
-        roles[num] = found.pop()[0]
-    return roles if set(roles.values()) == {POSITIVE, NEGATIVE} else {}
+        if len(found) == 1:
+            roles[num] = found.pop()[0]
+    if _complete(roles):
+        return roles
+    by_number = {num: pin_role(num) for num in numbers}
+    return _complete({num: role[0] for num, role in by_number.items() if role is not None})
 
 
 def match_polarity(
     board_pads: Sequence[PadRecord],
     jlc_pads: Sequence[PadRecord],
     jlc_pin_names: Dict[str, str],
+    names_error: str = "",
 ) -> PolarityMatch:
-    """Renumber *jlc_pads* so each JLC pad shares a number with the board pad of the same polarity."""
+    """Renumber *jlc_pads* so each JLC pad shares a number with the board pad of the same polarity.
+
+    *names_error* is set when JLC's symbol could not be fetched; a two-pad
+    part then gets ``NAMES_UNAVAILABLE`` rather than silently pairing by number.
+    """
     unchanged = PolarityMatch(jlc_pads=list(jlc_pads))
     board_nums = _numbers(board_pads)
     jlc_nums = _numbers(jlc_pads)
     if len(board_nums) != 2 or len(jlc_nums) != 2:
         return unchanged
+    if names_error:
+        return PolarityMatch(jlc_pads=list(jlc_pads), source=NAMES_UNAVAILABLE)
 
     names = {_normalize(k): v for k, v in jlc_pin_names.items()}
     jlc_roles = {num: pin_role(names.get(num, "")) for num in jlc_nums}

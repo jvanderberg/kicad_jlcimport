@@ -13,13 +13,15 @@ class JlcFootprint:
     """JLC's footprint for a part: pads in footprint-local mm (Y down, origin at JLC's origin).
 
     ``pin_names`` maps pad number to JLC's symbol pin name (e.g. ``"2": "K"``).
-    It is only fetched for two-pad parts, where it decides polarity.
+    It is only fetched for two-pad parts, where it decides polarity;
+    ``symbol_error`` says why it is missing when that fetch failed.
     """
 
     lcsc: str
     title: str = ""
     pads: List[PadRecord] = field(default_factory=list)
     pin_names: Dict[str, str] = field(default_factory=dict)
+    symbol_error: str = ""
 
 
 def _data_shapes(data: Dict[str, Any]):
@@ -50,8 +52,9 @@ def fetch_jlc_footprint(lcsc: str) -> JlcFootprint:
 
     Fetches the footprint document only, plus the symbol for two-pad parts
     (diodes, LEDs, polarized capacitors) whose pin names give polarity.
-    Raises :class:`api.APIError` on network or lookup failure; a failed
-    symbol fetch just leaves ``pin_names`` empty.
+    Raises :class:`api.APIError` on network or lookup failure.  A failed
+    symbol fetch is recorded in ``symbol_error`` (the report warns about it)
+    rather than failing the whole footprint.
     """
     uuids = api.fetch_component_uuids(lcsc)
     fp_data = api.fetch_component_data(uuids[-1]["component_uuid"])
@@ -62,6 +65,6 @@ def fetch_jlc_footprint(lcsc: str) -> JlcFootprint:
             jlc.pin_names = pin_names_from_data(symbols)
         except api.SSLCertError:
             raise
-        except Exception:  # polarity just stays unresolved
-            jlc.pin_names = {}
+        except Exception as e:
+            jlc.symbol_error = str(e) or type(e).__name__
     return jlc

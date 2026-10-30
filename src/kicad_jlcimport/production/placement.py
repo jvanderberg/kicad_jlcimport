@@ -22,15 +22,10 @@ from typing import List, Optional, Tuple
 from .conventions import cpl_rotation, kicad_pose_to_cpl, normalize_angle
 from .jlc_footprints import JlcFootprint
 from .models import FootprintRecord
-from .polarity import BY_CONVENTION, BY_NAMES, UNRESOLVED, match_polarity
+from .polarity import match_polarity
 from .solver import (
     MATCHED_BY_POSITION,
     MIRRORED,
-    POLARITY_BY_CONVENTION,
-    POLARITY_BY_NUMBERING,
-    POLARITY_BY_PIN_NAMES,
-    POLARITY_SWAPPED,
-    POLARITY_UNRESOLVED,
     FitResult,
     cap_confidence,
     describe_flags,
@@ -112,7 +107,7 @@ def parse_override(fp: FootprintRecord) -> Tuple[Optional[ManualOverride], List[
 
 def kicad_placement(fp: FootprintRecord, reason: str) -> Placement:
     """Fallback: the footprint's own KiCad pose, flagged unverified."""
-    (x, y), phi = kicad_pose_to_cpl(fp.x, fp.y, fp.orientation, fp.side)
+    (x, y), phi = kicad_pose_to_cpl(fp.x, fp.y, fp.orientation)
     return Placement(
         reference=fp.reference,
         side=fp.side,
@@ -127,20 +122,8 @@ def kicad_placement(fp: FootprintRecord, reason: str) -> Placement:
 
 def solve_against_jlc(fp: FootprintRecord, jlc_fp: JlcFootprint) -> FitResult:
     """Fit JLC's footprint onto *fp*, pairing pads by polarity, then number, then position."""
-    polarity = match_polarity(fp.pads, jlc_fp.pads, jlc_fp.pin_names)
-    fit = solve_placement(fp.pads, polarity.jlc_pads, fp.side, kicad_orientation=fp.orientation)
-    if polarity.source in (BY_NAMES, BY_CONVENTION):
-        if POLARITY_BY_NUMBERING in fit.flags:
-            fit.flags.remove(POLARITY_BY_NUMBERING)
-        if polarity.swapped:
-            fit.flags.append(POLARITY_SWAPPED)
-        if polarity.source == BY_NAMES:
-            fit.flags.append(POLARITY_BY_PIN_NAMES)
-        else:
-            cap_confidence(fit, POLARITY_BY_CONVENTION)
-    elif polarity.source == UNRESOLVED:
-        cap_confidence(fit, POLARITY_UNRESOLVED)
-
+    polarity = match_polarity(fp.pads, jlc_fp.pads, jlc_fp.pin_names, jlc_fp.symbol_error)
+    fit = solve_placement(fp.pads, polarity.jlc_pads, fp.side, kicad_orientation=fp.orientation, polarity=polarity)
     if not fit.usable and MIRRORED not in fit.flags:
         renumbered = match_pads_by_position(fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation)
         if renumbered is not None:

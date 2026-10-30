@@ -110,7 +110,6 @@ def board_text_with(fp_text: str, x: float, y: float, theta: float, side: str, r
 class TestConventions:
     def test_board_cpl_roundtrip(self):
         assert cv.board_to_cpl(1.5, 2.5) == (1.5, -2.5)
-        assert cv.cpl_to_board(*cv.board_to_cpl(1.5, 2.5)) == (1.5, 2.5)
 
     def test_rotate_ccw(self):
         x, y = cv.rotate((1.0, 0.0), 90)
@@ -130,10 +129,28 @@ class TestConventions:
         """KiCad's own pose, expressed in the placement model, reproduces KiCad's pad positions."""
         local = [PadRecord("1", 1.2, -0.4), PadRecord("2", -0.7, 2.0)]
         board = kicad_place(local, 50.0, 30.0, theta, side)
-        t, phi = cv.kicad_pose_to_cpl(50.0, 30.0, theta, side)
+        t, phi = cv.kicad_pose_to_cpl(50.0, 30.0, theta)
         for lp, bp in zip(local, board):
             mx, my = cv.place_local((lp.x, lp.y), t, phi, side)
             assert (mx, my) == pytest.approx(cv.board_to_cpl(bp.x, bp.y))
+
+    @pytest.mark.parametrize(
+        "phi,expected",
+        [
+            # Read off JLCPCB's placement preview of the bottom-side test board:
+            # diodes/LEDs/tantalum/SOT-23 (phi = KiCad angle or +180) ...
+            (0, 180),
+            (90, 90),
+            (180, 0),
+            (270, 270),
+            # ... and SOT-23-6/SOIC-8, whose JLC footprint sits at 90° to KiCad's.
+            (90 + 90, 0),
+            (270 + 90, 180),
+        ],
+    )
+    def test_bottom_rotation_matches_jlc_preview(self, phi, expected):
+        assert cv.cpl_rotation(phi, cv.BOTTOM) == expected
+        assert cv.cpl_rotation(phi, cv.TOP) == cv.normalize_angle(phi)
 
     def test_cpl_rotation_is_normalized(self):
         assert cv.cpl_rotation(-90, cv.TOP) == 270

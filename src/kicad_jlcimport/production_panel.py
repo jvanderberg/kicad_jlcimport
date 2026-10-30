@@ -101,7 +101,13 @@ class ProductionPanel(wx.Panel):
         grid.Add(browse_btn, 0)
         vbox.Add(grid, 0, wx.EXPAND | wx.ALL, 8)
 
-        self.refill_cb = wx.CheckBox(panel, label="Refill zones before plotting Gerbers")
+        self.refill_cb = wx.CheckBox(
+            panel, label="Refill zones before plotting Gerbers (changes the open board; not undoable)"
+        )
+        self.refill_cb.SetToolTip(
+            "Refills every zone on the open board so the Gerbers match its copper. "
+            "Save the board afterwards to keep the new fills."
+        )
         self.refill_cb.SetValue(True)
         vbox.Add(self.refill_cb, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
@@ -172,6 +178,8 @@ class ProductionPanel(wx.Panel):
 
     def _on_check(self, event):
         self._part_cache.clear()  # always fetch fresh stock on an explicit check
+        # Retry footprints whose symbol (pin names, i.e. polarity) failed to download.
+        self._footprint_cache.discard_where(lambda jlc_fp: bool(getattr(jlc_fp, "symbol_error", "")))
         self._start_check(generate=False)
 
     def _on_generate(self, event):
@@ -218,7 +226,7 @@ class ProductionPanel(wx.Panel):
                 wx.CallAfter(self._on_check_failed, f"{type(e).__name__}: {e}", request_id)
             return
         if not self._closing:
-            wx.CallAfter(self._on_check_done, report, request_id, generate)
+            wx.CallAfter(self._on_check_done, report, records, request_id, generate)
 
     def _handle_ssl_cert_error(self):
         if self._on_ssl_error is not None:
@@ -236,14 +244,14 @@ class ProductionPanel(wx.Panel):
         self.status.SetLabel("Check failed")
         wx.MessageBox(message, _TITLE, wx.OK | wx.ICON_ERROR)
 
-    def _on_check_done(self, report, request_id, generate):
+    def _on_check_done(self, report, records, request_id, generate):
         if self._closing or request_id != self._request_id:
             return
         self._set_busy(False)
         self._show_report(report)
         self.status.SetLabel(f"{report.count(ERROR)} errors, {report.count(WARNING)} warnings")
         if generate:
-            self._generate(report)
+            self._generate(report, records)
 
     def _show_report(self, report):
         self._report = report
@@ -266,10 +274,21 @@ class ProductionPanel(wx.Panel):
 
     # ------------------------------------------------------------ generate
 
-    def _generate(self, report):
+    def _generate(self, report, records):
         out_dir = self.dir_text.GetValue().strip()
         if not out_dir:
             wx.MessageBox("Choose an output folder first.", _TITLE, wx.OK | wx.ICON_WARNING)
+            return
+        # The dialog is non-modal: BOM/CPL come from the snapshot taken before
+        # the check, Gerbers from the live board, so they must still agree.
+        if adapter.extract_footprints(self.board) != records:
+            self.status.SetLabel("Board changed during the check")
+            wx.MessageBox(
+                "The board changed while the parts were being checked, so the placement file would not "
+                "match the Gerbers.\n\nClick Generate again.",
+                _TITLE,
+                wx.OK | wx.ICON_WARNING,
+            )
             return
         errors, warnings = report.count(ERROR), report.count(WARNING)
         if errors or warnings:

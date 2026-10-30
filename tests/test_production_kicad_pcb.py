@@ -130,6 +130,25 @@ class TestCli:
             self._run(monkeypatch, ["production", str(board), "--check-only"])
         assert exc.value.code == 0
 
+    def test_tls_error_prints_insecure_hint(self, tmp_path, monkeypatch, capsys):
+        import kicad_jlcimport.cli as cli
+        from kicad_jlcimport.easyeda.api import SSLCertError
+
+        def tls_caches():
+            def fail(_lcsc):
+                raise SSLCertError("certificate verify failed")
+
+            return KeyedCache(fail), KeyedCache(fail)
+
+        board = tmp_path / "b.kicad_pcb"
+        board.write_text(BOARD_V8)
+        monkeypatch.setattr(cli, "make_caches", tls_caches)
+        monkeypatch.setattr("sys.argv", ["prog", "production", str(board), "--check-only"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 1
+        assert "--insecure" in capsys.readouterr().out
+
     def test_errors_block_without_force(self, tmp_path, monkeypatch, capsys):
         board = tmp_path / "b.kicad_pcb"
         board.write_text(BOARD_V8.replace("C25804", "C99999"))

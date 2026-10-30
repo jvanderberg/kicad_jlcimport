@@ -273,6 +273,29 @@ class TestPlotting:
         assert "b-F_Cu.gbr" in names and "b-PTH.drl" in names and "b-NPTH.drl" in names
         assert len(names) == 13 == len(files)
 
+    def test_drill_files_collected_by_name_not_timestamp(self, tmp_path):
+        stale = tmp_path / "old-PTH.drl"
+        stale.write_text("M48")
+        files = adapter.write_drill_files(fake_board(), str(tmp_path), plotting_pcbnew([]))
+        assert sorted(os.path.basename(f) for f in files) == ["b-NPTH.drl", "b-PTH.drl"]
+        assert sorted(os.listdir(tmp_path)) == ["b-NPTH.drl", "b-PTH.drl", "old-PTH.drl"]  # staging removed
+
+    def test_no_drill_files_is_an_error(self, tmp_path):
+        pcb = plotting_pcbnew([])
+        pcb.EXCELLON_WRITER = lambda board: SimpleNamespace(
+            SetOptions=lambda *a: None, SetFormat=lambda m: None, CreateDrillandMapFilesSet=lambda *a: None
+        )
+        with pytest.raises(RuntimeError, match="no drill files"):
+            adapter.write_drill_files(fake_board(), str(tmp_path), pcb)
+        assert os.listdir(tmp_path) == []
+
+    def test_refill_redraws_editor(self):
+        controllers = []
+        pcb = plotting_pcbnew(controllers)
+        pcb.Refresh = lambda: controllers.append("refreshed")
+        adapter.refill_zones(fake_board(), pcb)
+        assert controllers == [("filled", ["z"]), "refreshed"]
+
     def test_drill_marks_fallback_and_no_refill(self, tmp_path):
         controllers = []
         pcb = plotting_pcbnew(controllers)
