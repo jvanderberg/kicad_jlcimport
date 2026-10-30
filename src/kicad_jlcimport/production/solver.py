@@ -23,6 +23,11 @@ that maps JLC's footprint onto the actual pads:
 4. The opposite-handedness fit (mirror applied/removed) is also computed; if
    it fits clearly better, the pad numbering is mirrored and we refuse to
    guess.
+5. Whatever the residual, the raw angle rounded to the nearest candidate is
+   kept as an *estimate*.  A fit that is rejected (high residual, angle not
+   near a 90° step) is still usually right about the orientation, and far
+   more often right than KiCad's own angle; the placement uses it at LOW
+   confidence with a warning.
 
 When the pad numbers don't line up at all (JLC renumbered its footprint,
 say), :func:`match_pads_by_position` pairs pads by position instead.  It
@@ -37,10 +42,10 @@ from .conventions import Point, board_to_cpl, local_to_up, normalize_angle, rota
 from .models import PadRecord
 from .polarity import (
     BY_CONVENTION,
+    BY_FOOTPRINT_NAME,
     BY_NAMES,
     NAMES_UNAVAILABLE,
     NOT_POLARIZED,
-    UNCERTAIN_SOURCES,
     UNRESOLVED,
     PolarityMatch,
 )
@@ -62,6 +67,7 @@ POLARITY_BY_CONVENTION = "polarity_by_convention"
 POLARITY_SWAPPED = "polarity_swapped"
 POLARITY_UNRESOLVED = "polarity_unresolved"
 POLARITY_NAMES_UNAVAILABLE = "polarity_names_unavailable"
+POLARITY_BY_FOOTPRINT_NAME = "polarity_by_footprint_name"
 
 FLAG_TEXT = {
     TOO_FEW_PADS: "fewer than 2 pad numbers in common with the JLC footprint",
@@ -72,9 +78,10 @@ FLAG_TEXT = {
     HIGH_RESIDUAL: "pads do not match the JLC footprint (wrong package?)",
     MIRRORED: "pad numbering is mirrored relative to the JLC footprint",
     POLARITY_BY_NUMBERING: "symmetric 2-terminal part: polarity relies on pad numbering only",
-    NOT_SNAPPED: "solved angle is not a multiple of 90° from KiCad's",
+    NOT_SNAPPED: "solved angle is not a multiple of 90° from KiCad's; rounded to the nearest step",
     MATCHED_BY_POSITION: "pad numbers differ from the JLC footprint; pads matched by position",
     POLARITY_BY_PIN_NAMES: "polarity matched by pin name (anode/cathode or +/-)",
+    POLARITY_BY_FOOTPRINT_NAME: "polarity from the footprint name (_AK / _KA)",
     POLARITY_BY_CONVENTION: (
         "no pin names on the board pads; assumed KiCad's convention (diode/LED: pad 1 = cathode, "
         "polarized capacitor: pad 1 = +)"
@@ -88,6 +95,7 @@ FLAG_TEXT = {
 
 _POLARITY_FLAG = {
     BY_NAMES: POLARITY_BY_PIN_NAMES,
+    BY_FOOTPRINT_NAME: POLARITY_BY_FOOTPRINT_NAME,
     BY_CONVENTION: POLARITY_BY_CONVENTION,
     UNRESOLVED: POLARITY_UNRESOLVED,
     NAMES_UNAVAILABLE: POLARITY_NAMES_UNAVAILABLE,
@@ -125,6 +133,11 @@ class FitResult:
     max_error: float = 0.0
     pairs_used: int = 0
     alt_rms: Optional[float] = None  # residual of the opposite-handedness fit
+    # Raw angle rounded to the nearest candidate, with its origin and residual;
+    # set whenever an orientation could be computed (see module docstring, step 5).
+    estimate_angle: Optional[float] = None
+    estimate_origin: Point = (0.0, 0.0)
+    estimate_rms: float = 0.0
     snapped: bool = False
     confidence: str = LOW
     flags: List[str] = field(default_factory=list)
@@ -207,11 +220,15 @@ def _angle_delta(a: float, b: float) -> float:
     return abs(d)
 
 
-def _snap(angle: float, kicad_orientation: Optional[float], tol: float) -> Tuple[float, bool]:
+def _nearest_candidate(angle: float, kicad_orientation: Optional[float]) -> float:
     candidates = [k * 90.0 for k in range(4)]
     if kicad_orientation is not None:
         candidates += [normalize_angle(kicad_orientation + k * 90.0) for k in range(4)]
-    best = min(candidates, key=lambda c: _angle_delta(angle, c))
+    return min(candidates, key=lambda c: _angle_delta(angle, c))
+
+
+def _snap(angle: float, kicad_orientation: Optional[float], tol: float) -> Tuple[float, bool]:
+    best = _nearest_candidate(angle, kicad_orientation)
     if _angle_delta(angle, best) <= tol:
         return best, True
     return angle, False
@@ -275,6 +292,10 @@ def solve_placement(
     origin = _translation(qc, pc, angle)
     rms, max_err = _residuals(q, p, angle, origin)
 
+    result.estimate_angle = normalize_angle(_nearest_candidate(raw, kicad_orientation))
+    result.estimate_origin = _translation(qc, pc, result.estimate_angle)
+    result.estimate_rms, _ = _residuals(q, p, result.estimate_angle, result.estimate_origin)
+
     result.raw_angle = raw
     result.angle = normalize_angle(angle)
     result.snapped = snapped
@@ -306,6 +327,8 @@ def solve_placement(
     elif rms > tol.medium_rms:
         result.flags.append(HIGH_RESIDUAL)
         result.confidence = LOW
+    elif not snapped:
+        result.confidence = LOW
     elif matched_fraction < tol.min_matched_fraction:
         result.confidence = LOW
     elif rms > tol.high_rms:
@@ -315,7 +338,9 @@ def solve_placement(
         result.confidence = MEDIUM
     else:
         result.confidence = HIGH
-    if polarity_source in UNCERTAIN_SOURCES and result.confidence == HIGH:
+    # JLC's own pin names don't always match how it places a part, so no
+    # polarized two-pad result is HIGH.
+    if polarity_source != NOT_POLARIZED and result.confidence == HIGH:
         result.confidence = MEDIUM
     return result
 

@@ -379,6 +379,18 @@ class TestRunCheck:
         report = run_check([fp("R1", lcsc=None), fp("R1", lcsc=None)], 1, part_cache, fp_cache)
         assert report.issue_lines()[0] == "[ERROR] Duplicate designators: R1"
 
+    def test_stock_check_can_be_skipped(self):
+        part_fetch = mock.Mock(side_effect=AssertionError("parts library must not be queried"))
+        _, fp_cache = caches(footprints={"C25804": JlcFootprint("C25804", pads=RES_PADS)})
+        report = run_check([fp("R1"), fp("R2")], 3, KeyedCache(part_fetch), fp_cache, check_stock=False)
+        a = report.availability["C25804"]
+        assert a.status == av.NOT_CHECKED and a.qty_needed == 6
+        assert report.count(ERROR) == 0 and report.count(WARNING) == 0
+        assert report.rows[0].placement.source == SOLVED
+        assert "not checked" in "\n".join(report.summary_lines())
+        assert row_cells(report.rows[0])["stock"] == "Stock not checked"
+        part_fetch.assert_not_called()
+
     def test_medium_confidence_and_manual_notes(self):
         wide = [PadRecord("1", -0.9, 0.0), PadRecord("2", 0.9, 0.0)]
         part_cache, fp_cache = caches(

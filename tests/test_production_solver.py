@@ -11,7 +11,7 @@ from kicad_jlcimport.production import conventions as cv
 from kicad_jlcimport.production.jlc_footprints import JlcFootprint, jlc_footprint_from_data
 from kicad_jlcimport.production.kicad_pcb import parse_sexpr, read_board_text
 from kicad_jlcimport.production.models import FootprintRecord, PadRecord
-from kicad_jlcimport.production.placement import KICAD, SOLVED, compute_placement
+from kicad_jlcimport.production.placement import ESTIMATED, KICAD, SOLVED, compute_placement
 from kicad_jlcimport.production.solver import (
     DEGENERATE,
     GEOMETRY_DIFFERS,
@@ -395,6 +395,9 @@ class TestFlags:
         fit = solve_placement(kicad_place(jlc, 0, 0, 12.3, cv.TOP), jlc, cv.TOP)
         assert NOT_SNAPPED in fit.flags
         assert fit.angle == pytest.approx(12.3, abs=1e-6)
+        # An unsnapped angle is never written as-is; the estimate rounds it.
+        assert fit.confidence == LOW and not fit.usable
+        assert fit.estimate_angle == pytest.approx(0.0)
 
     def test_odd_angle_snaps_to_kicad_orientation(self):
         jlc = soic8()
@@ -431,8 +434,30 @@ class TestPlacementFallback:
         assert (pl.x, pl.y, pl.rotation) == (10.0, -20.0, 90.0)
         assert "network down" in pl.notes[0]
 
-    def test_low_confidence_falls_back(self):
-        jlc = JlcFootprint("C1", pads=[PadRecord("1", 0, 0), PadRecord("2", 9, 0)])
+    def test_loose_fit_is_estimated_not_kicad(self):
+        # Same pad numbers, wrong pitch: the fit is rejected but its orientation
+        # (rounded to 90°) is kept rather than KiCad's angle.
+        wide = [PadRecord(p.number, p.x * 1.4, p.y * 1.4) for p in soic8()]
+        pl = compute_placement(self._rec(), JlcFootprint("C1", pads=wide))
+        assert pl.source == ESTIMATED and pl.confidence == LOW and not pl.verified
+        assert pl.fit is not None and not pl.fit.usable and HIGH_RESIDUAL in pl.fit.flags
+        assert pl.rotation == pytest.approx(90.0)
+        assert (pl.x, pl.y) == (pytest.approx(10.0), pytest.approx(-20.0))
+        assert "RMS" in pl.notes[0]
+
+    def test_unsnapped_fit_is_rounded(self):
+        rec = self._rec()
+        rec.pads = kicad_place(soic8(), 10.0, 20.0, 97.0, cv.TOP)  # KiCad says 90, pads say 97
+        pl = compute_placement(rec, JlcFootprint("C1", pads=soic8()))
+        assert pl.source == ESTIMATED and pl.rotation == pytest.approx(90.0)
+
+    def test_mirrored_is_never_estimated(self):
+        mirrored = [PadRecord(p.number, -p.x, p.y) for p in soic8()]
+        pl = compute_placement(self._rec(), JlcFootprint("C1", pads=mirrored))
+        assert pl.source == KICAD and MIRRORED in pl.fit.flags
+
+    def test_degenerate_fit_falls_back_to_kicad(self):
+        jlc = JlcFootprint("C1", pads=[PadRecord("1", 0, 0), PadRecord("2", 0, 0)])
         pl = compute_placement(self._rec(), jlc)
         assert pl.source == KICAD
         assert pl.fit is not None and not pl.fit.usable

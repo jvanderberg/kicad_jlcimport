@@ -24,6 +24,7 @@ from .jlc_footprints import JlcFootprint
 from .models import FootprintRecord
 from .polarity import match_polarity
 from .solver import (
+    LOW,
     MATCHED_BY_POSITION,
     MIRRORED,
     FitResult,
@@ -37,6 +38,7 @@ ROTATION_OFFSET_FIELD = "JLCPCB Rotation Offset"
 POSITION_OFFSET_FIELD = "JLCPCB Position Offset"
 
 SOLVED = "solved"
+ESTIMATED = "estimated"  # loose fit: orientation rounded to the nearest 90°, LOW confidence
 KICAD = "kicad"  # fallback: KiCad's own pose, unverified
 MANUAL = "manual"
 
@@ -122,7 +124,7 @@ def kicad_placement(fp: FootprintRecord, reason: str) -> Placement:
 
 def solve_against_jlc(fp: FootprintRecord, jlc_fp: JlcFootprint) -> FitResult:
     """Fit JLC's footprint onto *fp*, pairing pads by polarity, then number, then position."""
-    polarity = match_polarity(fp.pads, jlc_fp.pads, jlc_fp.pin_names, jlc_fp.symbol_error)
+    polarity = match_polarity(fp.pads, jlc_fp.pads, jlc_fp.pin_names, jlc_fp.symbol_error, fp.footprint)
     fit = solve_placement(fp.pads, polarity.jlc_pads, fp.side, kicad_orientation=fp.orientation, polarity=polarity)
     if not fit.usable and MIRRORED not in fit.flags:
         renumbered = match_pads_by_position(fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation)
@@ -172,6 +174,21 @@ def compute_placement(
     if fit is None:
         reason = fetch_error or "no LCSC part number"
         return kicad_placement(fp, reason)
+
+    if not fit.usable and fit.estimate_angle is not None and MIRRORED not in fit.flags:
+        placement = Placement(
+            reference=fp.reference,
+            side=fp.side,
+            x=fit.estimate_origin[0],
+            y=fit.estimate_origin[1],
+            rotation=cpl_rotation(fit.estimate_angle, fp.side),
+            source=ESTIMATED,
+            confidence=LOW,
+            fit=fit,
+            notes=[f"pads differ from JLC's footprint (RMS {fit.estimate_rms:.2f} mm)"],
+        )
+        placement.notes.extend(describe_flags(fit.flags))
+        return placement
 
     if not fit.usable:
         placement = kicad_placement(fp, "pads could not be matched to the JLC footprint")

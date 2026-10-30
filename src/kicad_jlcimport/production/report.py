@@ -16,10 +16,13 @@ from .cache import KeyedCache
 from .jlc_footprints import JlcFootprint
 from .models import FootprintRecord, natural_key
 from .outputs import build_bom_rows, build_cpl_rows
-from .placement import KICAD, MANUAL, Placement, compute_placement
+from .placement import ESTIMATED, KICAD, MANUAL, Placement, compute_placement
 from .solver import (
     MEDIUM,
+    POLARITY_BY_CONVENTION,
+    POLARITY_BY_FOOTPRINT_NAME,
     POLARITY_BY_NUMBERING,
+    POLARITY_BY_PIN_NAMES,
     POLARITY_NAMES_UNAVAILABLE,
     POLARITY_SWAPPED,
     POLARITY_UNRESOLVED,
@@ -27,6 +30,15 @@ from .solver import (
 
 # Solver flags that make a solved placement a warning rather than a note.
 _WARNING_FLAGS = (POLARITY_UNRESOLVED, POLARITY_NAMES_UNAVAILABLE)
+# Polarized two-pad parts whose pads were paired by role: worth a look, because
+# JLC's symbol pin names don't always match how JLC places the part.
+_POLARIZED_FLAGS = (POLARITY_BY_PIN_NAMES, POLARITY_BY_FOOTPRINT_NAME, POLARITY_BY_CONVENTION)
+
+# Fixed texts so the issue list groups them into one line each.
+ESTIMATED_TEXT = (
+    "Estimated placement: pads don't closely match JLC's footprint; check its orientation in JLC's placement preview"
+)
+POLARITY_CHECK_TEXT = "Polarized part: check its polarity in JLC's placement preview"
 
 ERROR = "error"
 WARNING = "warning"
@@ -107,6 +119,7 @@ class ProductionReport:
 
     def summary_lines(self) -> List[str]:
         n_unverified = sum(1 for p in self.placements if p.source == KICAD)
+        n_estimated = sum(1 for p in self.placements if p.source == ESTIMATED)
         lines = [
             f"{len(self.rows)} footprints, {len(self.availability)} unique LCSC parts, {self.boards} boards",
             f"{self.count(ERROR)} errors, {self.count(WARNING)} warnings",
@@ -119,8 +132,12 @@ class ProductionReport:
         cost = self.estimated_parts_cost()
         if cost is not None:
             lines.append(f"Estimated parts cost: ${cost:.2f} (unit prices at order quantity, excl. fees)")
+        if n_estimated:
+            lines.append(f"{n_estimated} placements estimated (loose fit to JLC's footprint, rounded to 90°)")
         if n_unverified:
             lines.append(f"{n_unverified} placements unverified (KiCad position/rotation used)")
+        if any(a.status == av.NOT_CHECKED for a in self.availability.values()):
+            lines.append("Stock, part type and prices not checked")
         return lines
 
     def issue_lines(self, min_severity: str = WARNING) -> List[str]:
@@ -229,12 +246,14 @@ def run_check(
     progress: Optional[ProgressFn] = None,
     on_ssl_error: Optional[Callable[[], None]] = None,
     max_workers: int = 4,
+    check_stock: bool = True,
 ) -> ProductionReport:
     """Check availability and solve placements for all footprints.
 
     *part_cache* wraps ``api.lookup_part`` (dict or None per LCSC);
     *footprint_cache* wraps :func:`fetch_jlc_footprint`.  Network failures
-    are reported, never raised.
+    are reported, never raised.  ``check_stock=False`` skips the parts-library
+    lookup (stock, basic/extended, price); placements are still solved.
     """
     boards = max(int(boards), 1)
     report = ProductionReport(boards=boards)
@@ -245,7 +264,8 @@ def run_check(
     fp_results: Dict[str, Tuple[Optional[JlcFootprint], str]] = {}
 
     def task(lcsc: str) -> str:
-        part_results[lcsc] = _fetch(part_cache, lcsc, on_ssl_error)
+        if check_stock:
+            part_results[lcsc] = _fetch(part_cache, lcsc, on_ssl_error)
         fp_results[lcsc] = _fetch(footprint_cache, lcsc, on_ssl_error)
         return lcsc
 
@@ -256,8 +276,11 @@ def run_check(
                     progress(done, len(lcscs), lcsc)
 
     for lcsc in lcscs:
-        info, err = part_results[lcsc]
         refs = groups[lcsc]
+        if not check_stock:
+            report.availability[lcsc] = av.not_checked(lcsc, refs, boards)
+            continue
+        info, err = part_results[lcsc]
         report.availability[lcsc] = (
             av.lookup_failed(lcsc, refs, boards, err) if err else av.evaluate(lcsc, refs, boards, info)
         )
@@ -317,10 +340,16 @@ def _build_row(
             row.add(INFO, "Placement unverified")
     elif pl.source == MANUAL:
         row.add(INFO, "; ".join(pl.notes))
+    elif pl.source == ESTIMATED:
+        row.add(WARNING, ESTIMATED_TEXT)
+        row.add(INFO, "; ".join(pl.notes))
     elif pl.fit is not None and any(f in pl.fit.flags for f in _WARNING_FLAGS):
         row.add(WARNING, "Placement solved: " + "; ".join(pl.notes))
-    elif pl.confidence == MEDIUM:
-        row.add(INFO, "Placement solved: " + "; ".join(pl.notes))
-    elif pl.fit is not None and (POLARITY_BY_NUMBERING in pl.fit.flags or POLARITY_SWAPPED in pl.fit.flags):
-        row.add(INFO, "; ".join(pl.notes))
+    else:
+        if pl.fit is not None and any(f in pl.fit.flags for f in _POLARIZED_FLAGS):
+            row.add(WARNING, POLARITY_CHECK_TEXT)
+        if pl.confidence == MEDIUM:
+            row.add(INFO, "Placement solved: " + "; ".join(pl.notes))
+        elif pl.fit is not None and (POLARITY_BY_NUMBERING in pl.fit.flags or POLARITY_SWAPPED in pl.fit.flags):
+            row.add(INFO, "; ".join(pl.notes))
     return row

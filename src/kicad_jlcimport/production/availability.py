@@ -10,6 +10,7 @@ NOT_FOUND = "not_found"
 OUT_OF_STOCK = "out_of_stock"
 LOW_STOCK = "low_stock"
 LOOKUP_FAILED = "lookup_failed"
+NOT_CHECKED = "not_checked"  # stock check switched off
 
 STATUS_TEXT = {
     OK: "In stock",
@@ -17,6 +18,7 @@ STATUS_TEXT = {
     OUT_OF_STOCK: "Out of stock",
     LOW_STOCK: "Stock below required quantity",
     LOOKUP_FAILED: "Lookup failed",
+    NOT_CHECKED: "Stock not checked",
 }
 
 BASIC = "Basic"
@@ -106,6 +108,19 @@ def evaluate(lcsc: str, refs: List[str], boards: int, info: Optional[Dict[str, A
         av.status = OK
         av.message = f"{STATUS_TEXT[OK]} ({av.stock})"
     return av
+
+
+def not_checked(lcsc: str, refs: List[str], boards: int) -> Availability:
+    """Placeholder when the stock check is switched off (placements are still solved)."""
+    per_board = len(refs)
+    return Availability(
+        lcsc=lcsc,
+        references=list(refs),
+        qty_per_board=per_board,
+        qty_needed=per_board * max(boards, 1),
+        status=NOT_CHECKED,
+        message=STATUS_TEXT[NOT_CHECKED],
+    )
 
 
 def lookup_failed(lcsc: str, refs: List[str], boards: int, error: str) -> Availability:

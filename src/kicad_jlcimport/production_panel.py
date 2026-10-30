@@ -111,6 +111,14 @@ class ProductionPanel(wx.Panel):
         self.refill_cb.SetValue(True)
         vbox.Add(self.refill_cb, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
+        self.stock_cb = wx.CheckBox(panel, label="Check stock and prices")
+        self.stock_cb.SetToolTip(
+            "Look up every part in the JLCPCB library (stock for this many boards, basic/extended, price). "
+            "Untick to check placements only, which is faster."
+        )
+        self.stock_cb.SetValue(True)
+        vbox.Add(self.stock_cb, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
         self.table = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         for i, (title, _key, width) in enumerate(COLUMNS):
             self.table.InsertColumn(i, title, width=width)
@@ -167,6 +175,7 @@ class ProductionPanel(wx.Panel):
         self.check_btn.Enable(not busy)
         self.generate_btn.Enable(not busy)
         self.qty_spin.Enable(not busy)
+        self.stock_cb.Enable(not busy)
 
     def _on_browse(self, event):
         dlg = wx.DirDialog(self, "Choose output folder", self.dir_text.GetValue())
@@ -198,14 +207,15 @@ class ProductionPanel(wx.Panel):
         self._request_id += 1
         request_id = self._request_id
         boards = self.qty_spin.GetValue()
+        check_stock = self.stock_cb.GetValue()
         self.status.SetLabel("Checking parts...")
         threading.Thread(
             target=self._run_check,
-            args=(records, boards, request_id, generate),
+            args=(records, boards, request_id, generate, check_stock),
             daemon=True,
         ).start()
 
-    def _run_check(self, records, boards, request_id, generate):
+    def _run_check(self, records, boards, request_id, generate, check_stock):
         """Background thread: network lookups and solving."""
 
         def progress(done, total, lcsc):
@@ -220,6 +230,7 @@ class ProductionPanel(wx.Panel):
                 self._footprint_cache,
                 progress=progress,
                 on_ssl_error=self._handle_ssl_cert_error,
+                check_stock=check_stock,
             )
         except Exception as e:
             if not self._closing:

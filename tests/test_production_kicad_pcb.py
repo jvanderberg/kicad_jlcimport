@@ -130,6 +130,25 @@ class TestCli:
             self._run(monkeypatch, ["production", str(board), "--check-only"])
         assert exc.value.code == 0
 
+    def test_no_stock_skips_parts_lookup(self, tmp_path, monkeypatch, capsys):
+        import kicad_jlcimport.cli as cli
+
+        def no_lookup_caches():
+            def fail(_lcsc):
+                raise AssertionError("parts library must not be queried")
+
+            res = [PadRecord("1", -0.8, 0), PadRecord("2", 0.8, 0)]
+            return KeyedCache(fail), KeyedCache(lambda lcsc: JlcFootprint(lcsc, pads=res))
+
+        board = tmp_path / "b.kicad_pcb"
+        board.write_text(BOARD_V8)
+        monkeypatch.setattr(cli, "make_caches", no_lookup_caches)
+        monkeypatch.setattr("sys.argv", ["prog", "production", str(board), "--no-stock", "--check-only"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 0
+        assert "Stock not checked" in capsys.readouterr().out
+
     def test_tls_error_prints_insecure_hint(self, tmp_path, monkeypatch, capsys):
         import kicad_jlcimport.cli as cli
         from kicad_jlcimport.easyeda.api import SSLCertError

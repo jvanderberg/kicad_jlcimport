@@ -44,12 +44,14 @@ JLCPCB places each part using the orientation and origin of **its own EasyEDA fo
 3. The angle snaps to the nearest multiple of 90°, or to KiCad's own orientation plus a multiple of 90° (useful for parts placed at 45°), when it is within 1°. The fit residual is then recomputed.
 4. The fit is also computed with the opposite handedness. If that fit is clearly better, the pad numbering is mirrored, and the solver flags it rather than guessing.
 5. If the number-based fit is rejected (and isn't mirrored), pads are matched **by position**. This handles a JLC footprint that has been renumbered since you imported it, such as a USB-C connector whose pads became `A1B12`, `A4B9`, and so on. The pad centroids are aligned, every 90° step (and KiCad's angle plus 90° steps) is tried, and each JLC pad takes the number of the nearest board pad. The match is accepted only if exactly one numbering fits within 0.25 mm. A symmetric pattern that fits several ways round is rejected. A position match is at most medium confidence.
+6. If the fit is still rejected (pads differ too much, or the angle isn't within 1° of a 90° step), the solver's angle is **rounded to the nearest 90° step** (or KiCad's angle plus 90° steps) and used as an *estimate*. A loose fit still usually gets the orientation right, and far more often than KiCad's own angle. On a 73-part test board checked in JLCPCB's placement preview, the rounded estimate was right in 14 of 15 such cases, while KiCad's angle was right in 2 of 11. Estimates are low confidence and always come with a warning.
 
 | Confidence | Meaning | CPL uses |
 | --- | --- | --- |
 | high | RMS residual ≤ 0.05 mm and all pad numbers match | solved values |
-| medium | RMS ≤ 0.25 mm (land patterns differ slightly), some pad numbers unmatched, pads matched by position, or polarity from KiCad's convention or unresolved | solved values |
-| unverified | the fit was rejected (high residual or wrong package, mirrored numbering, mostly unmatched pads, fewer than 2 common pad numbers, orientation undetermined), or there is no LCSC number, or the lookup failed | KiCad's own pose, with a warning |
+| medium | RMS ≤ 0.25 mm (land patterns differ slightly), some pad numbers unmatched, pads matched by position, or a polarized two-pad part | solved values |
+| low | the fit was rejected (high residual, angle not near a 90° step) | the estimate (step 6), with a warning |
+| unverified | mirrored numbering, fewer than 2 common pad numbers, orientation undetermined, no LCSC number, or the lookup failed | KiCad's own pose, with a warning |
 | manual | override fields present | KiCad's pose plus your offsets |
 
 ### Polarity of two-pad parts
@@ -59,17 +61,20 @@ Two pad centres always form a symmetric pattern, so geometry can't tell a part f
 For two-pad parts the solver pairs pads by **role** (positive = anode/`+`, negative = cathode/`-`) when it can:
 
 - **JLC side:** JLC's own symbol pin names (`A`/`K`, `Anode`/`Cathode`, `+`/`-`). The symbol is only fetched for two-pad parts.
-- **Board side:** the pad's pin function, which is the schematic pin name KiCad stores on each pad (`K`, `A_2`, …), or else pad numbers that are themselves polarity names (`A`/`K`, `+`/`-`). If neither works and the pads are numbered 1 and 2, KiCad's library convention is assumed: diode/LED pad 1 = cathode, polarized capacitor pad 1 = `+`. That assumption lowers the result to medium confidence.
+- **Board side:** the pad's pin function, which is the schematic pin name KiCad stores on each pad (`K`, `A_2`, …), or else pad numbers that are themselves polarity names (`A`/`K`, `+`/`-`). If neither works and the pads are numbered 1 and 2, the footprint name decides when it says so (KiCad's `_AK` suffix means pad 1 = anode, `_KA` pad 1 = cathode). Otherwise KiCad's library convention is assumed: diode/LED pad 1 = cathode, polarized capacitor pad 1 = `+`.
 
 | JLC symbol | Board pads | Result |
 | --- | --- | --- |
 | no polarity names (e.g. pins `1`/`2`) | any | paired by number, with a note to check polarity |
-| polarity names | pin names or pad numbers with polarity | paired by role, confidence unchanged |
-| polarity names | numbered 1/2, no names | paired by role using KiCad's convention, medium |
+| polarity names | pin names or pad numbers with polarity | paired by role, medium, **warning** to check polarity |
+| polarity names | numbered 1/2, `_AK`/`_KA` footprint name | paired by role from the name, medium, **warning** to check polarity |
+| polarity names | numbered 1/2, no names | paired by role using KiCad's convention, medium, **warning** to check polarity |
 | polarity names | other numbering, no names | paired by number, medium, **warning** to check orientation |
 | symbol couldn't be fetched | any | paired by number, medium, **warning** to check orientation (**Check** tries the symbol again) |
 
 When pairing by role turns out to be the reverse of the pad numbering, the report says so ("JLC numbers this part's pads the other way round").
+
+Every polarized two-pad part gets the "check its polarity in JLC's placement preview" warning, because JLC's own symbol pin names sometimes contradict how JLCPCB places the part. In the preview tests, two of the parts (C64872, an SMAF diode, and C2900159, a PLCC-2 LED) had pin names the wrong way round. JLC's footprint silkscreen was checked as an alternative source and doesn't reliably mark the cathode either. JLC parts whose pins are named `A`/`C` are not read as anode/cathode: on the parts tested, that reading put every one of them on backwards.
 
 ## Manual overrides
 

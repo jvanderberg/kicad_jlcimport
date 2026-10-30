@@ -216,7 +216,9 @@ def cmd_production(args):
 
     part_cache, footprint_cache = make_caches()
     try:
-        report = run_check(footprints, args.boards, part_cache, footprint_cache, progress=progress)
+        report = run_check(
+            footprints, args.boards, part_cache, footprint_cache, progress=progress, check_stock=not args.no_stock
+        )
     except SSLCertError as e:
         print(file=sys.stderr)
         print(f"  Error: {e}")
@@ -331,6 +333,11 @@ examples:
     pp.add_argument("-o", "--output", help="Output directory (default: <project>/production)")
     pp.add_argument("--check-only", action="store_true", help="Only run the check; exit 1 if there are errors")
     pp.add_argument("--force", action="store_true", help="Write files even when the check reports errors")
+    pp.add_argument(
+        "--no-stock",
+        action="store_true",
+        help="Skip the stock/price lookup (faster; placements are still solved)",
+    )
     pp.set_defaults(func=cmd_production)
 
     args = parser.parse_args()

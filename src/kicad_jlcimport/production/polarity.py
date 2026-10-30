@@ -35,11 +35,9 @@ POLARIZED = "polarized"  # +/- naming
 NOT_POLARIZED = ""  # not a two-pad part with polarity names on JLC's symbol
 BY_NAMES = "names"
 BY_CONVENTION = "convention"
+BY_FOOTPRINT_NAME = "footprint_name"  # KiCad's _AK / _KA suffix
 UNRESOLVED = "unresolved"
 NAMES_UNAVAILABLE = "names_unavailable"  # two-pad part, but JLC's symbol could not be fetched
-
-# Sources that rest on an assumption or on nothing: the fit is at most MEDIUM.
-UNCERTAIN_SOURCES = (BY_CONVENTION, UNRESOLVED, NAMES_UNAVAILABLE)
 
 _ROLE_TOKENS: Dict[str, Tuple[str, str]] = {
     "A": (POSITIVE, DIODE),
@@ -56,6 +54,19 @@ _ROLE_TOKENS: Dict[str, Tuple[str, str]] = {
 
 # Role of pad 1 in KiCad's library symbols, by kind of part.
 _KICAD_PAD1_ROLE = {DIODE: NEGATIVE, POLARIZED: POSITIVE}
+
+# KiCad footprint names state the pad order of some LEDs/diodes: "..._AK" means
+# pad 1 = anode, pad 2 = cathode (e.g. LED_PLCC-2_3.4x3.0mm_AK).
+_PAD_ORDER_RE = re.compile(r"(?:^|_)(AK|KA)(?:_|$)", re.IGNORECASE)
+
+
+def footprint_name_roles(footprint_name: str) -> Dict[str, str]:
+    """Pad roles stated by an _AK / _KA footprint name, else {}."""
+    m = _PAD_ORDER_RE.search(footprint_name or "")
+    if not m:
+        return {}
+    first = POSITIVE if m.group(1).upper() == "AK" else NEGATIVE
+    return {"1": first, "2": NEGATIVE if first == POSITIVE else POSITIVE}
 
 
 def pin_role(name: str) -> Optional[Tuple[str, str]]:
@@ -111,11 +122,14 @@ def match_polarity(
     jlc_pads: Sequence[PadRecord],
     jlc_pin_names: Dict[str, str],
     names_error: str = "",
+    footprint_name: str = "",
 ) -> PolarityMatch:
     """Renumber *jlc_pads* so each JLC pad shares a number with the board pad of the same polarity.
 
     *names_error* is set when JLC's symbol could not be fetched; a two-pad
     part then gets ``NAMES_UNAVAILABLE`` rather than silently pairing by number.
+    *footprint_name* is the board footprint's name, whose _AK / _KA suffix
+    beats KiCad's generic pad-1 convention.
     """
     unchanged = PolarityMatch(jlc_pads=list(jlc_pads))
     board_nums = _numbers(board_pads)
@@ -137,6 +151,9 @@ def match_polarity(
 
     board_roles = _board_roles(board_pads, board_nums)
     source = BY_NAMES
+    if not board_roles and set(board_nums) == {"1", "2"}:
+        board_roles = footprint_name_roles(footprint_name)
+        source = BY_FOOTPRINT_NAME
     if not board_roles:
         if set(board_nums) != {"1", "2"}:
             return PolarityMatch(jlc_pads=list(jlc_pads), source=UNRESOLVED, kind=kind)
