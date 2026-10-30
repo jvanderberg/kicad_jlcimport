@@ -645,6 +645,7 @@ class TestStructuredSummary:
         assert sections["Order"]["Assembly"] == "One side"
         assert sections["Order"]["Parts cost (excl. fees)"].startswith("$")
         assert sections["Fees"]["Extended (loading fee)"] == "1"
+        assert sections["Fees"]["Loading fees (est.)"] == "$3.00"
         assert "High confidence" in sections["Placements"]
 
     def test_summary_sections_without_stock(self):

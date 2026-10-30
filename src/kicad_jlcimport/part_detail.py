@@ -10,7 +10,7 @@ import io
 import math
 import threading
 import webbrowser
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import wx
 
@@ -209,8 +209,10 @@ class PartDetailPanel(wx.Panel):
     certificate failure.
     """
 
-    def __init__(self, parent, on_ssl_error: Optional[Callable[[], None]] = None):
+    def __init__(self, parent, on_ssl_error: Optional[Callable[[], None]] = None, show_notes: bool = False):
         super().__init__(parent)
+        self._show_notes = show_notes
+        self._notes: List[Tuple[Optional[wx.Colour], str]] = []
         self._on_ssl_error = on_ssl_error
         self._closing = False
         self._request_id = 0
@@ -261,6 +263,9 @@ class PartDetailPanel(wx.Panel):
         self.description = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_NO_VSCROLL | wx.BORDER_NONE)
         self.description.SetMinSize((-1, 48))
         info.Add(self.description, 1, wx.EXPAND | wx.BOTTOM, 4)
+        # Notes about the part (the production check's findings), wrapped to the column's width.
+        self.notes_sizer = wx.BoxSizer(wx.VERTICAL)
+        info.Add(self.notes_sizer, 0, wx.EXPAND | wx.BOTTOM, 4)
         buttons = wx.BoxSizer(wx.HORIZONTAL)
         self.datasheet_btn = wx.Button(self, label="Datasheet")
         self.datasheet_btn.Bind(wx.EVT_BUTTON, lambda _e: self._open(self._datasheet_url))
@@ -270,6 +275,9 @@ class PartDetailPanel(wx.Panel):
         buttons.Add(self.page_btn, 0)
         info.Add(buttons, 0)
         box.Add(info, 1, wx.EXPAND | wx.ALL, 5)
+        self._info = info
+        if self._show_notes:
+            self.Bind(wx.EVT_SIZE, self._on_size)
         self.SetSizer(box)
 
     # ---------------------------------------------------------------- public
@@ -286,6 +294,33 @@ class PartDetailPanel(wx.Panel):
         self.datasheet_btn.Disable()
         self.page_btn.Disable()
         self._show_page()
+
+    def set_notes(self, notes: Sequence[Tuple[Optional[wx.Colour], str]]) -> None:
+        """Show *notes*, each ``(colour or None, text)``, under the part's facts."""
+        self._notes = list(notes)
+        self._layout_notes()
+
+    def _layout_notes(self) -> None:
+        self.notes_sizer.Clear(delete_windows=True)
+        width = max(self.GetClientSize().width - IMAGE_SIZE - 30, 160)
+        self._notes_width = width
+        for colour, text in self._notes:
+            label = wx.StaticText(self, label=text)
+            if colour is not None:
+                label.SetForegroundColour(colour)
+            label.Wrap(width)
+            self.notes_sizer.Add(label, 0, wx.BOTTOM, 3)
+        self.Layout()
+        parent = self.GetParent()
+        if parent is not None:
+            parent.Layout()
+
+    def _on_size(self, event) -> None:
+        event.Skip()
+        # Re-wrap only when the width changes (a new height alone would loop).
+        width = max(self.GetClientSize().width - IMAGE_SIZE - 30, 160)
+        if self._notes and width != getattr(self, "_notes_width", None):
+            wx.CallAfter(self._layout_notes)
 
     def show(self, lcsc: str, part: Optional[Dict[str, Any]] = None) -> None:
         """Show *lcsc*, with the facts from *part* when given, and start fetching its pictures."""

@@ -38,6 +38,10 @@ _WARNING_FLAGS = (POLARITY_UNRESOLVED, POLARITY_NAMES_UNAVAILABLE, POLARITY_JLC_
 # match how JLC places the part (or name the pins at all).
 _POLARIZED_FLAGS = (POLARITY_BY_PIN_NAMES, POLARITY_BY_FOOTPRINT_NAME, POLARITY_BY_CONVENTION, POLARITY_JLC_UNNAMED)
 
+# JLCPCB's feeder loading fee per unique Extended part on Economic PCBA (USD).
+# Fees change; the summary shows this as an estimate.
+EXTENDED_LOADING_FEE = 3.00
+
 # Fixed texts so the issue list groups them into one line each.
 ESTIMATED_TEXT = (
     "Estimated placement: pads don't closely match JLC's footprint; check its orientation in JLC's placement preview"
@@ -205,7 +209,10 @@ class ProductionReport:
             order.append(("Parts cost (excl. fees)", f"${cost:.2f}" if cost is not None else "Unknown"))
         sections = [("Order", order)]
         if not not_checked:
-            fees = [("Extended (loading fee)", str(len(self.extended_parts)))]
+            fees = [
+                ("Extended (loading fee)", str(len(self.extended_parts))),
+                ("Loading fees (est.)", f"${len(self.extended_parts) * EXTENDED_LOADING_FEE:.2f}"),
+            ]
             if self.preferred_parts:
                 fees.append(("Preferred (no fee)", str(len(self.preferred_parts))))
             if self.double_sided:

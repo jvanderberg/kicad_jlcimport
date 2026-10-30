@@ -13,6 +13,7 @@ from typing import Callable, List, Optional, Sequence
 import wx
 
 from .part_detail import PartDetailPanel
+from .production.models import natural_key
 from .production.report import ERROR, INFO, WARNING, ProductionReport, row_cells
 
 COLUMNS = [  # the last column (Notes) is stretched to fill whatever width is left
@@ -34,6 +35,24 @@ _OK_TEXT = wx.Colour(30, 140, 60)
 _MARGIN = 16
 _SUMMARY_WIDTH = 820  # the summary is a centred column at most this wide
 _START_WIDTH = 640  # the start screen's centred column
+_CARD_MIN = 200  # narrowest summary card before the cards wrap onto another row
+_CARD_GAP = 12
+
+
+HELP_TEXT = (
+    "Check JLCPCB\n"
+    "Looks up every LCSC part on the board in JLCPCB's parts library (stock for this many boards, Basic or "
+    "Extended, price) and fetches JLCPCB's own footprint for it. Each part's position and rotation are then "
+    "worked out by fitting JLCPCB's footprint onto your pads, so the placement file matches how JLCPCB "
+    "places the part.\n\n"
+    "Summary and details\n"
+    "The summary shows the order, the fees and anything that needs a look. Review details lists every part "
+    "with its notes. Polarized parts and loose fits are worth checking in JLCPCB's placement preview.\n\n"
+    "Generate\n"
+    "Writes a Gerber and drill zip, a BOM and a placement (CPL) file, ready to upload to JLCPCB, plus a "
+    'report. If a part is placed wrongly, add a "JLCPCB Rotation Offset" or "JLCPCB Position Offset" '
+    "field to its footprint and check again."
+)
 
 
 def row_colours(background: wx.Colour) -> dict:
@@ -95,86 +114,6 @@ class _Wrapped(wx.StaticText):
         self.Wrap(max(int(page_width * self.share), 80))
 
 
-class BigButton(wx.Control):
-    """A large rounded button in the system accent colour (native buttons have a fixed height on macOS).
-
-    Sends ``wx.EVT_BUTTON`` when clicked, or when focused and Return or Space is pressed.
-    """
-
-    def __init__(self, parent, label: str, size=(320, 84)):
-        super().__init__(parent, style=wx.BORDER_NONE | wx.WANTS_CHARS, size=size)
-        self.SetMinSize(size)
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        self._label = label
-        self._hover = self._pressed = False
-        font = self.GetFont().Bold()
-        font.SetPointSize(int(round(font.GetPointSize() * 1.6)))
-        self.SetFont(font)
-        self.SetCursor(wx.Cursor(wx.CURSOR_HAND))
-        self.Bind(wx.EVT_PAINT, self._on_paint)
-        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set(hover=True))
-        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set(hover=False, pressed=False))
-        self.Bind(wx.EVT_LEFT_DOWN, lambda e: self._set(pressed=True))
-        self.Bind(wx.EVT_LEFT_UP, self._on_left_up)
-        self.Bind(wx.EVT_KEY_DOWN, self._on_key)
-
-    def AcceptsFocus(self):  # noqa: N802 - wx override
-        return self.IsEnabled()
-
-    def Enable(self, enable=True):  # noqa: N802 - wx override
-        result = super().Enable(enable)
-        self.Refresh()
-        return result
-
-    def _set(self, hover=None, pressed=None):
-        if hover is not None:
-            self._hover = hover
-        if pressed is not None:
-            self._pressed = pressed
-        self.Refresh()
-
-    def _click(self):
-        if self.IsEnabled():
-            event = wx.CommandEvent(wx.wxEVT_BUTTON, self.GetId())
-            event.SetEventObject(self)
-            self.GetEventHandler().ProcessEvent(event)
-
-    def _on_left_up(self, event):
-        clicked = self._pressed and self.GetClientRect().Contains(event.GetPosition())
-        self._set(pressed=False)
-        if clicked:
-            self._click()
-
-    def _on_key(self, event):
-        if event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_SPACE):
-            self._click()
-        else:
-            event.Skip()
-
-    def _on_paint(self, _event):
-        dc = wx.AutoBufferedPaintDC(self)
-        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
-        dc.Clear()
-        gc = wx.GraphicsContext.Create(dc)
-        w, h = self.GetClientSize()
-        if self.IsEnabled():
-            colour = wx.SystemSettings.GetColour(wx.SYS_COLOUR_HIGHLIGHT)
-            if self._pressed:
-                colour = colour.ChangeLightness(85)
-            elif self._hover:
-                colour = colour.ChangeLightness(110)
-            text = wx.WHITE
-        else:
-            colour = wx.Colour(128, 128, 128)
-            text = wx.Colour(220, 220, 220)
-        gc.SetPen(wx.TRANSPARENT_PEN)
-        gc.SetBrush(wx.Brush(colour))
-        gc.DrawRoundedRectangle(0, 0, w - 1, h - 1, 12)
-        gc.SetFont(self.GetFont(), text)
-        tw, th = gc.GetTextExtent(self._label)[:2]
-        gc.DrawText(self._label, (w - tw) / 2, (h - th) / 2)
-
-
 # --------------------------------------------------------------------- start
 
 
@@ -184,15 +123,13 @@ class StartScreen(wx.Panel):
     def __init__(self, parent, out_dir: str, on_check: Callable[[], None]):
         super().__init__(parent)
         vbox = wx.BoxSizer(wx.VERTICAL)
-        vbox.Add(_heading(self, "JLCPCB production files"), 0, wx.TOP | wx.BOTTOM, _MARGIN)
-        intro = wx.StaticText(
-            self,
-            label="Check looks up every LCSC part on the board (stock, basic/extended, price) and solves each "
-            "part's placement against JLCPCB's own footprint. Then review the results and generate the "
-            "Gerbers, BOM and CPL.",
-        )
-        intro.Wrap(_START_WIDTH)
-        vbox.Add(intro, 0)
+        title = wx.BoxSizer(wx.HORIZONTAL)
+        title.Add(_heading(self, "JLCPCB production files"), 0, wx.ALIGN_CENTER_VERTICAL)
+        help_btn = wx.BitmapButton(self, bitmap=wx.ArtProvider.GetBitmap(wx.ART_HELP, wx.ART_BUTTON, (16, 16)))
+        help_btn.SetToolTip("How the check and export work")
+        help_btn.Bind(wx.EVT_BUTTON, self._on_help)
+        title.Add(help_btn, 0, wx.LEFT | wx.ALIGN_CENTER_VERTICAL, 8)
+        vbox.Add(title, 0, wx.TOP | wx.BOTTOM, _MARGIN)
 
         grid = wx.FlexGridSizer(cols=3, vgap=8, hgap=8)
         grid.AddGrowableCol(1)
@@ -226,7 +163,7 @@ class StartScreen(wx.Panel):
         vbox.Add(self.stock_cb, 0)
 
         vbox.AddStretchSpacer(1)
-        self.check_btn = BigButton(self, label="Check JLCPCB")
+        self.check_btn = wx.Button(self, label="Check JLCPCB")
         self.check_btn.Bind(wx.EVT_BUTTON, lambda _e: on_check())
         vbox.Add(self.check_btn, 0, wx.ALIGN_CENTER_HORIZONTAL)
         self.gauge = wx.Gauge(self, range=1, size=(360, -1))
@@ -259,6 +196,9 @@ class StartScreen(wx.Panel):
         self.gauge.SetValue(min(done, max(total, 1)))
         self.progress.SetLabel(f"Checking part {done} of {total} ({lcsc})")
         self.Layout()
+
+    def _on_help(self, _event) -> None:
+        wx.MessageDialog(self, HELP_TEXT, "JLCPCB production files", wx.OK | wx.ICON_INFORMATION).ShowModal()
 
     def _on_browse(self, _event) -> None:
         dlg = wx.DirDialog(self, "Choose output folder", self.dir_text.GetValue())
@@ -307,8 +247,9 @@ class SummaryScreen(wx.ScrolledWindow):
         folder = f"Files go to {out_dir}" if out_dir else "Choose an output folder on the start screen."
         col.Add(self._wrap(folder, 1.0), 0, wx.BOTTOM, _MARGIN)
 
-        cards = wx.BoxSizer(wx.HORIZONTAL)
-        for i, (name, rows) in enumerate(report.summary_sections()):
+        cards = wx.WrapSizer(wx.HORIZONTAL)
+        self._cards = []
+        for name, rows in report.summary_sections():
             box = wx.StaticBoxSizer(wx.VERTICAL, self, name)
             grid = wx.FlexGridSizer(cols=2, vgap=6, hgap=12)
             grid.AddGrowableCol(0)
@@ -318,7 +259,7 @@ class SummaryScreen(wx.ScrolledWindow):
                 strong.SetFont(strong.GetFont().Bold())
                 grid.Add(strong, 0, wx.ALIGN_RIGHT)
             box.Add(grid, 1, wx.EXPAND | wx.ALL, 10)
-            cards.Add(box, 1, wx.EXPAND | (wx.LEFT if i else 0), 12)
+            self._cards.append(cards.Add(box, 0, wx.EXPAND | wx.RIGHT | wx.BOTTOM, _CARD_GAP))
         col.Add(cards, 0, wx.EXPAND | wx.BOTTOM, _MARGIN)
 
         groups = report.issue_groups()
@@ -366,6 +307,13 @@ class SummaryScreen(wx.ScrolledWindow):
         width = max(width, 400)
         if getattr(self, "_column", None) is not None:
             self._column.SetMinSize((width, -1))
+        cards = getattr(self, "_cards", [])
+        if cards:
+            # As many cards per row as fit at a readable width; the rest wrap to the next row.
+            per_row = max(1, min(len(cards), (width + _CARD_GAP) // (_CARD_MIN + _CARD_GAP)))
+            card_width = (width - per_row * _CARD_GAP) // per_row
+            for item in cards:
+                item.SetMinSize((card_width, -1))
         for label in self._wrapped:
             label.rewrap(width)
         self.FitInside()
@@ -386,11 +334,14 @@ def _part_count(refs: Sequence[str]) -> str:
 
 
 class DetailsScreen(wx.Panel):
-    """Every part in a full-width list; the selected part (picture, facts, notes) below it."""
+    """Every part in a full-width, sortable list; the selected part (picture, facts, notes) below it."""
 
     def __init__(self, parent, on_cancel: Callable[[], None], on_generate: Callable[[], None], on_ssl_error=None):
         super().__init__(parent)
         self._report: Optional[ProductionReport] = None
+        self._order: List[int] = []  # report row index shown on each table line
+        self._sort_col = -1
+        self._ascending = True
         vbox = wx.BoxSizer(wx.VERTICAL)
         self.title = _heading(self, "Parts")
         cancel = wx.Button(self, label="Cancel")
@@ -405,25 +356,32 @@ class DetailsScreen(wx.Panel):
             self.table.InsertColumn(i, title, width=width)
         self.table.Bind(wx.EVT_SIZE, self._on_table_size)
         self.table.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_row_selected)
+        self.table.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
         vbox.Add(self.table, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, _MARGIN)
 
-        detail = wx.BoxSizer(wx.HORIZONTAL)
-        self.part_detail = PartDetailPanel(self, on_ssl_error=on_ssl_error)
-        detail.Add(self.part_detail, 0, wx.EXPAND)
-        notes_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Notes")
-        self.notes = notes_box.GetStaticBox()
-        self.notes_sizer = wx.BoxSizer(wx.VERTICAL)
-        notes_box.Add(self.notes_sizer, 1, wx.EXPAND | wx.ALL, 8)
-        detail.Add(notes_box, 1, wx.EXPAND | wx.LEFT, 12)
-        vbox.Add(detail, 0, wx.EXPAND | wx.ALL, _MARGIN)
+        self.part_detail = PartDetailPanel(self, on_ssl_error=on_ssl_error, show_notes=True)
+        vbox.Add(self.part_detail, 0, wx.EXPAND | wx.ALL, _MARGIN)
         self.SetSizer(vbox)
 
     def set_report(self, report: ProductionReport) -> None:
         self._report = report
         self.title.SetLabel(f"{len(report.rows)} parts")
+        self._order = list(range(len(report.rows)))
+        if self._sort_col >= 0:
+            self._sort()
+        self._fill()
+        self.part_detail.clear()
+        self.part_detail.set_notes([(None, "Select a part to see its picture, details and notes.")])
+        self.Layout()
+
+    def shutdown(self) -> None:
+        self.part_detail.shutdown()
+
+    def _fill(self) -> None:
         self.table.DeleteAllItems()
         colours = row_colours(self.table.GetBackgroundColour())
-        for row in report.rows:
+        for index in self._order:
+            row = self._report.rows[index]
             cells = row_cells(row)
             idx = self.table.InsertItem(self.table.GetItemCount(), cells["ref"])
             for col, (_title, key, _width) in enumerate(COLUMNS[1:], start=1):
@@ -431,38 +389,39 @@ class DetailsScreen(wx.Panel):
             colour = colours.get(row.severity)
             if colour is not None:
                 self.table.SetItemBackgroundColour(idx, colour)
+
+    def _on_col_click(self, event) -> None:
+        col = event.GetColumn()
+        if self._report is None or col < 0:
+            return
+        self._ascending = not self._ascending if col == self._sort_col else True
+        self._sort_col = col
+        self._sort()
+        self._fill()
+        if hasattr(self.table, "ShowSortIndicator"):
+            self.table.ShowSortIndicator(col, self._ascending)
         self.part_detail.clear()
-        self._set_notes([("", "Select a part to see its picture, details and notes.")])
-        self.Layout()
+        self.part_detail.set_notes([(None, "Select a part to see its picture, details and notes.")])
 
-    def shutdown(self) -> None:
-        self.part_detail.shutdown()
-
-    def _set_notes(self, notes: Sequence[tuple]) -> None:
-        self.notes_sizer.Clear(delete_windows=True)
-        width = max(self.notes.GetClientSize().width - 20, 200)
-        for severity, message in notes:
-            text = f"{_SEVERITY_LABEL[severity]}: {message}" if severity in _SEVERITY_LABEL else message
-            label = wx.StaticText(self.notes, label=text)
-            if severity in _SEVERITY_TEXT:
-                label.SetForegroundColour(_SEVERITY_TEXT[severity])
-            label.Wrap(width)
-            self.notes_sizer.Add(label, 0, wx.BOTTOM, 6)
-        self.Layout()
+    def _sort(self) -> None:
+        key = COLUMNS[self._sort_col][1]
+        rows = self._report.rows
+        self._order.sort(key=lambda i: sort_key(rows[i], key), reverse=not self._ascending)
 
     def _on_row_selected(self, event) -> None:
-        idx = event.GetIndex()
-        if self._report is None or not 0 <= idx < len(self._report.rows):
+        line = event.GetIndex()
+        if self._report is None or not 0 <= line < len(self._order):
             return
-        row = self._report.rows[idx]
+        row = self._report.rows[self._order[line]]
         cells = row_cells(row)
         head = f"{cells['ref']}  {cells['value']}"
         if cells["rotation"]:
             head += f"   CPL rotation {cells['rotation']}°, confidence {cells['confidence']}"
-        notes = [("", head)] + [(i.severity, i.message) for i in row.issues]
+        notes = [(None, head)]
+        notes += [(_SEVERITY_TEXT.get(i.severity), f"{_SEVERITY_LABEL[i.severity]}: {i.message}") for i in row.issues]
         if not row.issues:
-            notes.append(("", "No issues."))
-        self._set_notes(notes)
+            notes.append((None, "No issues."))
+        self.part_detail.set_notes(notes)
         if cells["lcsc"]:
             info = row.availability.info if row.availability is not None else {}
             self.part_detail.show(cells["lcsc"], info)
@@ -474,6 +433,27 @@ class DetailsScreen(wx.Panel):
         fixed = sum(self.table.GetColumnWidth(i) for i in range(len(COLUMNS) - 1))
         notes_width = max(self.table.GetClientSize().width - fixed - 4, COLUMNS[-1][2])
         self.table.SetColumnWidth(len(COLUMNS) - 1, notes_width)
+
+
+_SEVERITY_RANK = {ERROR: 0, WARNING: 1, INFO: 2, "": 3}
+_CONFIDENCE_RANK = {"high": 0, "medium": 1, "manual": 2, "low": 3, "unverified": 4, "": 5}
+
+
+def sort_key(row, key: str):
+    """Sort key for a parts-list column: numbers as numbers, references in natural order."""
+    cells = row_cells(row)
+    if key in ("ref", "value", "lcsc"):
+        return (natural_key(cells[key]),)
+    if key == "stock":
+        stock = row.availability.stock if row.availability is not None else None
+        return (stock is None, stock or 0, cells["stock"])
+    if key == "rotation":
+        return (cells["rotation"] == "", float(cells["rotation"] or 0))
+    if key == "confidence":
+        return (_CONFIDENCE_RANK.get(cells["confidence"], 5),)
+    if key == "notes":  # worst first, then by text
+        return (_SEVERITY_RANK.get(row.severity, 3), cells["notes"])
+    return (cells[key],)
 
 
 # -------------------------------------------------------------- files written
