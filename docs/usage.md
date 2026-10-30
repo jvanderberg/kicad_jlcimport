@@ -52,7 +52,7 @@ These scripts create or activate the local virtual environment and install proje
 
 ## CLI Reference
 
-`jlcimport-cli` has two main commands: `search` and `import`.
+`jlcimport-cli` has three main commands: `search`, `import` and `production`.
 
 ### CLI Quick Index
 
@@ -63,6 +63,7 @@ These scripts create or activate the local virtual environment and install proje
 | Import to global library | `jlcimport-cli import <LCSC_ID> --global [options]` |
 | Export files only | `jlcimport-cli import <LCSC_ID> -o ./output [options]` |
 | Print generated text | `jlcimport-cli import <LCSC_ID> --show footprint|symbol|both` |
+| JLCPCB BOM/CPL + availability check | `jlcimport-cli production board.kicad_pcb [-n BOARDS] [--check-only] [--no-stock]` (see [production export](production-export.md)) |
 | Use insecure TLS mode | `jlcimport-cli --insecure <command> ...` |
 
 ### Search Examples
@@ -195,6 +196,16 @@ Settings are stored in `jlcimport.json`:
 | macOS | `~/Library/Preferences/kicad/jlcimport.json` |
 | Linux | `~/.config/kicad/jlcimport.json` |
 | Windows | `%APPDATA%\kicad\jlcimport.json` |
+
+## Download Cache
+
+Footprint and symbol data downloaded from EasyEDA is kept for a week, so the import previews, imports and production checks don't fetch the same part twice. Stock and prices are always fetched live. To get fresh footprint data sooner, delete the folder; set `JLCIMPORT_CACHE_DIR` to put it somewhere else.
+
+| OS | Path |
+| --- | --- |
+| macOS | `~/Library/Caches/kicad_jlcimport` |
+| Linux | `~/.cache/kicad_jlcimport` (or `$XDG_CACHE_HOME/kicad_jlcimport`) |
+| Windows | `%LOCALAPPDATA%\kicad_jlcimport` |
 
 ## Troubleshooting
 

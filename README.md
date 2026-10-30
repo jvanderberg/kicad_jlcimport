@@ -9,6 +9,7 @@ JLCImport is a KiCad action plugin that imports symbols, footprints, and 3D mode
 - Includes searchable part lookup with stock and type filtering.
 - Handles modern KiCad formats (8/9/10).
 - Ships with plugin, CLI, GUI, and TUI workflows.
+- **JLCPCB production files**: writes the Gerber zip, BOM and placement (CPL) file for a JLCPCB assembly order, after checking that every part is in stock and working out the rotation JLCPCB needs for each part.
 
 ![Search and details](images/search_results.png)
 
@@ -35,6 +36,16 @@ Open `PCB Editor > Tools > External Plugins > JLCImport`.
 
 If `sym-lib-table` or `fp-lib-table` is created for the first time, reopen the project once.
 
+### JLCPCB Production Files
+
+In the PCB Editor, open JLCImport and switch to the **Production Files** tab.
+
+1. Set **Boards to assemble** (and the output folder, if not `<project>/production/`).
+2. Click **Check JLCPCB**. Each part is looked up at JLCPCB (stock, Basic/Extended, price) and its placement rotation is worked out from JLCPCB's own footprint. Untick **Check stock and prices** if you only need placements.
+3. The summary shows the order, the fees, how well the placements solved, and any errors or warnings. Click **Review details** to see every part, or **Generate** to write the Gerber zip, BOM, CPL and a report.
+
+Before ordering, look at the parts the report warns about (polarized parts and estimated placements) in JLCPCB's placement preview. If a part is wrong, add a `JLCPCB Rotation Offset` (degrees) or `JLCPCB Position Offset` (`dx, dy` in mm) field to its footprint. The [production export guide](docs/production-export.md) covers the check, the overrides and the `jlcimport-cli production` command.
+
 ## CLI, GUI, And TUI
 
 This repo also ships standalone tools:
@@ -48,6 +59,7 @@ Quick examples:
 ```bash
 jlcimport-cli search "100nF 0402" -t basic
 jlcimport-cli import C427602 -p /path/to/project
+jlcimport-cli production board.kicad_pcb -n 10
 jlcimport-gui -p /path/to/project
 jlcimport-tui --kicad-version 9
 ```
@@ -95,6 +107,7 @@ On Windows with KiCad 9, symbol preview may fail if `wx.svg._nanosvg` is missing
 
 - [Full usage guide](docs/usage.md)
 - [3D model notes](docs/3d-models.md)
+- [JLCPCB production export](docs/production-export.md)
 - [Architecture overview](docs/architecture.md)
 - [Visual comparison output](https://jvanderberg.github.io/kicad_jlcimport/)
 

@@ -14,6 +14,8 @@ import urllib.request
 import warnings
 from typing import Any, Dict, List, Optional
 
+from . import disk_cache
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -395,20 +397,29 @@ def fetch_component_uuids(lcsc_id: str) -> List[Dict[str, Any]]:
 
     Returns list of dicts with 'component_uuid' keys.
     Last entry is footprint, earlier entries are symbol parts.
+    Cached on disk (see :mod:`.disk_cache`).
     """
+    cached = disk_cache.get("uuids", lcsc_id)
+    if cached:
+        return cached
     url = f"{EASYEDA_API}/products/{lcsc_id}/svgs"
     data = _get_json(url)
     if not data.get("success") or not data.get("result"):
         raise APIError(f"No component found for {lcsc_id}")
+    disk_cache.put("uuids", lcsc_id, data["result"])
     return data["result"]
 
 
 def fetch_component_data(uuid: str) -> Dict[str, Any]:
-    """Get component shape data by UUID."""
+    """Get component shape data by UUID (cached on disk, see :mod:`.disk_cache`)."""
+    cached = disk_cache.get("components", uuid)
+    if cached:
+        return cached
     url = f"{EASYEDA_API}/components/{uuid}"
     data = _get_json(url)
     if not data.get("result"):
         raise APIError(f"No data for component UUID {uuid}")
+    disk_cache.put("components", uuid, data["result"])
     return data["result"]
 
 
@@ -456,6 +467,13 @@ def search_components(
     except (urllib.error.HTTPError, urllib.error.URLError) as e:
         raise APIError(f"Search failed: {e}") from e
 
+    # A failed request can still come back as HTTP 200, with
+    # ``success: false`` and no data; that is an error, not "no results".
+    if not isinstance(raw, dict) or raw.get("success") is False or raw.get("code", 200) != 200:
+        message = raw.get("message") if isinstance(raw, dict) else None
+        code = raw.get("code") if isinstance(raw, dict) else None
+        raise APIError(f"Search failed: {message or 'JLCPCB returned an error'} (code {code})")
+
     page_info = raw.get("data") or {}
     page_info = page_info.get("componentPageInfo") or {}
     total = page_info.get("total", 0)
@@ -479,7 +497,10 @@ def search_components(
                 "category": item.get("componentTypeEn", ""),
                 "stock": item.get("stockCount", 0),
                 "type": "Basic" if item.get("componentLibraryType") == "base" else "Extended",
+                # Preferred Extended: no feeder loading fee on Economic PCBA.
+                "preferred": bool(item.get("preferredComponentFlag")),
                 "price": unit_price,
+                "price_breaks": _price_breaks(prices),
                 "description": item.get("describe", ""),
                 "url": url,
                 "datasheet": item.get("dataManualUrl", ""),
@@ -487,6 +508,34 @@ def search_components(
         )
 
     return {"total": total, "results": results}
+
+
+def _price_breaks(prices: List[Dict[str, Any]]) -> List[tuple]:
+    """Convert JLCPCB ``componentPrices`` into sorted ``(min_qty, unit_price)`` tuples."""
+    breaks = []
+    for p in prices or []:
+        price = p.get("productPrice")
+        if price is None:
+            continue
+        try:
+            breaks.append((int(p.get("startNumber") or 1), float(price)))
+        except (TypeError, ValueError):
+            continue
+    return sorted(breaks)
+
+
+def lookup_part(lcsc_id: str) -> Optional[Dict[str, Any]]:
+    """Look up a single part in the JLCPCB assembly library by exact LCSC number.
+
+    Searches for the part number and returns the result whose ``lcsc`` field
+    matches exactly (same schema as :func:`search_components` results), or
+    None when JLCPCB does not list the part.  Raises APIError on failure.
+    """
+    lcsc_id = validate_lcsc_id(lcsc_id)
+    for item in search_components(lcsc_id, page_size=10)["results"]:
+        if (item.get("lcsc") or "").upper() == lcsc_id:
+            return item
+    return None
 
 
 SZLCSC_SEARCH_API = "https://so.szlcsc.com/query/product"
