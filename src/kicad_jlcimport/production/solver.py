@@ -21,12 +21,13 @@ actual pads:
    90° step) when within :attr:`Tolerances.snap_deg`, and the residual is
    recomputed with the snapped angle.
 4. The opposite-handedness fit (mirror applied/removed) is also computed; if
-   it fits clearly better, the pad numbering is mirrored and we refuse to
-   guess.
+   it fits clearly better, the pad numbering is mirrored and the fit is
+   flagged.  :func:`match_pads_by_position` (with ``break_ties``) then
+   places such a part by pad position instead.
 5. Whatever the residual, the raw angle rounded to the nearest candidate is
    kept as an *estimate*.  A fit that is rejected (high residual, angle not
-   near a 90° step) is still usually right about the orientation, and far
-   more often right than KiCad's own angle; the placement uses it at LOW
+   near a 90° step) is still usually right about the orientation, and more
+   often right than KiCad's own angle; the placement uses it at LOW
    confidence with a warning.
 
 When the pad numbers don't line up at all (JLC renumbered its footprint,
@@ -39,7 +40,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .conventions import Point, board_to_cpl, local_to_up, normalize_angle, rotate, side_mirror
-from .models import PadRecord
+from .models import PadRecord, natural_key
 from .polarity import (
     BY_CONVENTION,
     BY_FOOTPRINT_NAME,
@@ -63,6 +64,8 @@ MIRRORED = "mirrored_numbering"
 POLARITY_BY_NUMBERING = "polarity_by_numbering"
 NOT_SNAPPED = "angle_not_snapped"
 MATCHED_BY_POSITION = "matched_by_position"
+MIRRORED_BY_POSITION = "mirrored_by_position"
+MIRRORED_ARRAY = "mirrored_array"
 POLARITY_BY_PIN_NAMES = "polarity_by_pin_names"
 POLARITY_BY_CONVENTION = "polarity_by_convention"
 POLARITY_SWAPPED = "polarity_swapped"
@@ -82,6 +85,13 @@ FLAG_TEXT = {
     POLARITY_BY_NUMBERING: "symmetric 2-terminal part: polarity relies on pad numbering only",
     NOT_SNAPPED: "solved angle is not a multiple of 90° from KiCad's; rounded to the nearest step",
     MATCHED_BY_POSITION: "pad numbers differ from the JLC footprint; pads matched by position",
+    MIRRORED_BY_POSITION: (
+        "JLC's footprint numbers the pads in mirror image of this one, so some pins can't line up whichever "
+        "way it is turned; placed by pad position (pin 1 nearest pin 1). Check the footprint and JLC's preview"
+    ),
+    MIRRORED_ARRAY: (
+        "JLC numbers this array's pads in mirror image, which doesn't change any connection; placed by pad position"
+    ),
     POLARITY_BY_PIN_NAMES: "polarity matched by pin name (anode/cathode or +/-)",
     POLARITY_BY_FOOTPRINT_NAME: "polarity from the footprint name (_AK / _KA)",
     POLARITY_BY_CONVENTION: (
@@ -379,15 +389,21 @@ def match_pads_by_position(
     side: str,
     kicad_orientation: Optional[float] = None,
     tol: Tolerances = DEFAULT_TOLERANCES,
+    break_ties: bool = False,
 ) -> Optional[List[PadRecord]]:
     """JLC's pads renamed with the board's pad numbers, matched by position.
 
     For footprints with the same pads but different numbering.  Pad centroids
     are aligned and every 90° step (and KiCad's angle plus 90° steps) is tried;
     each JLC pad takes the number of the nearest board pad.  Returns None when
-    the pad counts differ, nothing fits within ``tol.medium_rms``, or the
-    pattern fits in more than one orientation with a different numbering, in
-    which case position alone cannot tell which way round the part goes.
+    the pad counts differ or nothing fits within ``tol.medium_rms``.
+
+    A symmetric pattern can fit in more than one orientation with a different
+    numbering, and then position alone cannot tell which way round the part
+    goes: the result is None, unless *break_ties* is set.  Then the fit that
+    keeps the most pad numbers wins, and after that the one that puts JLC's
+    pin 1 nearest the board's pin 1 (used when the numbering is mirrored, so
+    no orientation keeps every number).
     """
     board = [pad for pad in board_pads if normalize_pad_number(pad.number)]
     jlc = [pad for pad in jlc_pads if normalize_pad_number(pad.number)]
@@ -406,8 +422,27 @@ def match_pads_by_position(
         if found is not None and found[1] <= tol.medium_rms:
             numbers = tuple(normalize_pad_number(board[j].number) for j in found[0])
             fits.append((found[1], numbers, found[0]))
-    if not fits or len({numbers for _, numbers, _ in fits}) > 1:
+    if not fits:
         return None
+    if len({numbers for _, numbers, _ in fits}) > 1:
+        if not break_ties:
+            return None
+        jlc_numbers = [normalize_pad_number(pad.number) for pad in jlc]
+        board_index = {normalize_pad_number(pad.number): j for j, pad in enumerate(board)}
+        first = min(jlc_numbers, key=natural_key)
+
+        def preference(fit):
+            rms, numbers, assignment = fit
+            kept = sum(1 for a, b in zip(jlc_numbers, numbers) if a == b)
+            pin1 = 0.0
+            if first in board_index:
+                lands = p[assignment[jlc_numbers.index(first)]]
+                target = p[board_index[first]]
+                pin1 = math.hypot(lands[0] - target[0], lands[1] - target[1])
+            return (-kept, round(pin1, 6), rms)
+
+        fits.sort(key=preference)
+        return [PadRecord(number=board[j].number, x=pad.x, y=pad.y) for pad, j in zip(jlc, fits[0][2])]
     _, _, assignment = min(fits)
     return [PadRecord(number=board[j].number, x=pad.x, y=pad.y) for pad, j in zip(jlc, assignment)]
 

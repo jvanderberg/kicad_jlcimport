@@ -50,8 +50,10 @@ JLCPCB places each part using the orientation and origin of **its own EasyEDA fo
 
    `t` is where JLC's footprint origin lands on the board (CPL Mid X/Y), and `phi` is the CPL rotation.
 3. The angle snaps to the nearest multiple of 90°, or to KiCad's own orientation plus a multiple of 90° (useful for parts placed at 45°), when it is within 1°. The fit residual is then recomputed.
-4. The fit is also computed with the opposite handedness. If that fit is clearly better, the pad numbering is mirrored, and the solver flags it rather than guessing.
-5. If the number-based fit is rejected (and isn't mirrored), pads are matched **by position**. This handles a JLC footprint that has been renumbered since you imported it, such as a USB-C connector whose pads became `A1B12`, `A4B9`, and so on. The pad centroids are aligned, every 90° step (and KiCad's angle plus 90° steps) is tried, and each JLC pad takes the number of the nearest board pad. The match is accepted only if exactly one numbering fits within 0.25 mm. A symmetric pattern that fits several ways round is rejected. A position match is at most medium confidence.
+4. The fit is also computed with the opposite handedness. If that fit is clearly better, JLC numbers the pads in mirror image of your footprint (clockwise where yours runs counter-clockwise, say), and no rotation pairs every number.
+5. If the number-based fit is rejected, pads are matched **by position**. This handles a JLC footprint numbered differently from yours, such as a USB-C connector whose pads are `A1B12`, `A4B9`, and so on. The pad centroids are aligned, every 90° step (and KiCad's angle plus 90° steps) is tried, and each JLC pad takes the number of the nearest board pad. The match is accepted only if exactly one numbering fits within 0.25 mm; a symmetric pattern that fits several ways round is rejected. A position match is at most medium confidence.
+
+   Mirrored numbering is the exception: a symmetric pattern is still placed, choosing the fit that keeps the most pad numbers and then the one that puts JLC's pin 1 nearest your pin 1. For resistor and capacitor arrays (KiCad `R_Array_`/`C_Array_` footprints, JLC `RES-ARRAY`/`CAP-ARRAY` parts) this is harmless, because each element joins a pad to the one opposite it whichever way the pads are numbered, so the row gets a note. Any other part gets a warning: some of its pins can't line up whichever way it is turned, so check the footprint.
 6. If the fit is still rejected (pads differ too much, fewer than half of the pad numbers match, or the angle isn't within 1° of a 90° step), the solver's angle is **rounded to the nearest 90° step** (or KiCad's angle plus 90° steps) and used as an *estimate*. A loose fit usually still gets the orientation right, and more often than KiCad's own angle does. Estimates are low confidence and always come with a warning.
 
 | Confidence | Meaning | CPL uses |
@@ -59,7 +61,7 @@ JLCPCB places each part using the orientation and origin of **its own EasyEDA fo
 | high | RMS residual ≤ 0.05 mm and all pad numbers match | solved values |
 | medium | RMS ≤ 0.25 mm (land patterns differ slightly), some pad numbers unmatched (at least half still match), pads matched by position, or a polarized part | solved values |
 | low | the fit was rejected: high residual, angle not near a 90° step, or fewer than half of the pad numbers match | the estimate (step 6), with a warning |
-| unverified | mirrored numbering, fewer than 2 common pad numbers, orientation undetermined, no LCSC number, or JLC's footprint couldn't be fetched | KiCad's own pose, with a warning |
+| unverified | mirrored numbering whose pads can't be matched by position, fewer than 2 common pad numbers, orientation undetermined, no LCSC number, or JLC's footprint couldn't be fetched | KiCad's own pose, with a warning |
 | manual | override fields present | KiCad's pose plus your offsets |
 
 ### Polarity of LEDs, diodes and polarized capacitors

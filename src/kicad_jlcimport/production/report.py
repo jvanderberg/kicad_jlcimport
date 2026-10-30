@@ -19,6 +19,7 @@ from .outputs import build_bom_rows, build_cpl_rows
 from .placement import ESTIMATED, KICAD, MANUAL, Placement, compute_placement
 from .solver import (
     MEDIUM,
+    MIRRORED_BY_POSITION,
     POLARITY_BY_CONVENTION,
     POLARITY_BY_FOOTPRINT_NAME,
     POLARITY_BY_NUMBERING,
@@ -30,7 +31,7 @@ from .solver import (
 )
 
 # Solver flags that make a solved placement a warning rather than a note.
-_WARNING_FLAGS = (POLARITY_UNRESOLVED, POLARITY_NAMES_UNAVAILABLE)
+_WARNING_FLAGS = (POLARITY_UNRESOLVED, POLARITY_NAMES_UNAVAILABLE, MIRRORED_BY_POSITION)
 # Polarized parts: worth a look, because JLC's symbol pin names don't always
 # match how JLC places the part (or name the pins at all).
 _POLARIZED_FLAGS = (POLARITY_BY_PIN_NAMES, POLARITY_BY_FOOTPRINT_NAME, POLARITY_BY_CONVENTION, POLARITY_JLC_UNNAMED)

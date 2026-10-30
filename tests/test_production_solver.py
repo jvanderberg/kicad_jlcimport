@@ -8,10 +8,12 @@ import pytest
 
 from kicad_jlcimport.kicad.footprint_writer import write_footprint
 from kicad_jlcimport.production import conventions as cv
+from kicad_jlcimport.production.cache import KeyedCache
 from kicad_jlcimport.production.jlc_footprints import JlcFootprint, jlc_footprint_from_data
 from kicad_jlcimport.production.kicad_pcb import parse_sexpr, read_board_text
 from kicad_jlcimport.production.models import FootprintRecord, PadRecord
-from kicad_jlcimport.production.placement import ESTIMATED, KICAD, SOLVED, compute_placement
+from kicad_jlcimport.production.placement import ESTIMATED, KICAD, SOLVED, compute_placement, is_isolated_array
+from kicad_jlcimport.production.report import INFO, WARNING, run_check
 from kicad_jlcimport.production.solver import (
     DEGENERATE,
     GEOMETRY_DIFFERS,
@@ -21,12 +23,15 @@ from kicad_jlcimport.production.solver import (
     LOW,
     MEDIUM,
     MIRRORED,
+    MIRRORED_ARRAY,
+    MIRRORED_BY_POSITION,
     NOT_SNAPPED,
     PAD_MISMATCH,
     POLARITY_BY_NUMBERING,
     TOO_FEW_PADS,
     describe_flags,
     group_pads,
+    match_pads_by_position,
     solve_placement,
 )
 
@@ -46,6 +51,11 @@ def angle_close(a, b, tol=1e-6):
 # ---------------------------------------------------------------------------
 # Board simulation helpers — mimic how KiCad stores and places footprints.
 # ---------------------------------------------------------------------------
+
+
+def _caches(jlc_fp):
+    part = {"stock": 1000, "type": "Basic", "price": 0.01, "price_breaks": [(1, 0.01)]}
+    return KeyedCache(lambda _l: part), KeyedCache(lambda _l: jlc_fp)
 
 
 def kicad_place(local_pads, x, y, theta, side):
@@ -451,9 +461,24 @@ class TestPlacementFallback:
         pl = compute_placement(rec, JlcFootprint("C1", pads=soic8()))
         assert pl.source == ESTIMATED and pl.rotation == pytest.approx(90.0)
 
-    def test_mirrored_is_never_estimated(self):
+    def test_mirrored_numbering_is_placed_by_pad_position_with_a_warning(self):
         mirrored = [PadRecord(p.number, -p.x, p.y) for p in soic8()]
-        pl = compute_placement(self._rec(), JlcFootprint("C1", pads=mirrored))
+        rec = self._rec()
+        rec.properties = {"Reference": "U1", "LCSC": "C1"}
+        pl = compute_placement(rec, JlcFootprint("C1", pads=mirrored))
+        assert pl.source == SOLVED and pl.confidence == MEDIUM
+        assert MIRRORED_BY_POSITION in pl.fit.flags
+        assert pl.rotation % 180 == pytest.approx(90.0)  # body along the pads, like KiCad's 90°
+        report = run_check([rec], 1, *_caches(JlcFootprint("C1", pads=mirrored)))
+        assert report.rows[0].severity == WARNING
+
+    def test_mirrored_chiral_pattern_falls_back_to_kicad(self):
+        # An L with unequal arms: its mirror image can't be turned to fit, so no position match.
+        jlc = [PadRecord("1", 0, 0), PadRecord("2", 2, 0), PadRecord("3", 0, 1)]
+        board_local = [PadRecord(p.number, -p.x, p.y) for p in jlc]
+        pads = kicad_place(board_local, 10.0, 20.0, 0.0, cv.TOP)
+        rec = FootprintRecord("U1", "V", "F", 10.0, 20.0, 0.0, pads=pads)
+        pl = compute_placement(rec, JlcFootprint("C1", pads=jlc))
         assert pl.source == KICAD and MIRRORED in pl.fit.flags
 
     def test_degenerate_fit_falls_back_to_kicad(self):
@@ -461,3 +486,74 @@ class TestPlacementFallback:
         pl = compute_placement(self._rec(), jlc)
         assert pl.source == KICAD
         assert pl.fit is not None and not pl.fit.usable
+
+
+# KiCad's R_Array_Convex_4x0402 numbers its pads counter-clockwise (1-4 down
+# the left, 5-8 up the right); JLC's C25724 numbers them clockwise, along the
+# long axis horizontally.
+KICAD_ARRAY_4X0402 = [PadRecord(str(n), -0.5, y) for n, y in zip(range(1, 5), (-0.75, -0.25, 0.25, 0.75))] + [
+    PadRecord(str(n), 0.5, y) for n, y in zip(range(5, 9), (0.75, 0.25, -0.25, -0.75))
+]
+JLC_ARRAY_4X0402 = [PadRecord(str(n), x, -0.427) for n, x in zip(range(1, 5), (-0.75, -0.25, 0.25, 0.75))] + [
+    PadRecord(str(n), x, 0.427) for n, x in zip(range(8, 4, -1), (-0.75, -0.25, 0.25, 0.75))
+]
+
+
+class TestMirroredArrays:
+    def _rec(self, theta, side=cv.TOP):
+        return FootprintRecord(
+            reference="RN1",
+            value="10k",
+            footprint="R_Array_Convex_4x0402",
+            x=20.0,
+            y=30.0,
+            orientation=theta,
+            side=side,
+            pads=kicad_place(KICAD_ARRAY_4X0402, 20.0, 30.0, theta, side),
+            properties={"Reference": "RN1", "LCSC": "C25724"},
+        )
+
+    # Checked in JLCPCB's placement preview: the body lies along the pads at every angle.
+    @pytest.mark.parametrize(
+        "theta,side,expected",
+        [
+            (0, cv.TOP, 270),
+            (90, cv.TOP, 0),
+            (180, cv.TOP, 90),
+            (270, cv.TOP, 180),
+            (0, cv.BOTTOM, 90),
+            (90, cv.BOTTOM, 0),
+        ],
+    )
+    def test_resistor_array_is_placed_along_its_pads(self, theta, side, expected):
+        jlc = JlcFootprint("C25724", title="RES-ARRAY-SMD_0402-8P-L2.0-W1.0-BL", pads=JLC_ARRAY_4X0402)
+        pl = compute_placement(self._rec(theta, side), jlc)
+        assert pl.source == SOLVED and pl.confidence == MEDIUM
+        assert MIRRORED_ARRAY in pl.fit.flags
+        assert pl.rotation == pytest.approx(expected)
+        assert (pl.x, pl.y) == (pytest.approx(20.0), pytest.approx(-30.0))
+
+    def test_array_mirror_is_a_note_not_a_warning(self):
+        jlc = JlcFootprint("C25724", title="RES-ARRAY-SMD_0402-8P-L2.0-W1.0-BL", pads=JLC_ARRAY_4X0402)
+        report = run_check([self._rec(0)], 1, *_caches(jlc))
+        assert report.rows[0].severity == INFO
+
+    def test_tie_break_keeps_each_resistor_on_its_own_pads(self):
+        # Pin 1 nearest pin 1 lands JLC pad k on board pad 9 - k: the same resistor, ends swapped.
+        renumbered = match_pads_by_position(KICAD_ARRAY_4X0402, JLC_ARRAY_4X0402, cv.TOP, 0.0, break_ties=True)
+        assert {p.number: q.number for p, q in zip(JLC_ARRAY_4X0402, renumbered)} == {
+            str(k): str(9 - k) for k in range(1, 9)
+        }
+        assert match_pads_by_position(KICAD_ARRAY_4X0402, JLC_ARRAY_4X0402, cv.TOP, 0.0) is None
+
+    @pytest.mark.parametrize(
+        "footprint,title,expected",
+        [
+            ("Resistor_SMD:R_Array_Convex_4x0402", "", True),
+            ("R_Array_Concave_4x0603", "", True),
+            ("SOIC-8", "RES-ARRAY-SMD_0402-8P", True),
+            ("SOIC-8", "SOIC-8_L4.9-W3.9", False),
+        ],
+    )
+    def test_isolated_array_names(self, footprint, title, expected):
+        assert is_isolated_array(footprint, title) is expected

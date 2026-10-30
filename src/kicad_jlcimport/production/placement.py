@@ -30,6 +30,8 @@ from .solver import (
     LOW,
     MATCHED_BY_POSITION,
     MIRRORED,
+    MIRRORED_ARRAY,
+    MIRRORED_BY_POSITION,
     FitResult,
     cap_confidence,
     describe_flags,
@@ -133,16 +135,39 @@ def kicad_placement(fp: FootprintRecord, reason: str) -> Placement:
     )
 
 
+# Resistor and capacitor arrays are isolated elements, each pad k joined to the
+# pad opposite it, so mirror-image pad numbering doesn't change any connection.
+_ARRAY_RE = re.compile(r"^(?:[RC]_Array_|(?:RES|CAP)-ARRAY)", re.IGNORECASE)
+
+
+def is_isolated_array(footprint_name: str, jlc_title: str) -> bool:
+    return bool(_ARRAY_RE.match(footprint_name.split(":")[-1]) or _ARRAY_RE.match(jlc_title or ""))
+
+
 def solve_against_jlc(fp: FootprintRecord, jlc_fp: JlcFootprint) -> FitResult:
-    """Fit JLC's footprint onto *fp*, pairing pads by polarity, then number, then position."""
+    """Fit JLC's footprint onto *fp*, pairing pads by polarity, then number, then position.
+
+    When JLC numbers the pads in mirror image of the board footprint, no
+    rotation pairs every number, so the pads are matched by position instead
+    (pin 1 nearest pin 1) rather than falling back to KiCad's own angle.
+    """
     polarity = match_polarity(fp.pads, jlc_fp.pads, jlc_fp.pin_names, jlc_fp.symbol_error, fp.footprint)
     fit = solve_placement(fp.pads, polarity.jlc_pads, fp.side, kicad_orientation=fp.orientation, polarity=polarity)
-    if not fit.usable and MIRRORED not in fit.flags:
-        renumbered = match_pads_by_position(fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation)
+    if not fit.usable:
+        mirrored = MIRRORED in fit.flags
+        renumbered = match_pads_by_position(
+            fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation, break_ties=mirrored
+        )
         if renumbered is not None:
             by_position = solve_placement(fp.pads, renumbered, fp.side, kicad_orientation=fp.orientation)
             if by_position.usable:
-                cap_confidence(by_position, MATCHED_BY_POSITION)
+                if not mirrored:
+                    flag = MATCHED_BY_POSITION
+                elif is_isolated_array(fp.footprint, jlc_fp.title):
+                    flag = MIRRORED_ARRAY
+                else:
+                    flag = MIRRORED_BY_POSITION
+                cap_confidence(by_position, flag)
                 fit = by_position
     return fit
 
