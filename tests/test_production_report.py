@@ -636,17 +636,19 @@ class TestStructuredSummary:
         assert any(refs[:2] == ["TP1", "TP2"] for _sev, refs, _msg in groups)
         assert report.issue_lines()[0].startswith("[ERROR] ")
 
-    def test_summary_items(self):
+    def test_summary_sections(self):
         parts = {"C1": part_info("C1", kind="Extended")}
         report = run_check([fp("U1", lcsc="C1")], 2, *caches(parts))
-        items = dict(report.summary_items())
-        assert items["Boards"] == "2" and items["Footprints"] == "1"
-        assert items["Extended parts (loading fee each)"] == "1: C1"
-        assert items["Assembly"] == "One side"
-        assert items["Estimated parts cost"].startswith("$")
+        sections = {title: dict(rows) for title, rows in report.summary_sections()}
+        assert list(sections) == ["Order", "Fees", "Placements"]
+        assert sections["Order"]["Boards"] == "2" and sections["Order"]["Footprints"] == "1"
+        assert sections["Order"]["Assembly"] == "One side"
+        assert sections["Order"]["Estimated parts cost"].startswith("$")
+        assert sections["Fees"]["Extended parts (loading fee each)"] == "1: C1"
+        assert "Solved, high confidence" in sections["Placements"]
 
-    def test_summary_items_without_stock(self):
+    def test_summary_sections_without_stock(self):
         report = run_check([fp("U1", lcsc="C1")], 1, *caches({}), check_stock=False)
-        items = dict(report.summary_items())
-        assert items["Stock and prices"] == "Not checked"
-        assert "Estimated parts cost" not in items
+        sections = {title: dict(rows) for title, rows in report.summary_sections()}
+        assert sections["Order"]["Stock and prices"] == "Not checked"
+        assert "Fees" not in sections

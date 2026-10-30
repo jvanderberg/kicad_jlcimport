@@ -38,6 +38,7 @@ src/kicad_jlcimport/
 │   └── export.py         #   Output paths and file writing helpers
 ├── production_pcbnew.py  # Thin pcbnew adapter: board → records, Gerber/drill plotting
 ├── production_panel.py   # "Production Files" tab of the plugin dialog (wxPython)
+├── production_summary.py # Its screens: start, summary, part details, files written
 ├── gui/                  # Standalone wxPython GUI
 ├── tui/                  # Terminal UI (Textual)
 ├── importer.py           # Import pipeline orchestrator
@@ -64,7 +65,7 @@ The codebase is organized in layers from top to bottom:
 ### User Interface
 
 - **`plugin.py`** — KiCad ActionPlugin registration. Defines the menu entry under Tools > External Plugins > JLCImport and spawns the dialog.
-- **`production_panel.py`** — The "Production Files" notebook tab that `JLCImportDialog` adds when it is opened with a board (PCB editor only; standalone mode has no board, so no tab): board quantity, check results table with the selected part's details (`part_detail.PartDetailPanel`, shared with the import tab), Check/Generate. `production_summary.py` draws the check summary and issue tables, on the tab and in the dialog that confirms Generate. Board reads and plotting run on the UI thread; network lookups run in a worker thread.
+- **`production_panel.py`** — The "Production Files" notebook tab that `JLCImportDialog` adds when it is opened with a board (PCB editor only; standalone mode has no board, so no tab): three full-tab screens in a `wx.Simplebook`: start (options and Check JLCPCB, with progress), summary (Cancel / Review details / Generate) and part details (Cancel / Generate). The screens live in `production_summary.py`; the details screen shows the selected part with `part_detail.PartDetailPanel`, shared with the import tab. Board reads and plotting run on the UI thread; network lookups run in a worker thread.
 - **`dialog.py`** — wxPython dialog with search input, results list, detail panel, image gallery, import options, and status log. Long-running operations (search, import, image fetch) run in background threads to keep the UI responsive.
 - **`cli.py`** — Command-line interface with `search`, `import` and `production` subcommands for scripted or batch use outside KiCad. Supports `--lib-name` for custom library names.
 - **`gui/`** — Standalone wxPython GUI for use outside KiCad. Provides the same workflow as the plugin dialog with a directory picker for project selection.

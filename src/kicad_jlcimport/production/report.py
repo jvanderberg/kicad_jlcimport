@@ -16,8 +16,9 @@ from .cache import KeyedCache
 from .jlc_footprints import JlcFootprint
 from .models import FootprintRecord, natural_key
 from .outputs import build_bom_rows, build_cpl_rows
-from .placement import ESTIMATED, KICAD, MANUAL, Placement, compute_placement
+from .placement import ESTIMATED, KICAD, MANUAL, SOLVED, Placement, compute_placement
 from .solver import (
+    HIGH,
     MEDIUM,
     MIRRORED_BY_POSITION,
     POLARITY_BY_CONVENTION,
@@ -188,31 +189,39 @@ class ProductionReport:
             for sev, refs, msg in self.issue_groups(min_severity)
         ]
 
-    def summary_items(self) -> List[Tuple[str, str]]:
-        """(label, value) pairs summarising the check, for a two-column table."""
-        n_unverified = sum(1 for p in self.placements if p.source == KICAD)
-        n_estimated = sum(1 for p in self.placements if p.source == ESTIMATED)
-        items = [
+    def summary_sections(self) -> List[Tuple[str, List[Tuple[str, str]]]]:
+        """The check summary as titled sections of (label, value) rows: Order, Fees, Placements."""
+        order = [
             ("Boards", str(self.boards)),
             ("Footprints", str(len(self.rows))),
             ("Unique LCSC parts", str(len(self.availability))),
-            ("Errors", str(self.count(ERROR))),
-            ("Warnings", str(self.count(WARNING))),
+            ("Assembly", "Both sides (needs Standard PCBA)" if self.double_sided else "One side"),
         ]
-        if any(a.status == av.NOT_CHECKED for a in self.availability.values()):
-            items.append(("Stock and prices", "Not checked"))
+        not_checked = any(a.status == av.NOT_CHECKED for a in self.availability.values())
+        if not_checked:
+            order.append(("Stock and prices", "Not checked"))
         else:
             cost = self.estimated_parts_cost()
-            items.append(("Estimated parts cost", f"${cost:.2f} (excl. fees)" if cost is not None else "Unknown"))
-            items.append(("Extended parts (loading fee each)", _count_list(self.extended_parts)))
+            order.append(("Estimated parts cost", f"${cost:.2f} (excl. fees)" if cost is not None else "Unknown"))
+        sections = [("Order", order)]
+        if not not_checked:
+            fees = [("Extended parts (loading fee each)", _count_list(self.extended_parts))]
             if self.preferred_parts:
-                items.append(("Preferred extended (no loading fee)", _count_list(self.preferred_parts)))
-        items.append(("Assembly", "Both sides (Standard PCBA)" if self.double_sided else "One side"))
-        if n_estimated:
-            items.append(("Estimated placements", f"{n_estimated} (check in JLC's preview)"))
-        if n_unverified:
-            items.append(("Unverified placements", f"{n_unverified} (KiCad position/rotation)"))
-        return items
+                fees.append(("Preferred extended (no loading fee)", _count_list(self.preferred_parts)))
+            if self.double_sided:
+                fees.append(("Both sides", "Standard PCBA charges a loading fee for every unique part"))
+            sections.append(("Fees", fees))
+        placements = self.placements
+        solved = [p for p in placements if p.source == SOLVED]
+        counts = [
+            ("Solved, high confidence", sum(1 for p in solved if p.confidence == HIGH)),
+            ("Solved, check in JLC's preview", sum(1 for p in solved if p.confidence != HIGH)),
+            ("Estimated (rounded to 90°)", sum(1 for p in placements if p.source == ESTIMATED)),
+            ("Unverified (KiCad position)", sum(1 for p in placements if p.source == KICAD)),
+            ("Manual overrides", sum(1 for p in placements if p.source == MANUAL)),
+        ]
+        sections.append(("Placements", [(label, str(n)) for i, (label, n) in enumerate(counts) if n or i == 0]))
+        return sections
 
     def to_text(self) -> str:
         """Plain-text report for the CLI and the report file."""

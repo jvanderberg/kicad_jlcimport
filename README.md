@@ -40,9 +40,9 @@ If `sym-lib-table` or `fp-lib-table` is created for the first time, reopen the p
 
 In the PCB Editor, open JLCImport and switch to the **Production Files** tab.
 
-1. Set **Boards to assemble**.
-2. Click **Check**. Each part is looked up at JLCPCB (stock, Basic/Extended, price) and its placement rotation is worked out from JLCPCB's own footprint. Rows with errors turn red and rows with warnings yellow. Untick **Check stock and prices** if you only need placements.
-3. Click **Generate**. The Gerber zip, BOM, CPL and a report are written to `<project>/production/`.
+1. Set **Boards to assemble** (and the output folder, if not `<project>/production/`).
+2. Click **Check JLCPCB**. Each part is looked up at JLCPCB (stock, Basic/Extended, price) and its placement rotation is worked out from JLCPCB's own footprint. Untick **Check stock and prices** if you only need placements.
+3. The summary shows the order, the fees, how well the placements solved, and any errors or warnings. Click **Review details** to see every part, or **Generate** to write the Gerber zip, BOM, CPL and a report.
 
 Before ordering, look at the parts the report warns about (polarized parts and estimated placements) in JLCPCB's placement preview. If a part is wrong, add a `JLCPCB Rotation Offset` (degrees) or `JLCPCB Position Offset` (`dx, dy` in mm) field to its footprint. The [production export guide](docs/production-export.md) covers the check, the overrides and the `jlcimport-cli production` command.
 
