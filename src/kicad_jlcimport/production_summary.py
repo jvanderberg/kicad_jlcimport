@@ -33,6 +33,7 @@ _SEVERITY_TEXT = {ERROR: wx.Colour(200, 40, 40), WARNING: wx.Colour(190, 120, 0)
 _OK_TEXT = wx.Colour(30, 140, 60)
 _MARGIN = 16
 _SUMMARY_WIDTH = 820  # the summary is a centred column at most this wide
+_START_WIDTH = 640  # the start screen's centred column
 
 
 def row_colours(background: wx.Colour) -> dict:
@@ -183,18 +184,15 @@ class StartScreen(wx.Panel):
     def __init__(self, parent, out_dir: str, on_check: Callable[[], None]):
         super().__init__(parent)
         vbox = wx.BoxSizer(wx.VERTICAL)
-        vbox.Add(_heading(self, "JLCPCB production files"), 0, wx.ALL, _MARGIN)
-        vbox.Add(
-            wx.StaticText(
-                self,
-                label="Check looks up every LCSC part on the board (stock, basic/extended, price) and solves each "
-                "part's placement against JLCPCB's own footprint. Then review the results and generate the "
-                "Gerbers, BOM and CPL.",
-            ),
-            0,
-            wx.LEFT | wx.RIGHT,
-            _MARGIN,
+        vbox.Add(_heading(self, "JLCPCB production files"), 0, wx.TOP | wx.BOTTOM, _MARGIN)
+        intro = wx.StaticText(
+            self,
+            label="Check looks up every LCSC part on the board (stock, basic/extended, price) and solves each "
+            "part's placement against JLCPCB's own footprint. Then review the results and generate the "
+            "Gerbers, BOM and CPL.",
         )
+        intro.Wrap(_START_WIDTH)
+        vbox.Add(intro, 0)
 
         grid = wx.FlexGridSizer(cols=3, vgap=8, hgap=8)
         grid.AddGrowableCol(1)
@@ -208,7 +206,7 @@ class StartScreen(wx.Panel):
         browse_btn = wx.Button(self, label="Browse...")
         browse_btn.Bind(wx.EVT_BUTTON, self._on_browse)
         grid.Add(browse_btn, 0)
-        vbox.Add(grid, 0, wx.EXPAND | wx.ALL, _MARGIN)
+        vbox.Add(grid, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, _MARGIN)
 
         self.refill_cb = wx.CheckBox(
             self, label="Refill zones before plotting Gerbers (changes the open board; not undoable)"
@@ -218,14 +216,14 @@ class StartScreen(wx.Panel):
             "Save the board afterwards to keep the new fills."
         )
         self.refill_cb.SetValue(True)
-        vbox.Add(self.refill_cb, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, _MARGIN)
+        vbox.Add(self.refill_cb, 0, wx.BOTTOM, 8)
         self.stock_cb = wx.CheckBox(self, label="Check stock and prices")
         self.stock_cb.SetToolTip(
             "Look up every part in the JLCPCB library (stock for this many boards, basic/extended, price). "
             "Untick to check placements only, which is faster."
         )
         self.stock_cb.SetValue(True)
-        vbox.Add(self.stock_cb, 0, wx.LEFT | wx.RIGHT, _MARGIN)
+        vbox.Add(self.stock_cb, 0)
 
         vbox.AddStretchSpacer(1)
         self.check_btn = BigButton(self, label="Check JLCPCB")
@@ -236,7 +234,13 @@ class StartScreen(wx.Panel):
         self.progress = wx.StaticText(self, label="", style=wx.ALIGN_CENTRE_HORIZONTAL)
         vbox.Add(self.progress, 0, wx.EXPAND | wx.TOP, 6)
         vbox.AddStretchSpacer(2)
-        self.SetSizer(vbox)
+        # A centred column of fixed width, however wide the window is.
+        outer = wx.BoxSizer(wx.HORIZONTAL)
+        outer.AddStretchSpacer(1)
+        outer.Add(vbox, 0, wx.EXPAND)
+        outer.AddStretchSpacer(1)
+        vbox.SetMinSize((_START_WIDTH, -1))
+        self.SetSizer(outer)
         self.set_running(False)
 
     def set_running(self, running: bool) -> None:
@@ -396,6 +400,7 @@ class DetailsScreen(wx.Panel):
         vbox.Add(_button_row(self, self.title, [cancel, generate]), 0, wx.EXPAND | wx.ALL, _MARGIN)
 
         self.table = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        self.table.SetMinSize((400, 200))  # scrolls sideways rather than widening the window
         for i, (title, _key, width) in enumerate(COLUMNS):
             self.table.InsertColumn(i, title, width=width)
         self.table.Bind(wx.EVT_SIZE, self._on_table_size)
@@ -404,12 +409,12 @@ class DetailsScreen(wx.Panel):
 
         detail = wx.BoxSizer(wx.HORIZONTAL)
         self.part_detail = PartDetailPanel(self, on_ssl_error=on_ssl_error)
-        detail.Add(self.part_detail, 3, wx.EXPAND)
+        detail.Add(self.part_detail, 0, wx.EXPAND)
         notes_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Notes")
         self.notes = notes_box.GetStaticBox()
         self.notes_sizer = wx.BoxSizer(wx.VERTICAL)
         notes_box.Add(self.notes_sizer, 1, wx.EXPAND | wx.ALL, 8)
-        detail.Add(notes_box, 2, wx.EXPAND | wx.LEFT, 12)
+        detail.Add(notes_box, 1, wx.EXPAND | wx.LEFT, 12)
         vbox.Add(detail, 0, wx.EXPAND | wx.ALL, _MARGIN)
         self.SetSizer(vbox)
 

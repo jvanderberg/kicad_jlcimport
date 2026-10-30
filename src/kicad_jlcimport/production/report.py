@@ -195,30 +195,30 @@ class ProductionReport:
             ("Boards", str(self.boards)),
             ("Footprints", str(len(self.rows))),
             ("Unique LCSC parts", str(len(self.availability))),
-            ("Assembly", "Both sides (needs Standard PCBA)" if self.double_sided else "One side"),
+            ("Assembly", "Both sides" if self.double_sided else "One side"),
         ]
         not_checked = any(a.status == av.NOT_CHECKED for a in self.availability.values())
         if not_checked:
             order.append(("Stock and prices", "Not checked"))
         else:
             cost = self.estimated_parts_cost()
-            order.append(("Estimated parts cost", f"${cost:.2f} (excl. fees)" if cost is not None else "Unknown"))
+            order.append(("Parts cost (excl. fees)", f"${cost:.2f}" if cost is not None else "Unknown"))
         sections = [("Order", order)]
         if not not_checked:
-            fees = [("Extended parts (loading fee each)", str(len(self.extended_parts)))]
+            fees = [("Extended (loading fee)", str(len(self.extended_parts)))]
             if self.preferred_parts:
-                fees.append(("Preferred extended (no loading fee)", str(len(self.preferred_parts))))
+                fees.append(("Preferred (no fee)", str(len(self.preferred_parts))))
             if self.double_sided:
-                fees.append(("Both sides (Standard PCBA)", "Fee for every unique part"))
+                fees.append(("Both sides", "Fee on every part"))
             sections.append(("Fees", fees))
         placements = self.placements
         solved = [p for p in placements if p.source == SOLVED]
         counts = [
-            ("Solved, high confidence", sum(1 for p in solved if p.confidence == HIGH)),
-            ("Solved, check in JLC's preview", sum(1 for p in solved if p.confidence != HIGH)),
-            ("Estimated (rounded to 90°)", sum(1 for p in placements if p.source == ESTIMATED)),
-            ("Unverified (KiCad position)", sum(1 for p in placements if p.source == KICAD)),
-            ("Manual overrides", sum(1 for p in placements if p.source == MANUAL)),
+            ("High confidence", sum(1 for p in solved if p.confidence == HIGH)),
+            ("Check in preview", sum(1 for p in solved if p.confidence != HIGH)),
+            ("Estimated", sum(1 for p in placements if p.source == ESTIMATED)),
+            ("Unverified", sum(1 for p in placements if p.source == KICAD)),
+            ("Manual", sum(1 for p in placements if p.source == MANUAL)),
         ]
         sections.append(("Placements", [(label, str(n)) for i, (label, n) in enumerate(counts) if n or i == 0]))
         return sections
