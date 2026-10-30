@@ -8,6 +8,7 @@ import re
 import sys
 
 from ._fileio import atomic_write
+from ._format import escape_sexpr
 from .version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version, version_dir_name
 
 _DEFAULT_CONFIG = {"lib_name": "JLCImport", "global_lib_dir": "", "use_global": False}
@@ -16,6 +17,11 @@ _DEFAULT_CONFIG = {"lib_name": "JLCImport", "global_lib_dir": "", "use_global": 
 def _config_path() -> str:
     """Get path to the jlcimport config file."""
     return os.path.join(_kicad_config_base(), "jlcimport.json")
+
+
+def config_path() -> str:
+    """Return the path of the jlcimport.json config file."""
+    return _config_path()
 
 
 def load_config() -> dict:
@@ -57,7 +63,9 @@ def ensure_lib_structure(base_path: str, lib_name: str = "JLCImport") -> dict:
     """Create library directory structure if needed.
 
     Returns dict with paths: sym_path, fp_dir, models_dir
+    Raises LibraryNameError if *lib_name* is not a safe library name.
     """
+    lib_name = validate_lib_name(lib_name)
     sym_path = os.path.join(base_path, f"{lib_name}.kicad_sym")
     fp_dir = os.path.join(base_path, f"{lib_name}.pretty")
     models_dir = os.path.join(base_path, f"{lib_name}.3dshapes")
@@ -380,8 +388,10 @@ def _update_lib_table(table_path: str, table_type: str, lib_name: str, lib_type:
     """Add an entry to a lib-table file (global or project).
 
     Returns True if the file was newly created.
+    Raises LibraryNameError if *lib_name* is not a safe library name.
     """
-    entry = f'  (lib (name "{lib_name}")(type "{lib_type}")(uri "{uri}")(options "")(descr ""))'
+    lib_name = validate_lib_name(lib_name)
+    entry = f'  (lib (name "{lib_name}")(type "{lib_type}")(uri "{escape_sexpr(uri)}")(options "")(descr ""))'
 
     if os.path.exists(table_path):
         with open(table_path, encoding="utf-8") as f:
@@ -397,7 +407,9 @@ def _update_lib_table(table_path: str, table_type: str, lib_name: str, lib_type:
         return True
 
 
-_WINDOWS_RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$", re.IGNORECASE)
+_WINDOWS_RESERVED = re.compile(
+    r"^(CON|PRN|AUX|NUL|COM[0-9\u00b9\u00b2\u00b3]|LPT[0-9\u00b9\u00b2\u00b3])$", re.IGNORECASE
+)
 _LIB_ENTRY_RE = re.compile(
     r'\(lib\s+\(name\s+"([^"]+)"\)\s*\(type\s+"([^"]+)"\)\s*\(uri\s+"([^"]+)"\)',
     re.IGNORECASE,
@@ -829,6 +841,42 @@ def find_best_matching_footprint(
     if best is None:
         return None
     return f"{best[1]}:{best[2]}"
+
+
+class LibraryNameError(ValueError):
+    """The configured library name can't be used safely."""
+
+
+_LIB_NAME_BAD_CHARS = set('/\\:"<>|?*')
+
+
+def validate_lib_name(lib_name: str) -> str:
+    """Return *lib_name* stripped of surrounding whitespace, or raise LibraryNameError.
+
+    The name becomes a KiCad library nickname, part of ``Lib:Footprint``
+    references, and the stem of the .kicad_sym/.pretty/.3dshapes paths, so it
+    must be a single safe filename on every OS.  Names are never silently
+    rewritten: a renamed library would point imports somewhere unexpected.
+    """
+    if lib_name is not None and not isinstance(lib_name, str):
+        raise LibraryNameError(f"Library name must be text, not {type(lib_name).__name__}.")
+    name = (lib_name or "").strip()
+    if not name:
+        raise LibraryNameError("Library name is empty.")
+    for ch in name:
+        if ch in _LIB_NAME_BAD_CHARS or ord(ch) < 32 or ord(ch) == 127:
+            shown = repr(ch) if ch.isprintable() else f"control character {ch!r}"
+            raise LibraryNameError(
+                f"Library name {name!r} contains {shown}, which can't be used in a KiCad library name or file name."
+            )
+    if "${" in name or "$(" in name:
+        raise LibraryNameError(f"Library name {name!r} contains a KiCad variable reference ('${{' or '$(').")
+    if name in (".", "..") or name.endswith("."):
+        raise LibraryNameError(f"Library name {name!r} can't be '.' or '..', or end with '.'.")
+    # Windows treats "CON", "CON.txt" and "CON .x" all as the console device.
+    if _WINDOWS_RESERVED.match(name.split(".")[0].rstrip(" ")):
+        raise LibraryNameError(f"Library name {name!r} starts with a reserved device name on Windows.")
+    return name
 
 
 def sanitize_name(title: str) -> str:

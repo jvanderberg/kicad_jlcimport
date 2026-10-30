@@ -27,7 +27,14 @@ from .easyeda.api import (
 from .gui.symbol_renderer import has_svg_support, render_svg_bitmap
 from .importer import import_component
 from .kicad.footprint_parser import _parse_kicad_mod
-from .kicad.library import SymbolLibraryError, get_global_lib_dir, load_config, save_config
+from .kicad.library import (
+    LibraryNameError,
+    SymbolLibraryError,
+    get_global_lib_dir,
+    load_config,
+    save_config,
+    validate_lib_name,
+)
 from .kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
 
 
@@ -1652,15 +1659,31 @@ class JLCImportDialog(wx.Dialog):
 
     def _on_lib_name_change(self, event):
         """Persist library name when the input loses focus."""
+        self._commit_lib_name()
+        event.Skip()
+
+    def _commit_lib_name(self) -> bool:
+        """Validate and persist the Library field; return False if it is invalid.
+
+        An invalid name is reported and left in the field for the user to
+        correct, but never saved or used.  An empty field reverts to the
+        current name.
+        """
         new_name = self.lib_name_input.GetValue().strip()
-        if new_name and new_name != self._lib_name:
+        if not new_name:
+            self.lib_name_input.SetValue(self._lib_name)
+            return True
+        try:
+            new_name = validate_lib_name(new_name)
+        except LibraryNameError as e:
+            self._log(f"Error: {e}")
+            return False
+        if new_name != self._lib_name:
             self._lib_name = new_name
             config = load_config()
             config["lib_name"] = new_name
             save_config(config)
-        elif not new_name:
-            self.lib_name_input.SetValue(self._lib_name)
-        event.Skip()
+        return True
 
     def _update_version_visibility(self):
         """Show KiCad version dropdown only when using the default 3rd-party directory."""
@@ -2617,6 +2640,8 @@ class JLCImportDialog(wx.Dialog):
         self.detail_image.SetBitmap(_no_footprint_placeholder(160, not has_svg_support()))
 
     def _on_import(self, event):
+        if not self._commit_lib_name():
+            return
         if not self._selected_result:
             self._log("Error: Select a search result first")
             return
@@ -2662,7 +2687,7 @@ class JLCImportDialog(wx.Dialog):
             if not self._closing:
                 _dispatched = True
                 wx.CallAfter(self._on_import_error, f"API Error: {e}")
-        except SymbolLibraryError as e:
+        except (SymbolLibraryError, LibraryNameError) as e:
             if not self._closing:
                 _dispatched = True
                 wx.CallAfter(self._on_import_error, f"Error: {e}")
