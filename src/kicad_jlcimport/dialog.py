@@ -36,6 +36,10 @@ from .kicad.library import (
     validate_lib_name,
 )
 from .kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
+from .part_detail import PageIndicator as _PageIndicator
+from .part_detail import no_easyeda_placeholder as _no_easyeda_placeholder
+from .part_detail import no_footprint_placeholder as _no_footprint_placeholder
+from .part_detail import no_image_bitmap, skeleton_bitmap, thumbnail_bitmap
 
 
 class _CategoryPopup(wx.PopupWindow):
@@ -137,128 +141,6 @@ class _CategoryPopup(wx.PopupWindow):
                 self._on_select()
 
 
-def _no_footprint_placeholder(size: int, svg_unsupported: bool) -> wx.Bitmap:
-    """Create a placeholder bitmap for the footprint preview.
-
-    When *svg_unsupported* is True, shows a message explaining the platform
-    limitation.  Otherwise draws simple pad outlines as a generic icon.
-    """
-    bmp = wx.Bitmap(size, size)
-    dc = wx.MemoryDC(bmp)
-    dc.SetBackground(wx.Brush(wx.Colour(248, 248, 248)))
-    dc.Clear()
-
-    if svg_unsupported:
-        dc.SetTextForeground(wx.Colour(140, 140, 140))
-        font = dc.GetFont()
-        font.SetPointSize(max(8, size // 18))
-        dc.SetFont(font)
-        msg = "Footprint preview\nnot supported\non this platform"
-        tw, th = dc.GetMultiLineTextExtent(msg)[:2]
-        dc.DrawText(msg, (size - tw) // 2, (size - th) // 2)
-    else:
-        # Simple pad-outline icon
-        dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), max(1, size // 80)))
-        dc.SetBrush(wx.TRANSPARENT_BRUSH)
-        cx, cy = size // 2, size // 2
-        pw, ph = max(20, size // 8), max(12, size // 14)
-        gap = max(16, size // 6)
-        dc.DrawRoundedRectangle(cx - gap // 2 - pw, cy - gap // 2 - ph, pw, ph, 3)
-        dc.DrawRoundedRectangle(cx - gap // 2 - pw, cy + gap // 2, pw, ph, 3)
-        dc.DrawRoundedRectangle(cx + gap // 2, cy - gap // 2 - ph, pw, ph, 3)
-        dc.DrawRoundedRectangle(cx + gap // 2, cy + gap // 2, pw, ph, 3)
-
-    dc.SelectObject(wx.NullBitmap)
-    return bmp
-
-
-def _no_easyeda_placeholder(size: int) -> wx.Bitmap:
-    """Create a placeholder bitmap indicating no EasyEDA data is available."""
-    bmp = wx.Bitmap(size, size)
-    dc = wx.MemoryDC(bmp)
-    dc.SetBackground(wx.Brush(wx.Colour(248, 248, 248)))
-    dc.Clear()
-    dc.SetTextForeground(wx.Colour(160, 100, 100))
-    font = dc.GetFont()
-    font.SetPointSize(max(8, size // 16))
-    dc.SetFont(font)
-    msg = "No EasyEDA data\navailable for\nthis part"
-    tw, th = dc.GetMultiLineTextExtent(msg)[:2]
-    dc.DrawText(msg, (size - tw) // 2, (size - th) // 2)
-    dc.SelectObject(wx.NullBitmap)
-    return bmp
-
-
-class _PageIndicator(wx.Control):
-    """Owner-drawn two-dot page indicator for switching between photo and symbol views."""
-
-    DOT_RADIUS = 4
-    DOT_GAP = 12
-
-    def __init__(self, parent, on_page_change=None):
-        super().__init__(
-            parent,
-            style=wx.BORDER_NONE,
-            size=(2 * self.DOT_GAP + 2 * self.DOT_RADIUS, 2 * self.DOT_RADIUS + 4),
-        )
-        self._page = 0
-        self._num_pages = 2
-        self._on_page_change = on_page_change
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
-        self.Bind(wx.EVT_PAINT, self._on_paint)
-        self.Bind(wx.EVT_LEFT_DOWN, self._on_click)
-
-    def set_page(self, page: int):
-        if page != self._page and 0 <= page < self._num_pages:
-            self._page = page
-            self.Refresh()
-
-    def _dot_positions(self):
-        w, h = self.GetClientSize()
-        total = (self._num_pages - 1) * self.DOT_GAP
-        start_x = (w - total) // 2
-        cy = h // 2
-        return [(start_x + i * self.DOT_GAP, cy) for i in range(self._num_pages)]
-
-    def _on_paint(self, event):
-        dc = wx.AutoBufferedPaintDC(self)
-        bg = self.GetParent().GetBackgroundColour()
-        dc.SetBackground(wx.Brush(bg))
-        dc.Clear()
-        # Selected dot should contrast strongly with background:
-        # dark dot on light bg, light dot on dark bg
-        lum = (bg.Red() * 299 + bg.Green() * 587 + bg.Blue() * 114) // 1000
-        if lum >= 128:
-            active_colour = wx.Colour(80, 80, 80)
-            inactive_colour = wx.Colour(200, 200, 200)
-        else:
-            active_colour = wx.Colour(200, 200, 200)
-            inactive_colour = wx.Colour(80, 80, 80)
-        dc.SetPen(wx.TRANSPARENT_PEN)
-        for i, (cx, cy) in enumerate(self._dot_positions()):
-            if i == self._page:
-                dc.SetBrush(wx.Brush(active_colour))
-            else:
-                dc.SetBrush(wx.Brush(inactive_colour))
-            dc.DrawCircle(cx, cy, self.DOT_RADIUS)
-
-    def _on_click(self, event):
-        x = event.GetX()
-        positions = self._dot_positions()
-        best = -1
-        best_dist = float("inf")
-        for i, (cx, _cy) in enumerate(positions):
-            dist = abs(x - cx)
-            if dist < best_dist:
-                best_dist = dist
-                best = i
-        if best >= 0 and best != self._page:
-            self._page = best
-            self.Refresh()
-            if self._on_page_change:
-                self._on_page_change(best)
-
-
 # KiCad layer colours — "kicad_default" dark theme, matching the PCB editor exactly.
 _LAYER_COLOURS: dict[str, tuple[int, int, int]] = {
     "F.Cu": (200, 52, 52),  # #C83434  red
@@ -284,6 +166,7 @@ _LAYER_COLOURS: dict[str, tuple[int, int, int]] = {
     "User.1": (206, 206, 206),  # #CECECE  silver
     "User.2": (160, 160, 160),  # #A0A0A0  grey
 }
+
 _DEFAULT_LAYER_COLOUR = (128, 128, 128)  # #808080  mid grey
 
 # Draw order: back layers first, front on top, pads drawn separately last
@@ -2189,23 +2072,7 @@ class JLCImportDialog(wx.Dialog):
     def _show_no_image(self):
         """Show a subtle 'no image' placeholder."""
         self._photo_bitmap = None
-        bmp = wx.Bitmap(160, 160)
-        dc = wx.MemoryDC(bmp)
-        dc.SetBackground(wx.Brush(wx.Colour(245, 245, 245)))
-        dc.Clear()
-        # Draw a subtle image icon (rectangle with mountain/sun)
-        dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), 1))
-        dc.SetBrush(wx.TRANSPARENT_BRUSH)
-        dc.DrawRoundedRectangle(55, 60, 50, 40, 4)
-        # Mountain shape
-        dc.SetPen(wx.Pen(wx.Colour(200, 200, 200), 1))
-        dc.DrawLine(62, 92, 80, 78)
-        dc.DrawLine(80, 78, 88, 85)
-        dc.DrawLine(88, 85, 98, 75)
-        # Sun circle
-        dc.DrawCircle(90, 70, 5)
-        dc.SelectObject(wx.NullBitmap)
-        self.detail_image.SetBitmap(bmp)
+        self.detail_image.SetBitmap(no_image_bitmap(160))
 
     def _on_skeleton_tick(self, event):
         """Advance skeleton animation."""
@@ -2216,35 +2083,7 @@ class JLCImportDialog(wx.Dialog):
 
     def _draw_skeleton_frame(self):
         """Draw one frame of the skeleton shimmer over a rounded rect."""
-
-        bmp = wx.Bitmap(160, 160)
-        dc = wx.MemoryDC(bmp)
-        dc.SetBackground(wx.Brush(wx.Colour(240, 240, 240)))
-        dc.Clear()
-
-        # Draw the base rounded rectangle
-        dc.SetPen(wx.TRANSPARENT_PEN)
-        dc.SetBrush(wx.Brush(wx.Colour(225, 225, 225)))
-        dc.DrawRoundedRectangle(4, 4, 152, 152, 6)
-
-        # Shimmer: a soft gradient band sweeping left to right
-        phase = self._skeleton_phase
-        band_center = phase - 50  # range: -50 to 150
-        band_width = 60
-
-        for x in range(4, 156):
-            dist = abs(x - band_center)
-            if dist < band_width // 2:
-                # Smooth falloff using cosine
-                t = dist / (band_width / 2.0)
-                alpha = int(25 * (1 + math.cos(t * math.pi)) / 2)
-                if alpha > 0:
-                    c = min(255, 225 + alpha)
-                    dc.SetPen(wx.Pen(wx.Colour(c, c, c), 1))
-                    dc.DrawLine(x, 4, x, 156)
-
-        dc.SelectObject(wx.NullBitmap)
-        self.detail_image.SetBitmap(bmp)
+        self.detail_image.SetBitmap(skeleton_bitmap(self._skeleton_phase, 160))
 
     def _on_image_click(self, event):
         """Open gallery view for the current selection."""
@@ -2592,29 +2431,15 @@ class JLCImportDialog(wx.Dialog):
                 self._show_no_image()
             self._relayout()
             return
-        try:
-            stream = io.BytesIO(img_data)
-            img = wx.Image(stream, type=wx.BITMAP_TYPE_JPEG)
-            if not img.IsOk():
-                img = wx.Image(io.BytesIO(img_data), type=wx.BITMAP_TYPE_PNG)
-            if img.IsOk():
-                self._full_image_data = img_data
-                thumb = img.Scale(160, 160, wx.IMAGE_QUALITY_HIGH)
-                self._photo_bitmap = wx.Bitmap(thumb)
-                if self._detail_page == 0:
-                    self.detail_image.SetBitmap(self._photo_bitmap)
+        thumb = thumbnail_bitmap(img_data, 160)
+        self._full_image_data = img_data if thumb else None
+        self._photo_bitmap = thumb
+        if self._detail_page == 0:
+            if thumb:
+                self.detail_image.SetBitmap(thumb)
             else:
-                self._full_image_data = None
-                self._photo_bitmap = None
-                if self._detail_page == 0:
-                    self._show_no_image()
-            self._relayout()
-        except Exception:
-            self._full_image_data = None
-            self._photo_bitmap = None
-            if self._detail_page == 0:
                 self._show_no_image()
-            self._relayout()
+        self._relayout()
 
     def _fetch_footprint_svg(self, lcsc_id, request_id):
         """Background thread: fetch footprint SVG from the API."""

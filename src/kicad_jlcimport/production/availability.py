@@ -53,6 +53,7 @@ class Availability:
     unit_price: Optional[float] = None  # at the price tier for qty_needed
     description: str = ""
     message: str = ""
+    info: Dict[str, Any] = field(default_factory=dict)  # the part lookup result (brand, package, URLs, ...)
 
     @property
     def is_extended(self) -> bool:
@@ -102,7 +103,7 @@ def evaluate(lcsc: str, refs: List[str], boards: int, info: Optional[Dict[str, A
     """Turn a lookup result (``api.lookup_part`` dict or None) into an :class:`Availability`."""
     per_board = len(refs)
     needed = per_board * max(boards, 1)
-    av = Availability(lcsc=lcsc, references=list(refs), qty_per_board=per_board, qty_needed=needed)
+    av = Availability(lcsc=lcsc, references=list(refs), qty_per_board=per_board, qty_needed=needed, info=info or {})
     if info is None:
         av.status = NOT_FOUND
         av.message = STATUS_TEXT[NOT_FOUND]

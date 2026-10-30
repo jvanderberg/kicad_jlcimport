@@ -14,6 +14,7 @@ import traceback
 import wx
 
 from . import production_pcbnew as adapter
+from .part_detail import PartDetailPanel
 from .production.export import board_basename, default_output_dir, make_caches, resolve_output_dir, write_bom_cpl
 from .production.placement import POSITION_OFFSET_FIELD, ROTATION_OFFSET_FIELD
 from .production.report import ERROR, WARNING, row_cells, run_check
@@ -38,9 +39,6 @@ _DARK_ROW_COLOURS = {
     ERROR: wx.Colour(115, 35, 35),
     WARNING: wx.Colour(105, 80, 15),
 }
-
-# Generate's confirmation lists at most this many issue lines.
-_MAX_PROMPT_ISSUES = 12
 
 
 def _row_colours(background):
@@ -71,6 +69,7 @@ class ProductionPanel(wx.Panel):
         self._busy = False
         self._request_id = 0
         self._report = None
+        self._pending = None  # (report, records) waiting for Continue / Cancel after Generate's check
         self._part_cache, self._footprint_cache = make_caches()
         board_file = adapter.board_path(board)
         self._default_dir = default_output_dir(board_file) if board_file else ""
@@ -92,6 +91,7 @@ class ProductionPanel(wx.Panel):
         """Invalidate in-flight checks so their CallAfter callbacks no-op."""
         self._closing = True
         self._request_id += 1
+        self.part_detail.shutdown()
 
     # ------------------------------------------------------------------ UI
 
@@ -138,9 +138,14 @@ class ProductionPanel(wx.Panel):
         self.table.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_row_selected)
         vbox.Add(self.table, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
-        self.details = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 75))
-        self.details.SetValue("Select a row to see all of its notes.")
-        vbox.Add(self.details, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        # Selected row: the part (photo / footprint, facts, links) beside all of its notes.
+        detail_box = wx.BoxSizer(wx.HORIZONTAL)
+        self.part_detail = PartDetailPanel(panel, on_ssl_error=self._handle_ssl_cert_error)
+        detail_box.Add(self.part_detail, 3, wx.EXPAND)
+        self.details = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.details.SetValue("Select a row to see the part and all of its notes.")
+        detail_box.Add(self.details, 2, wx.EXPAND | wx.LEFT, 8)
+        vbox.Add(detail_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
         self.summary = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
         self.summary.SetValue(
@@ -160,6 +165,15 @@ class ProductionPanel(wx.Panel):
         self.generate_btn = wx.Button(panel, label="Generate")
         self.generate_btn.Bind(wx.EVT_BUTTON, self._on_generate)
         hbox.Add(self.generate_btn, 0, wx.LEFT, 6)
+        # Shown after Generate's check, so the results can be reviewed first.
+        self.cancel_btn = wx.Button(panel, label="Cancel")
+        self.cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_generate)
+        hbox.Add(self.cancel_btn, 0, wx.LEFT, 6)
+        self.continue_btn = wx.Button(panel, label="Continue")
+        self.continue_btn.Bind(wx.EVT_BUTTON, self._on_continue_generate)
+        hbox.Add(self.continue_btn, 0, wx.LEFT, 6)
+        self.cancel_btn.Hide()
+        self.continue_btn.Hide()
         vbox.Add(hbox, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         panel.SetSizer(vbox)
@@ -181,13 +195,30 @@ class ProductionPanel(wx.Panel):
             head += f"  |  CPL rotation {cells['rotation']}, confidence {cells['confidence']}"
         issues = [f"[{i.severity.upper()}] {i.message}" for i in row.issues] or ["No issues."]
         self.details.SetValue("\n".join([head] + issues))
+        lcsc = cells["lcsc"]
+        if lcsc:
+            info = row.availability.info if row.availability is not None else {}
+            self.part_detail.show(lcsc, info)
+        else:
+            self.part_detail.clear()
 
     def _set_busy(self, busy):
         self._busy = busy
-        self.check_btn.Enable(not busy)
-        self.generate_btn.Enable(not busy)
-        self.qty_spin.Enable(not busy)
-        self.stock_cb.Enable(not busy)
+        self._update_controls()
+
+    def _update_controls(self):
+        """Busy: nothing to click.  Waiting to generate: only Continue / Cancel."""
+        waiting = self._pending is not None
+        idle = not self._busy and not waiting
+        self.check_btn.Enable(idle)
+        self.generate_btn.Enable(idle)
+        self.qty_spin.Enable(idle)
+        self.stock_cb.Enable(idle)
+        self.check_btn.Show(not waiting)
+        self.generate_btn.Show(not waiting)
+        self.cancel_btn.Show(waiting)
+        self.continue_btn.Show(waiting)
+        self.Layout()
 
     def _on_browse(self, event):
         dlg = wx.DirDialog(self, "Choose output folder", self.dir_text.GetValue())
@@ -274,14 +305,34 @@ class ProductionPanel(wx.Panel):
             return
         self._set_busy(False)
         self._show_report(report)
-        self.status.SetLabel(f"{report.count(ERROR)} errors, {report.count(WARNING)} warnings")
+        counts = f"{report.count(ERROR)} errors, {report.count(WARNING)} warnings"
         if generate:
-            self._generate(report, records)
+            # Every board has some warnings: show the results and let the user decide.
+            self._pending = (report, records)
+            self._update_controls()
+            self.status.SetLabel(f"{counts}. Review the results, then Continue to write the files or Cancel.")
+            self.continue_btn.SetFocus()
+        else:
+            self.status.SetLabel(counts)
+
+    def _on_continue_generate(self, event):
+        if self._pending is None:
+            return
+        report, records = self._pending
+        self._pending = None
+        self._update_controls()
+        self._generate(report, records)
+
+    def _on_cancel_generate(self, event):
+        self._pending = None
+        self._update_controls()
+        self.status.SetLabel("Generation cancelled")
 
     def _show_report(self, report):
         self._report = report
         self.table.DeleteAllItems()
-        self.details.SetValue("Select a row to see all of its notes.")
+        self.details.SetValue("Select a row to see the part and all of its notes.")
+        self.part_detail.clear()
         row_colours = _row_colours(self.table.GetBackgroundColour())
         for row in report.rows:
             cells = row_cells(row)
@@ -328,22 +379,6 @@ class ProductionPanel(wx.Panel):
                 wx.OK | wx.ICON_WARNING,
             )
             return
-        errors, warnings = report.count(ERROR), report.count(WARNING)
-        if errors or warnings:
-            issues = report.issue_lines()
-            shown = issues[:_MAX_PROMPT_ISSUES]
-            if len(issues) > len(shown):
-                shown.append(f"...and {len(issues) - len(shown)} more (see the list below the table)")
-            answer = wx.MessageBox(
-                f"The check found {errors} errors and {warnings} warnings:\n\n"
-                + "\n".join(shown)
-                + "\n\nGenerate production files anyway?",
-                _TITLE,
-                wx.YES_NO | wx.ICON_WARNING,
-            )
-            if answer != wx.YES:
-                return
-
         self.status.SetLabel("Generating files...")
         wx.BeginBusyCursor()
         try:

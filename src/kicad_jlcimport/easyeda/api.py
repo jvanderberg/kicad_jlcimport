@@ -14,6 +14,8 @@ import urllib.request
 import warnings
 from typing import Any, Dict, List, Optional
 
+from . import disk_cache
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -395,20 +397,29 @@ def fetch_component_uuids(lcsc_id: str) -> List[Dict[str, Any]]:
 
     Returns list of dicts with 'component_uuid' keys.
     Last entry is footprint, earlier entries are symbol parts.
+    Cached on disk (see :mod:`.disk_cache`).
     """
+    cached = disk_cache.get("uuids", lcsc_id)
+    if cached:
+        return cached
     url = f"{EASYEDA_API}/products/{lcsc_id}/svgs"
     data = _get_json(url)
     if not data.get("success") or not data.get("result"):
         raise APIError(f"No component found for {lcsc_id}")
+    disk_cache.put("uuids", lcsc_id, data["result"])
     return data["result"]
 
 
 def fetch_component_data(uuid: str) -> Dict[str, Any]:
-    """Get component shape data by UUID."""
+    """Get component shape data by UUID (cached on disk, see :mod:`.disk_cache`)."""
+    cached = disk_cache.get("components", uuid)
+    if cached:
+        return cached
     url = f"{EASYEDA_API}/components/{uuid}"
     data = _get_json(url)
     if not data.get("result"):
         raise APIError(f"No data for component UUID {uuid}")
+    disk_cache.put("components", uuid, data["result"])
     return data["result"]
 
 

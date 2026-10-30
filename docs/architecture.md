@@ -34,7 +34,7 @@ src/kicad_jlcimport/
 │   ├── report.py         #   run_check() orchestration and report model
 │   ├── outputs.py        #   BOM/CPL rows, CSV and zip writers
 │   ├── kicad_pcb.py      #   .kicad_pcb reader for the CLI
-│   ├── cache.py          #   Thread-safe per-LCSC lookup cache
+│   ├── cache.py          #   Thread-safe per-LCSC lookup cache (in memory, per dialog)
 │   └── export.py         #   Output paths and file writing helpers
 ├── production_pcbnew.py  # Thin pcbnew adapter: board → records, Gerber/drill plotting
 ├── production_panel.py   # "Production Files" tab of the plugin dialog (wxPython)
@@ -64,7 +64,7 @@ The codebase is organized in layers from top to bottom:
 ### User Interface
 
 - **`plugin.py`** — KiCad ActionPlugin registration. Defines the menu entry under Tools > External Plugins > JLCImport and spawns the dialog.
-- **`production_panel.py`** — The "Production Files" notebook tab that `JLCImportDialog` adds when it is opened with a board (PCB editor only; standalone mode has no board, so no tab): board quantity, check results table, Check/Generate. Board reads and plotting run on the UI thread; network lookups run in a worker thread.
+- **`production_panel.py`** — The "Production Files" notebook tab that `JLCImportDialog` adds when it is opened with a board (PCB editor only; standalone mode has no board, so no tab): board quantity, check results table with the selected part's details (`part_detail.PartDetailPanel`, shared with the import tab), Check/Generate, then Continue/Cancel after Generate's check. Board reads and plotting run on the UI thread; network lookups run in a worker thread.
 - **`dialog.py`** — wxPython dialog with search input, results list, detail panel, image gallery, import options, and status log. Long-running operations (search, import, image fetch) run in background threads to keep the UI responsive.
 - **`cli.py`** — Command-line interface with `search`, `import` and `production` subcommands for scripted or batch use outside KiCad. Supports `--lib-name` for custom library names.
 - **`gui/`** — Standalone wxPython GUI for use outside KiCad. Provides the same workflow as the plugin dialog with a directory picker for project selection.
@@ -76,6 +76,7 @@ The codebase is organized in layers from top to bottom:
 
 ### `easyeda/` — EasyEDA Data Fetching & Parsing
 
+- **`easyeda/disk_cache.py`** — On-disk cache (one week) for EasyEDA component data, used by `api.fetch_component_uuids` and `api.fetch_component_data`. Best-effort: a cache that can't be read or written just means a network fetch.
 - **`easyeda/api.py`** — HTTP client that talks to the JLCPCB and EasyEDA APIs. Handles search queries, component data fetching, image scraping, and 3D model downloads. Includes SSRF protection (domain whitelist) and SSL fallback for environments with certificate issues.
 - **`easyeda/parser.py`** — Converts EasyEDA's proprietary shape strings into structured Python dataclasses. Handles coordinate conversion (mils to mm), layer mapping (EasyEDA layers to KiCad layers), and geometry calculations (arc midpoints, origin offsets).
 - **`easyeda/ee_types.py`** — Dataclasses representing parsed EasyEDA primitives: pads, tracks, arcs, pins, polygons, etc. These are the intermediate representation between parsing and writing.
@@ -92,6 +93,8 @@ The codebase is organized in layers from top to bottom:
 ### `production/` — JLCPCB Production Export
 
 Pure Python with no `pcbnew` import, so all of it is unit-tested. `production_pcbnew.py` is the only module that touches the KiCad API. It turns the live board into `FootprintRecord`s (reference, value, footprint, LCSC field, pose, side, DNP and exclusion flags, pads with board positions) and drives `PLOT_CONTROLLER` / `EXCELLON_WRITER`. Differences between KiCad versions are handled with `getattr` fallbacks. The CLI reads the same records from a `.kicad_pcb` file via `production/kicad_pcb.py`.
+
+EasyEDA component data (`api.fetch_component_uuids` / `fetch_component_data`: footprints, symbols) is also kept on disk for a week by `easyeda/disk_cache.py`, in the user cache folder (`JLCIMPORT_CACHE_DIR` overrides it); stock and prices are always fetched live.
 
 `report.run_check()` looks up each unique LCSC number in parallel through two caches: `api.lookup_part` for stock and type, and `jlc_footprints.fetch_jlc_footprint` for JLC's footprint. It then solves every placement and collects issues. Network failures become report entries: a failed parts lookup is an error (nothing about that part was checked), and a failed footprint fetch is a warning with KiCad's own pose used. The one exception is a TLS certificate failure with no `on_ssl_error` handler, which is raised because it affects every lookup. `check_stock=False` skips the parts lookup and only solves placements. See [production-export.md](production-export.md) for the solver math and the coordinate conventions.
 
