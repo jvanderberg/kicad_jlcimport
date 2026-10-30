@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .production.conventions import BOTTOM, TOP
 from .production.models import LCSC_FIELD_NAMES, FootprintRecord, PadRecord
-from .production.outputs import zip_files
+from .production.outputs import move_files, zip_files
 
 IU_PER_MM = 1_000_000  # pcbnew internal units are nanometres
 
@@ -258,12 +258,7 @@ def write_drill_files(board, out_dir: str, pcbnew=None) -> List[str]:
         writer.SetOptions(False, False, origin_cls(0, 0), False)  # mirror, minimal header, offset, merge NPTH
         writer.SetFormat(True)  # metric
         writer.CreateDrillandMapFilesSet(staging, True, False)
-        files = []
-        for name in sorted(os.listdir(staging)):
-            if name.lower().endswith(".drl"):
-                dest = os.path.join(out_dir, name)
-                os.replace(os.path.join(staging, name), dest)
-                files.append(dest)
+        files = move_files(staging, out_dir, lambda name: name.lower().endswith(".drl"))
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     if not files:

@@ -362,7 +362,7 @@ class TestRunCheck:
         assert report.double_sided
         text = report.to_text()
         assert "1 preferred extended parts (no loading fee on Economic assembly): C1" in text
-        assert "1 extended parts (each adds a feeder loading fee): C2" in text
+        assert "1 extended parts (each adds a feeder loading fee, est. $3.00 on Economic PCBA): C2" in text
         assert "Standard PCBA" in text
         rows = {r.reference: r for r in report.rows}
         assert any(i.severity == WARNING and "close to the 1 needed" in i.message for i in rows["R1"].issues)
@@ -502,6 +502,11 @@ class TestResolveOutputDir:
 
     def test_kiprjmod(self):
         assert resolve_output_dir("${KIPRJMOD}/out", self.BOARD) == os.path.join(self.PROJ, "out")
+
+    def test_relative_to(self):
+        cwd = os.path.join(os.sep, "work")
+        assert resolve_output_dir("out", self.BOARD, relative_to=cwd) == os.path.join(cwd, "out")
+        assert resolve_output_dir("${KIPRJMOD}/out", self.BOARD, relative_to=cwd) == os.path.join(self.PROJ, "out")
 
     def test_absolute_and_home(self, monkeypatch):
         monkeypatch.setenv("HOME", os.path.join(os.sep, "home", "me"))

@@ -117,7 +117,7 @@ jlcimport-cli import C318884 --show both
 
 ### 5. JLCPCB Assembly Check, BOM and CPL
 
-Check every LCSC part on a board (stock for the board quantity, Basic/Extended, price) and solve each part's CPL rotation and position against JLC's own footprint, then write `<board>-bom.csv`, `<board>-cpl.csv` and `<board>-report.txt`. Gerbers are not written by the CLI; they come from the KiCad plugin's **Production Files** tab.
+Check every LCSC part on a board (stock for the board quantity, Basic/Extended, price) and solve each part's CPL rotation and position against JLC's own footprint, then write `<board>-gerbers.zip`, `<board>-bom.csv`, `<board>-cpl.csv` and `<board>-report.txt`. The Gerbers and drill files are plotted with KiCad's `kicad-cli` (found on `PATH`, in the usual install folder, or via `--kicad-cli` / `$KICAD_CLI`); `--no-gerbers` skips them. Zones are refilled in memory first with KiCad 10's `kicad-cli`; the board file is never modified.
 
 ```bash
 # Check for 10 boards and write files to <project>/production/
@@ -129,7 +129,15 @@ jlcimport-cli production board.kicad_pcb --check-only
 
 # Placements only, skipping the stock/price lookup
 jlcimport-cli production board.kicad_pcb --no-stock
+
+# Machine-readable result: summary, issues, per-part stock/price/links, placements, BOM/CPL rows, files written
+jlcimport-cli production board.kicad_pcb --check-only --json
+
+# BOM, CPL and report only (no kicad-cli needed)
+jlcimport-cli production board.kicad_pcb --no-gerbers
 ```
+
+With `--json`, stdout holds only the JSON document (progress and messages go to stderr), so it can be piped to `jq`: `... --check-only --json | jq '.issues[] | select(.severity == "error")'`.
 
 Read the report before ordering: low-confidence placements and every polarized part (LEDs, diodes, tantalum caps) are listed for checking in JLCPCB's placement preview, and stock that only just covers the order is a warning. Per-part corrections are footprint fields (`JLCPCB Rotation Offset`, `JLCPCB Position Offset`); see `docs/production-export.md`.
 
@@ -205,7 +213,9 @@ usage: jlcimport-cli search [-h] [-n COUNT] [-t {basic,extended,both}]
 
 ```text
 usage: jlcimport-cli production [-h] [-n BOARDS] [-o OUTPUT] [--check-only]
-                                [--force] [--no-stock]
+                                [--force] [--no-stock] [--no-gerbers]
+                                [--no-refill-zones] [--kicad-cli PATH]
+                                [--json]
                                 board
 ```
 
@@ -217,6 +227,10 @@ usage: jlcimport-cli production [-h] [-n BOARDS] [-o OUTPUT] [--check-only]
 | `--check-only` | Print the report and write nothing; exit 1 if there are errors. |
 | `--force` | Write the files even when the check reports errors. |
 | `--no-stock` | Skip the stock/price lookup; placements are still solved. |
+| `--no-gerbers` | Write only BOM, CPL and report (no `kicad-cli` needed). |
+| `--no-refill-zones` | Plot zones as saved instead of refilling them first (refilling needs KiCad 10's `kicad-cli`). |
+| `--kicad-cli PATH` | `kicad-cli` to plot Gerbers with (default: `$KICAD_CLI`, `PATH`, usual install folders). |
+| `--json` | Print the full result as JSON on stdout. |
 
 ## Troubleshooting & Tips
 

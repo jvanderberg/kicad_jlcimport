@@ -20,7 +20,9 @@ Files go to `<project>/production/` unless you choose another folder. A relative
    - the solved CPL rotation, and how much to trust it (confidence plus notes)
 
    Rows with errors are shown in red and rows with warnings in yellow. If a part's stock lookup fails (network error, or an error answer from JLCPCB) it counts as an error, because nothing about it was checked. If JLC's footprint can't be fetched, the part keeps KiCad's own position and rotation, with a warning. Its buttons are **Cancel** (back to the summary) and **Generate**.
-5. **Generate** writes the Gerber zip, BOM, CPL and report, then shows where they went, with an **Open folder** button. If the board has changed since the check, it writes nothing and sends you back to the start screen, so the placement file always matches the Gerbers. The Gerbers are plotted first, so if plotting fails no new BOM or CPL is written either.
+5. **Generate** writes the Gerber zip, BOM, CPL and report, then shows where they went, with an **Open folder** button. If the board has changed since the check, it writes nothing and sends you back to the start screen, so the placement file always matches the Gerbers. The Gerbers and drill files are plotted first, into a temporary folder, and only moved into place once both have succeeded. If either fails, nothing is written: no new BOM or CPL, and no new Gerbers next to old drill files.
+
+`-o` takes the same forms as the tab's output folder (`${KIPRJMOD}`, environment variables, `~`), except that a relative folder is relative to the current directory, as usual on a command line. Quote `${KIPRJMOD}` so the shell leaves it alone.
 
 The tab always works on the board that is open now, so File > Revert, Open or Save As while the dialog is open is fine; the default output folder and file names follow the board.
 
@@ -130,13 +132,21 @@ All conventions are defined in `src/kicad_jlcimport/production/conventions.py`:
 
 ## CLI
 
-`jlcimport-cli production` runs the same check from a `.kicad_pcb` file, without KiCad, and writes the BOM, CPL and report. It doesn't write Gerbers. Use the plugin for those.
+`jlcimport-cli production` does everything the tab does, from a saved `.kicad_pcb` file: the same check, then the same four files (`<board>-gerbers.zip`, `-bom.csv`, `-cpl.csv`, `-report.txt`) and the `gerbers/` folder. The check and the BOM/CPL need no KiCad. The Gerbers and drill files are plotted by KiCad's own `kicad-cli` (KiCad 8 or newer), with the same layers and settings as the plugin. It is found through `--kicad-cli`, then `$KICAD_CLI`, then `PATH`, then the usual install folders (`/Applications/KiCad/KiCad.app` on macOS, the newest `C:\Program Files\KiCad\<version>\bin` on Windows). A path given with `--kicad-cli` or `$KICAD_CLI` is used as it stands: if it is wrong, the CLI says so rather than falling back to another install. The CLI looks for it before the check starts, so a missing `kicad-cli` fails at once. The `kicad-cli` must be able to open the board: a board saved by KiCad 10 needs KiCad 10's `kicad-cli`.
+
+Zones are refilled before plotting, as the tab's **Refill zones before plotting** does, but only in `kicad-cli`'s memory: the board file is never changed. Refilling needs KiCad 10's `kicad-cli` (`--check-zones`). With an older one the CLI says so and plots zones as they were last saved.
+
+The Gerbers and drill files are plotted first, into a temporary folder, and only moved into place once both have succeeded. If either fails, nothing is written: no new BOM or CPL, and no new Gerbers next to old drill files.
+
+`-o` takes the same forms as the tab's output folder (`${KIPRJMOD}`, environment variables, `~`), except that a relative folder is relative to the current directory, as usual on a command line. Quote `${KIPRJMOD}` so the shell leaves it alone.
 
 ```bash
-jlcimport-cli production board.kicad_pcb -n 10          # check + write to <project>/production
-jlcimport-cli production board.kicad_pcb --check-only   # exit 1 if errors
-jlcimport-cli production board.kicad_pcb --force -o out # write even with errors
-jlcimport-cli production board.kicad_pcb --no-stock     # placements only, skip stock/price lookup
+jlcimport-cli production board.kicad_pcb -n 10            # check + Gerbers, BOM, CPL, report in <project>/production
+jlcimport-cli production board.kicad_pcb --check-only     # report only; exit 1 if errors
+jlcimport-cli production board.kicad_pcb --check-only --json > check.json  # everything the tab shows, as JSON
+jlcimport-cli production board.kicad_pcb --force -o out   # write even with errors
+jlcimport-cli production board.kicad_pcb --no-gerbers     # BOM, CPL and report only (no kicad-cli needed)
+jlcimport-cli production board.kicad_pcb --no-stock       # placements only, skip stock/price lookup
 ```
 
 | Option | Meaning |
@@ -146,5 +156,25 @@ jlcimport-cli production board.kicad_pcb --no-stock     # placements only, skip 
 | `--check-only` | print the report and write nothing; exit status 1 if there are errors (invalid LCSC number, part not found, out of stock, stock short, lookup failed, duplicate designators). A missing LCSC number is only a warning. |
 | `--force` | write the files even when the check reports errors |
 | `--no-stock` | skip the stock and price lookup; placements are still solved |
+| `--no-gerbers` | write only the BOM, CPL and report; `kicad-cli` isn't needed |
+| `--no-refill-zones` | plot zones as saved instead of refilling them first |
+| `--kicad-cli PATH` | the `kicad-cli` to plot with |
+| `--json` | print the whole result as JSON on stdout (progress and messages go to stderr) |
+
+### JSON output
+
+`--json` replaces the text report on stdout with one JSON document holding everything the summary and **Review details** screens show:
+
+| Key | Contents |
+| --- | --- |
+| `board`, `boards` | the board file and the number of boards checked for |
+| `error` | why the run stopped (unreadable board, `kicad-cli` not found or failed, TLS error, errors found without `--force`), or `null`. When the board couldn't be read or the check never ran, the document has only `board`, `error` and `files`. |
+| `errors`, `warnings` | issue counts; the exit status is 1 when `errors` is non-zero and nothing was forced |
+| `summary` | the summary's Order, Fees and Placements sections: `[{"title", "rows": [{"label", "value"}]}]` |
+| `issues` | every distinct issue, worst first, with the footprints it affects: `{"severity", "references", "message"}` (severity is `error`, `warning` or `info`) |
+| `parts` | one entry per unique LCSC part: references, quantity per board and in total, stock status and message, stock, type (`Basic`, `Preferred`, `Extended`), unit and total price, description, brand, package, datasheet and LCSC page URLs |
+| `footprints` | one entry per footprint: reference, value, footprint, LCSC number, side, DNP and BOM/CPL flags, stock text, type, worst severity, its issues, and its placement (`x`, `y`, `rotation` in CPL terms, `side`, `source`, `confidence`, `notes`) or `null` when it isn't placed |
+| `bom`, `cpl` | the BOM and CPL rows, keyed by their column headings |
+| `files` | paths of the files written (`gerbers`, `bom`, `cpl`, `report`), or `null` when nothing was written |
 
 Pass `--insecure` before the command (`jlcimport-cli --insecure production ...`) if certificate checks fail behind a proxy.

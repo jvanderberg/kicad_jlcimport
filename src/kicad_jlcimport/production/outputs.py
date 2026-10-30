@@ -3,7 +3,7 @@
 import csv
 import os
 import zipfile
-from typing import Dict, List, Sequence, Tuple
+from typing import Callable, Dict, List, Sequence, Tuple
 
 from .conventions import BOTTOM
 from .models import FootprintRecord, natural_key
@@ -67,6 +67,21 @@ def write_csv(path: str, header: Sequence[str], rows: Sequence[Sequence[str]]) -
         writer = csv.writer(f, lineterminator="\n")
         writer.writerow(header)
         writer.writerows(rows)
+
+
+def move_files(src_dir: str, dest_dir: str, keep: Callable[[str], bool]) -> List[str]:
+    """Move the files in *src_dir* whose names pass *keep* into *dest_dir*, replacing any there.
+
+    Returns their new paths, sorted by name.  Used to pick up files whose names
+    KiCad chooses, from a staging folder they were written to.
+    """
+    files = []
+    for name in sorted(os.listdir(src_dir)):
+        if keep(name):
+            dest = os.path.join(dest_dir, name)
+            os.replace(os.path.join(src_dir, name), dest)
+            files.append(dest)
+    return files
 
 
 def zip_files(paths: Sequence[str], zip_path: str) -> str:
