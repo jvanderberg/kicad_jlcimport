@@ -17,6 +17,10 @@ class EEPad:
     rotation: float = 0.0
     polygon_points: List[float] = field(default_factory=list)
     slot_length: float = 0.0  # oval slot drill length in mm (0 for circular)
+    # Direction of the slot on the board in degrees (from EasyEDA's slot end
+    # points), or None when EasyEDA doesn't give one.
+    slot_angle: Optional[float] = None
+    plated: bool = True  # False for EasyEDA non-plated through-holes
 
 
 @dataclass
