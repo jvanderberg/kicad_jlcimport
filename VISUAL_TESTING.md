@@ -30,20 +30,26 @@ For each part, compare the EasyEDA (source) and KiCad (output) renderings:
 
 ### Pre-release regression suite
 
-Run the full 102-part comparison across ICs, passives, LEDs, transistors, connectors, and other component types:
+Run the full regression list (ICs, passives, LEDs, transistors, connectors and more), kept in `tools/regression_parts.txt`:
 
 ```bash
-python3 tools/compare_part.py \
-    C1002 C1027 C1034 C1035 C2040 C2078 C2079 C2102 C2135 C2173 \
-    C2202 C2203 C2213 C2286 C2288 C2290 C2295 C2297 C2316 C2318 \
-    C2319 C2320 C2321 C2322 C2474 C2476 C2478 C2479 C2560 C2561 \
-    C2562 C2564 C2566 C2765186 C2843670 C2914 C2957 C2960 C3099 C3105 C3116 C3117 \
-    C3794 C3795 C3797 C5177 C5206 C5213 C5419 C5423 C5586 C5602 \
-    C5612 C5613 C6179 C6186 C6187 C6188 C6203 C6205 C6855 C6912 \
-    C6970 C7063 C7519 C7593 C7950 C8760 C8852 C9418 C10081 C12087 \
-    C12889 C13885 C14529 C15134 C15157 C15331 C15999 C18901 C20953 C21235 \
-    C23892 C24112 C33696 C67528 C71101 C82899 C85181 C94598 C94599 C138392 \
-    C173573 C173580 C173602 C347218 C347219 C385834 C386756 C386757 C386758 C393939 C395958 C668119 \
-    C3646936 C3646937 C3646938 \
-    C52016391 C160404 C52195554
+python3 tools/compare_part.py --regression
 ```
+
+The page opens with a summary of the automated 3D model checks at the top, and each part shows its own result. Failed and warning parts are linked so you can go straight to them. The same checks run in CI without KiCad, see "Automated 3D model checks" below.
+
+## Automated 3D model checks
+
+`tests/test_model_regression.py` checks the 3D model placement of every regression part with no rendering:
+
+- **Physical checks** (`src/kicad_jlcimport/kicad/model_checks.py`): the model must sit on the board, nothing but pins may pass through the board outside a hole (this catches upside-down parts), the model must cover its pads, and its pins must reach them.
+- **Snapshot**: each part's offset, rotation and check result is stored in `testdata/models/snapshot.json`. Any change fails the test with a per-part diff.
+
+The parts' EasyEDA data is stored in `testdata/models/` so the tests need no network. After an intentional change to placement:
+
+```bash
+python3 tools/update_model_snapshot.py   # prints what changed
+git diff testdata/models/snapshot.json   # review, then commit
+```
+
+To refresh the fixtures from EasyEDA (for example after adding parts to `tools/regression_parts.txt`), run `python3 tools/fetch_model_fixtures.py`, then update the snapshot as above.

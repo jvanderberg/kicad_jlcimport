@@ -84,6 +84,9 @@ class EE3DModel:
     origin_y: float
     z: float
     rotation: Tuple[float, float, float]
+    # Bounding box (min_x, max_x, min_y, max_y) of EasyEDA's outline3D drawing of
+    # the placed model, in EasyEDA units.  None when the outline has no points.
+    outline: Optional[Tuple[float, float, float, float]] = None
 
 
 @dataclass
