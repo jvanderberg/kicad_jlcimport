@@ -126,7 +126,12 @@ def footprint_from_node(node: list) -> FootprintRecord:
         bx, by = _to_board(fx, fy, theta, px, py)
         pinfunction = _child(pad, "pinfunction")
         function = pinfunction[1] if pinfunction and len(pinfunction) > 1 and isinstance(pinfunction[1], str) else ""
-        pads.append(PadRecord(number=number, x=bx, y=by, function=function))
+        size = _child(pad, "size") or []
+        dims = [float(v) for v in size[1:3] if isinstance(v, str) and _is_number(v)]
+        width, height = (dims + [0.0, 0.0])[:2]
+        drill_node = _child(pad, "drill") or []
+        drill = next((float(v) for v in drill_node[1:] if isinstance(v, str) and _is_number(v)), 0.0)
+        pads.append(PadRecord(number=number, x=bx, y=by, function=function, width=width, height=height, drill=drill))
 
     return FootprintRecord(
         reference=props.get("Reference", ""),

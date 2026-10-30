@@ -5,6 +5,7 @@ JLCImport is a KiCad action plugin that imports symbols, footprints, and 3D mode
 ## Features
 
 - Imports symbol, footprint, and 3D model data in one step.
+- Offers a footprint from your KiCad libraries instead of JLC's, but only one with the same pads ([details](docs/usage.md#using-a-kicad-library-footprint-instead-of-jlcs)).
 - Works with project libraries or global KiCad libraries.
 - Includes searchable part lookup with stock and type filtering.
 - Handles modern KiCad formats (8/9/10).

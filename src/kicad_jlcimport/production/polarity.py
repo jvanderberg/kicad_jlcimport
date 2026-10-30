@@ -222,6 +222,17 @@ def _marked_roles(jlc_nums: List[str], marks: Optional[Dict[str, str]]) -> Dict[
     return _complete(roles)
 
 
+def jlc_pad_roles(
+    jlc_pads: Sequence[PadRecord], jlc_pin_names: Dict[str, str], jlc_marks: Optional[Dict[str, str]] = None
+) -> Dict[str, str]:
+    """JLC pad number -> polarity for a two-terminal part, from its + / - marks, else its pin names; {} if neither."""
+    jlc_nums = _numbers(jlc_pads)
+    if len(jlc_nums) < 2 or len(jlc_nums) > 3 or (len(jlc_nums) == 3 and not point_symmetric(jlc_pads)):
+        return {}
+    names = {_normalize(k): v for k, v in jlc_pin_names.items()}
+    return _marked_roles(jlc_nums, jlc_marks) or _jlc_roles(jlc_nums, names)[0]
+
+
 def match_polarity(
     board_pads: Sequence[PadRecord],
     jlc_pads: Sequence[PadRecord],
