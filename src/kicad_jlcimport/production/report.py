@@ -276,7 +276,8 @@ def run_check(
 
     *part_cache* wraps ``api.lookup_part`` (dict or None per LCSC);
     *footprint_cache* wraps :func:`fetch_jlc_footprint`.  Network failures
-    are reported, never raised.  ``check_stock=False`` skips the parts-library
+    become report entries, except a TLS certificate error with no
+    *on_ssl_error* handler, which is raised.  ``check_stock=False`` skips the parts-library
     lookup (stock, basic/extended, price); placements are still solved.
     """
     boards = max(int(boards), 1)

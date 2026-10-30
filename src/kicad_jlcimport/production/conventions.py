@@ -52,12 +52,9 @@ orientation on both sides.
 
 CPL ``Rotation`` column
 -----------------------
-Top side: ``phi``.  Bottom side: ``180° - phi``, i.e. JLCPCB measures
-bottom-side rotations in the opposite direction.  Established with a test
-board in JLCPCB's own placement preview (2026-10-29): LEDs, SOD-123, SMA,
-3216 tantalum, SOT-23, SOT-23-6 and SOIC-8 on the bottom at KiCad 0/90/180/270.
-Writing ``phi`` placed exactly the parts with ``phi`` = 0/180 rotated by 180°
-and the 90/270 ones correctly; ``180° - phi`` agrees with all 28.
+Top side: ``phi``.  Bottom side: ``180° - phi``, because JLCPCB measures
+bottom-side rotations in the opposite direction; the two agree at 90°/270°
+and differ by 180° at 0°/180°.
 """
 
 import math

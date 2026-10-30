@@ -169,6 +169,17 @@ class TestMatchPolarity:
         assert m.source == pol.JLC_UNNAMED
         assert [p.number for p in m.jlc_pads] == ["2", "1"]
 
+    def test_thermal_pad_part_without_jlc_names_is_flagged(self):
+        jlc = JLC_LED_PADS + [PadRecord("3", 0.0, 0.0)]
+        board = self.board(("K", "A")) + [PadRecord("3", 10.0, 10.0)]
+        names = {"1": "1", "2": "2", "3": "3"}
+        assert pol.match_polarity(board, jlc, names).source == pol.JLC_UNNAMED
+        assert pol.match_polarity(board, jlc, {}, names_error="gone").source == pol.NAMES_UNAVAILABLE
+        # Not polarized on the board (a 3-pin resonator, say): left alone.
+        plain = self.board() + [PadRecord("3", 10.0, 10.0)]
+        assert pol.match_polarity(plain, jlc, names, footprint_name="Resonator_SMD").source == pol.NOT_POLARIZED
+        assert pol.match_polarity(plain, jlc, {}, names_error="gone").source == pol.NOT_POLARIZED
+
     @pytest.mark.parametrize("name", ["LED_0603_1608Metric", "Diode_SMD:D_SOD-123", "CP_Elec_4x5.4", "LED_X_AK"])
     def test_polarized_footprint_names(self, name):
         assert pol.board_says_polarized(self.board(), name)

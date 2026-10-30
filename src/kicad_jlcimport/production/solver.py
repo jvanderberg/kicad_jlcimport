@@ -2,8 +2,8 @@
 
 JLCPCB places a part using the orientation and origin of its own EasyEDA
 footprint.  The footprint on the board may use a different 0° orientation and
-origin, so instead of a rotation lookup table we compute the rigid transform
-that maps JLC's footprint onto the actual pads:
+origin, so we compute the rigid transform that maps JLC's footprint onto the
+actual pads:
 
 1. Pads are paired by number.  Pads sharing a number (thermal pads split
    into segments, several GND pins, …) are reduced to the centroid of their

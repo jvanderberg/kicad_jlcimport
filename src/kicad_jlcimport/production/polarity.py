@@ -185,7 +185,8 @@ def match_polarity(
     """Renumber *jlc_pads* so each JLC pad shares a number with the board pad of the same polarity.
 
     *names_error* is set when JLC's symbol could not be fetched; a two-pad
-    part then gets ``NAMES_UNAVAILABLE`` rather than silently pairing by number.
+    part, or a three-pad one the board marks as polarized, then gets
+    ``NAMES_UNAVAILABLE`` rather than silently pairing by number.
     *footprint_name* is the board footprint's name, whose _AK / _KA suffix
     beats KiCad's generic pad-1 convention.
     """
@@ -198,15 +199,20 @@ def match_polarity(
     # anything else the geometry already fixes which pad is which.
     if len(jlc_nums) > 2 and not point_symmetric(jlc_pads):
         return unchanged
+    # Two pads, or two plus a centred pad: the shapes whose JLC symbol is fetched.
+    two_terminal = len(jlc_nums) <= 3
     if names_error:
-        if len(jlc_nums) == 2:
+        if len(jlc_nums) == 2 or (two_terminal and board_says_polarized(board_pads, footprint_name)):
             return PolarityMatch(jlc_pads=list(jlc_pads), source=NAMES_UNAVAILABLE)
         return unchanged
 
     names = {_normalize(k): v for k, v in jlc_pin_names.items()}
     jlc_roles, kind = _jlc_roles(jlc_nums, names)
     if not jlc_roles:
-        if len(jlc_nums) == 2 and len(board_nums) == 2 and board_says_polarized(board_pads, footprint_name):
+        # Polarity-named pins that don't make a two-terminal part (a dual
+        # diode's K/A pin) aren't "unnamed"; numbers decide.
+        named = any(_name_roles(names.get(num, "")) for num in jlc_nums)
+        if two_terminal and not named and board_says_polarized(board_pads, footprint_name):
             return PolarityMatch(jlc_pads=list(jlc_pads), source=JLC_UNNAMED)
         return unchanged
 

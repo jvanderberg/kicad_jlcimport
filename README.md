@@ -9,7 +9,7 @@ JLCImport is a KiCad action plugin that imports symbols, footprints, and 3D mode
 - Includes searchable part lookup with stock and type filtering.
 - Handles modern KiCad formats (8/9/10).
 - Ships with plugin, CLI, GUI, and TUI workflows.
-- **JLCPCB production export**: Gerbers + drill zip, BOM and CPL. Before generating, it checks every part's stock and basic/extended status, and it solves each part's CPL rotation and centre by fitting JLC's own footprint onto your pads (no rotation lookup tables).
+- **JLCPCB production files**: writes the Gerber zip, BOM and placement (CPL) file for a JLCPCB assembly order, after checking that every part is in stock and working out the rotation JLCPCB needs for each part.
 
 ![Search and details](images/search_results.png)
 
@@ -38,13 +38,13 @@ If `sym-lib-table` or `fp-lib-table` is created for the first time, reopen the p
 
 ### JLCPCB Production Files
 
-Open JLCImport from the PCB Editor and switch to the **Production Files** tab.
+In the PCB Editor, open JLCImport and switch to the **Production Files** tab.
 
-1. Set the number of boards to assemble.
-2. Click **Check**. Every LCSC part is looked up (stock, basic/extended, price), and each part's CPL rotation and position is solved against JLC's footprint. Problems are highlighted, and polarized two-pad parts are flagged for a look in JLC's placement preview. Untick **Check stock and prices** if you only need placements.
-3. Click **Generate**. This writes `<board>-gerbers.zip`, `<board>-bom.csv`, `<board>-cpl.csv` and a report to `<project>/production/`, and leaves the individual Gerber and drill files in `<project>/production/gerbers/`.
+1. Set **Boards to assemble**.
+2. Click **Check**. Each part is looked up at JLCPCB (stock, Basic/Extended, price) and its placement rotation is worked out from JLCPCB's own footprint. Rows with errors turn red and rows with warnings yellow. Untick **Check stock and prices** if you only need placements.
+3. Click **Generate**. The Gerber zip, BOM, CPL and a report are written to `<project>/production/`.
 
-To correct a part by hand, add a `JLCPCB Rotation Offset` field (degrees, added to KiCad's rotation) and/or a `JLCPCB Position Offset` field (`dx, dy` mm) to the footprint. See the [production export guide](docs/production-export.md) for the solver, the coordinate conventions and the CLI (`jlcimport-cli production board.kicad_pcb`).
+Before ordering, look at the parts the report warns about (polarized parts and estimated placements) in JLCPCB's placement preview. If a part is wrong, add a `JLCPCB Rotation Offset` (degrees) or `JLCPCB Position Offset` (`dx, dy` in mm) field to its footprint. The [production export guide](docs/production-export.md) covers the check, the overrides and the `jlcimport-cli production` command.
 
 ## CLI, GUI, And TUI
 
