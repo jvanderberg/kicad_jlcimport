@@ -19,6 +19,7 @@ from kicad_jlcimport.importer import import_component
 from kicad_jlcimport.kicad.library import (
     LibraryNameError,
     SymbolLibraryError,
+    config_path,
     get_global_lib_dir,
     load_config,
     validate_lib_name,
@@ -119,6 +120,7 @@ def cmd_import(args):
         lib_name = validate_lib_name(args.lib_name)
     except LibraryNameError as e:
         print(f"  Error: {e}")
+        print(f'  Pass a different --lib-name, or change "lib_name" in {config_path()}')
         sys.exit(1)
     kicad_version = args.kicad_version
 

@@ -696,22 +696,29 @@ class JLCImportTUI(App):
         if event.input.id == "lib-name-input":
             self._persist_lib_name()
 
-    def _persist_lib_name(self):
-        """Save the library name if it changed."""
-        new_name = self.query_one("#lib-name-input", Input).value.strip()
-        if new_name and new_name != self._lib_name:
-            try:
-                new_name = validate_lib_name(new_name)
-            except LibraryNameError as e:
-                self._log(f"[red]Error: {e}[/red]")
-                self.query_one("#lib-name-input", Input).value = self._lib_name
-                return
+    def _persist_lib_name(self) -> bool:
+        """Validate and save the library name; return False if it is invalid.
+
+        An invalid name is reported and left in the input for the user to
+        correct, but never saved or used.  An empty input reverts to the
+        current name.
+        """
+        name_input = self.query_one("#lib-name-input", Input)
+        new_name = name_input.value.strip()
+        if not new_name:
+            name_input.value = self._lib_name
+            return True
+        try:
+            new_name = validate_lib_name(new_name)
+        except LibraryNameError as e:
+            self._log(f"[red]Error: {e}[/red]")
+            return False
+        if new_name != self._lib_name:
             self._lib_name = new_name
             config = load_config()
             config["lib_name"] = new_name
             save_config(config)
-        elif not new_name:
-            self.query_one("#lib-name-input", Input).value = self._lib_name
+        return True
 
     def _persist_destination(self, use_global: bool):
         """Save the destination choice to config."""
@@ -1207,7 +1214,8 @@ class JLCImportTUI(App):
 
     def _do_import_action(self):
         """Start the import process."""
-        self._persist_lib_name()
+        if not self._persist_lib_name():
+            return
 
         if not self._selected_result:
             self._log("[red]Error: Select a search result first[/red]")

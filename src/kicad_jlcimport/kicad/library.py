@@ -19,6 +19,11 @@ def _config_path() -> str:
     return os.path.join(_kicad_config_base(), "jlcimport.json")
 
 
+def config_path() -> str:
+    """Return the path of the jlcimport.json config file."""
+    return _config_path()
+
+
 def load_config() -> dict:
     """Load config from jlcimport.json, returning defaults for missing keys.
 
@@ -402,7 +407,9 @@ def _update_lib_table(table_path: str, table_type: str, lib_name: str, lib_type:
         return True
 
 
-_WINDOWS_RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$", re.IGNORECASE)
+_WINDOWS_RESERVED = re.compile(
+    r"^(CON|PRN|AUX|NUL|COM[0-9\u00b9\u00b2\u00b3]|LPT[0-9\u00b9\u00b2\u00b3])$", re.IGNORECASE
+)
 _LIB_ENTRY_RE = re.compile(
     r'\(lib\s+\(name\s+"([^"]+)"\)\s*\(type\s+"([^"]+)"\)\s*\(uri\s+"([^"]+)"\)',
     re.IGNORECASE,
@@ -840,7 +847,7 @@ class LibraryNameError(ValueError):
     """The configured library name can't be used safely."""
 
 
-_LIB_NAME_BAD_CHARS = set('/\\:"<>|?*$')
+_LIB_NAME_BAD_CHARS = set('/\\:"<>|?*')
 
 
 def validate_lib_name(lib_name: str) -> str:
@@ -851,6 +858,8 @@ def validate_lib_name(lib_name: str) -> str:
     must be a single safe filename on every OS.  Names are never silently
     rewritten: a renamed library would point imports somewhere unexpected.
     """
+    if lib_name is not None and not isinstance(lib_name, str):
+        raise LibraryNameError(f"Library name must be text, not {type(lib_name).__name__}.")
     name = (lib_name or "").strip()
     if not name:
         raise LibraryNameError("Library name is empty.")
@@ -860,10 +869,13 @@ def validate_lib_name(lib_name: str) -> str:
             raise LibraryNameError(
                 f"Library name {name!r} contains {shown}, which can't be used in a KiCad library name or file name."
             )
+    if "${" in name or "$(" in name:
+        raise LibraryNameError(f"Library name {name!r} contains a KiCad variable reference ('${{' or '$(').")
     if name in (".", "..") or name.endswith("."):
         raise LibraryNameError(f"Library name {name!r} can't be '.' or '..', or end with '.'.")
-    if _WINDOWS_RESERVED.match(name):
-        raise LibraryNameError(f"Library name {name!r} is a reserved device name on Windows.")
+    # Windows treats "CON", "CON.txt" and "CON .x" all as the console device.
+    if _WINDOWS_RESERVED.match(name.split(".")[0].rstrip(" ")):
+        raise LibraryNameError(f"Library name {name!r} starts with a reserved device name on Windows.")
     return name
 
 
