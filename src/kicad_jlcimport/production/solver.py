@@ -45,6 +45,7 @@ from .polarity import (
     BY_CONVENTION,
     BY_FOOTPRINT_NAME,
     BY_NAMES,
+    JLC_MARKS,
     JLC_UNNAMED,
     NAMES_UNAVAILABLE,
     NOT_POLARIZED,
@@ -73,6 +74,8 @@ POLARITY_UNRESOLVED = "polarity_unresolved"
 POLARITY_NAMES_UNAVAILABLE = "polarity_names_unavailable"
 POLARITY_BY_FOOTPRINT_NAME = "polarity_by_footprint_name"
 POLARITY_JLC_UNNAMED = "polarity_jlc_unnamed"
+POLARITY_BY_JLC_MARKS = "polarity_by_jlc_marks"
+POLARITY_JLC_CONFLICT = "polarity_jlc_conflict"
 
 FLAG_TEXT = {
     TOO_FEW_PADS: "fewer than 2 pad numbers in common with the JLC footprint",
@@ -104,6 +107,11 @@ FLAG_TEXT = {
         "JLC's pin names could not be fetched, so polarity relies on pad numbering; check its orientation"
     ),
     POLARITY_JLC_UNNAMED: "polarized part, but JLC's symbol doesn't name its pins; paired by pad number",
+    POLARITY_BY_JLC_MARKS: "JLC's side from the + / - marks its footprint draws beside the pads",
+    POLARITY_JLC_CONFLICT: (
+        "JLC's symbol and footprint disagree on which pad is which; placed by the footprint's + / - marks, "
+        "which JLC's preview shows. Check its orientation"
+    ),
 }
 
 _POLARITY_FLAG = {
@@ -332,6 +340,10 @@ def solve_placement(
         result.flags.append(_POLARITY_FLAG[polarity_source])
         if polarity is not None and polarity.swapped:
             result.flags.append(POLARITY_SWAPPED)
+        if polarity is not None and polarity.jlc_source == JLC_MARKS:
+            result.flags.append(POLARITY_BY_JLC_MARKS)
+        if polarity is not None and polarity.conflict:
+            result.flags.append(POLARITY_JLC_CONFLICT)
     elif len(jlc_groups) == 2 and _is_point_symmetric(jlc_points, tol.symmetry_tol):
         result.flags.append(POLARITY_BY_NUMBERING)
 

@@ -151,7 +151,9 @@ def solve_against_jlc(fp: FootprintRecord, jlc_fp: JlcFootprint) -> FitResult:
     rotation pairs every number, so the pads are matched by position instead
     (pin 1 nearest pin 1) rather than falling back to KiCad's own angle.
     """
-    polarity = match_polarity(fp.pads, jlc_fp.pads, jlc_fp.pin_names, jlc_fp.symbol_error, fp.footprint)
+    polarity = match_polarity(
+        fp.pads, jlc_fp.pads, jlc_fp.pin_names, jlc_fp.symbol_error, fp.footprint, jlc_marks=jlc_fp.pad_marks
+    )
     fit = solve_placement(fp.pads, polarity.jlc_pads, fp.side, kicad_orientation=fp.orientation, polarity=polarity)
     if not fit.usable:
         mirrored = MIRRORED in fit.flags

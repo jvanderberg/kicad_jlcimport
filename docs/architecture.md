@@ -29,7 +29,7 @@ src/kicad_jlcimport/
 │   ├── solver.py         #   Least-squares rigid fit of JLC's footprint onto board pads
 │   ├── placement.py      #   Solved vs estimated vs KiCad fallback vs manual override
 │   ├── polarity.py       #   Pair symmetric polarized parts (two pads, or two plus a centred pad) by anode/cathode role
-│   ├── jlc_footprints.py #   Fetch JLC's EasyEDA footprint as pad centres (+ symbol pin names where they decide polarity)
+│   ├── jlc_footprints.py #   Fetch JLC's EasyEDA footprint as pad centres and +/- marks (+ symbol pin names where they decide polarity)
 │   ├── availability.py   #   Stock / basic-extended / price evaluation
 │   ├── report.py         #   run_check() orchestration and report model
 │   ├── outputs.py        #   BOM/CPL rows, CSV and zip writers
@@ -114,7 +114,7 @@ When the user triggers an import, `importer.py` orchestrates the following steps
 ### Production Export
 
 1. **Extract**: `production_pcbnew.extract_footprints()` (plugin) or `production/kicad_pcb.read_board()` (CLI) produces `FootprintRecord`s.
-2. **Check**: for each unique LCSC number, `api.lookup_part()` (exact-match JLCPCB search) gives stock, type and price breaks, and `fetch_jlc_footprint()` gets JLC's EasyEDA footprint, which `parse_footprint_shapes` reduces to pad centres. For two-pad parts, and three-pad parts with a centred thermal pad, it also reads the pin names from JLC's symbol, which decide polarity.
+2. **Check**: for each unique LCSC number, `api.lookup_part()` (exact-match JLCPCB search) gives stock, type and price breaks, and `fetch_jlc_footprint()` gets JLC's EasyEDA footprint, which `parse_footprint_shapes` reduces to pad centres, plus the `+`/`-` polarity marks drawn beside the pads. For two-pad parts, and three-pad parts with a centred thermal pad, it also reads the pin names from JLC's symbol, which decide polarity.
 3. **Solve**: `polarity.match_polarity()` pairs the pads of symmetric polarized parts by role, `solver.solve_placement()` fits JLC's pads onto the board pads, and `solver.match_pads_by_position()` retries a rejected fit with pads matched by position. `placement.compute_placement()` then picks the solved pose, a rounded estimate (low confidence), KiCad's own pose (marked unverified), or a manual override.
 4. **Generate**: `production_pcbnew.generate_fabrication_zip()` plots the Gerbers and drill files and zips them, then `outputs` builds the BOM and CPL rows. The panel looks up the open board with `production_pcbnew.current_board()` on every Check and Generate, because pcbnew replaces its `BOARD` object on File > Revert or Open.
 

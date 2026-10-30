@@ -72,22 +72,24 @@ The same holds for an LED or diode with a third pad in the middle (a thermal pad
 
 For these parts the solver pairs pads by **role** (positive = anode/`+`, negative = cathode/`-`) when it can:
 
-- **JLC side:** JLC's own symbol pin names (`A`/`K`, `Anode`/`Cathode`, `+`/`-`). The symbol is only fetched for two-pad parts and point-symmetric three-pad parts.
-- **Board side:** the pad's pin function, which is the schematic pin name KiCad stores on each pad (`K`, `A_2`, …), or else pad numbers that are themselves polarity names (`A`/`K`, `+`/`-`). If neither works and the pads are exactly 1 and 2, the footprint name decides when it says so (KiCad's `_AK` suffix means pad 1 = anode, `_KA` pad 1 = cathode). Otherwise KiCad's library convention is assumed: pad 1 is the cathode when JLC names the pins anode/cathode, and `+` when JLC names them `+`/`-`. A footprint with more pads and no names is left unresolved rather than guessed.
+- **JLC side:** first the `+` and `-` marks JLC's footprint draws beside its pads, which are the marks JLC's placement preview shows. Without them, JLC's own symbol pin names (`A`/`K`, `Anode`/`Cathode`, `+`/`-`, or `A`/`C` where `C` is the cathode). The symbol is only fetched for two-pad parts and point-symmetric three-pad parts.
+- **Board side:** the pad's pin function, which is the schematic pin name KiCad stores on each pad (`K`, `A_2`, …), or else pad numbers that are themselves polarity names (`A`/`K`, `+`/`-`). If neither works and the pads are exactly 1 and 2, the footprint name decides when it says so (KiCad's `_AK` suffix means pad 1 = anode, `_KA` pad 1 = cathode). Otherwise, on KiCad's own LED, diode and polarized-capacitor footprints, KiCad's library convention is assumed: on an `LED_` or `D_` footprint pad 1 is the cathode, on a `CP_` footprint pad 1 is `+`. Any other footprint is taken to be numbered like JLC's (one imported from EasyEDA is JLC's own footprint) and is paired by number. A footprint with more pads and no names is left unresolved rather than guessed.
 
-| JLC symbol | Board pads | Result |
+| JLC footprint / symbol | Board pads | Result |
 | --- | --- | --- |
-| no polarity names (e.g. pins `1`/`2`), board footprint polarized | pin names with polarity, an `_AK`/`_KA` name, or an `LED_`/`D_`/`CP_` footprint | paired by number, medium, **warning** to check polarity |
-| no polarity names, board footprint not polarized | any | paired by number, with a note |
-| polarity names | pin names or pad numbers with polarity | paired by role, medium, **warning** to check polarity |
-| polarity names | numbered 1/2, `_AK`/`_KA` footprint name | paired by role from the name, medium, **warning** to check polarity |
-| polarity names | numbered 1/2 only, no names | paired by role using KiCad's convention, medium, **warning** to check polarity |
-| polarity names | other numbering or extra pads, no names | paired by number, medium, **warning** to check orientation |
-| symbol couldn't be fetched | two pads, or three pads on a polarized board footprint | paired by number, medium, **warning** to check orientation (**Check** tries the symbol again) |
+| no marks and no polarity names (e.g. pins `1`/`2`), board footprint polarized | pin names with polarity, an `_AK`/`_KA` name, or an `LED_`/`D_`/`CP_` footprint | paired by number, medium, **warning** to check polarity |
+| no marks and no polarity names, board footprint not polarized | any | paired by number, with a note |
+| marks or polarity names | pin names or pad numbers with polarity | paired by role, medium, **warning** to check polarity |
+| marks or polarity names | numbered 1/2, `_AK`/`_KA` footprint name | paired by role from the name, medium, **warning** to check polarity |
+| marks or polarity names | numbered 1/2 only, no names, an `LED_`/`D_`/`CP_` footprint | paired by role using KiCad's convention, medium, **warning** to check polarity |
+| marks or polarity names | numbered 1/2 only, no names, any other footprint | paired by number, with a note |
+| marks or polarity names | other numbering or extra pads, no names | paired by number, medium, **warning** to check orientation |
+| marks and polarity names that disagree | any | paired by the marks, medium, **warning** that JLC's symbol and footprint disagree |
+| no marks, symbol couldn't be fetched | two pads, or three pads on a polarized board footprint | paired by number, medium, **warning** to check orientation (**Check** tries the symbol again) |
 
 When pairing by role turns out to be the reverse of the pad numbering, the report says so ("JLC numbers this part's pads the other way round").
 
-Every polarized part handled here gets a warning to check it in JLC's placement preview, because JLC's own symbol pin names are sometimes the wrong way round, and JLC's footprint silkscreen doesn't reliably mark the cathode either. Pins named `A`/`C` are not read as anode/cathode, because on JLC parts that naming is not reliable.
+The marks come first because JLC's preview shows them and JLC's 3D body follows them. JLC's symbol pin names usually agree, but on a few parts (C64872, C115495, C2900159) the symbol has the pins the other way round. Every polarized part handled here still gets a warning to check it in JLC's placement preview.
 
 ## Manual overrides
 

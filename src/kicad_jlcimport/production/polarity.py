@@ -8,12 +8,16 @@ anode there, so pairing by number mounts such a part backwards.
 
 Instead each pad gets a role (positive = anode/+, negative = cathode/-):
 
-* JLC side: from JLC's own symbol pin names (``A``/``K``, ``+``/``-``).
+* JLC side: from the ``+`` / ``-`` marks JLC's footprint draws beside its
+  pads (what JLC's placement preview shows), else from JLC's symbol pin
+  names (``A``/``K``, ``A``/``C``, ``+``/``-``).  When both exist and
+  disagree, the marks win and the result is flagged.
 * Board side: from the pad's pin function (the schematic pin name KiCad
   stores on the pad), else from pad numbers that are themselves polarity
   names (``A``/``K``, ``+``/``-``).  When neither works, KiCad's library
-  convention is assumed: diodes/LEDs have the cathode on pad 1, polarized
-  capacitors have ``+`` on pad 1.
+  convention is assumed on KiCad's own footprints: LED_ / D_ footprints have
+  the cathode on pad 1, CP_ footprints have ``+`` on pad 1.  Any other
+  footprint is taken to be numbered like JLC's and keeps its numbers.
 
 The JLC pads are then renumbered so that equal roles share a number, and the
 normal solver runs on that.
@@ -48,6 +52,10 @@ BY_FOOTPRINT_NAME = "footprint_name"  # KiCad's _AK / _KA suffix
 UNRESOLVED = "unresolved"
 NAMES_UNAVAILABLE = "names_unavailable"  # two-pad part, but JLC's symbol could not be fetched
 JLC_UNNAMED = "jlc_unnamed"  # the board says polarized, JLC's symbol has no polarity names
+
+# Where the JLC pads' roles came from.
+JLC_MARKS = "marks"  # the + / - marks JLC's footprint draws beside its pads
+JLC_NAMES = "names"  # JLC's symbol pin names
 
 _ROLE_TOKENS: Dict[str, Tuple[str, str]] = {
     "A": (POSITIVE, DIODE),
@@ -109,9 +117,11 @@ class PolarityMatch:
     """Outcome of :func:`match_polarity`."""
 
     jlc_pads: List[PadRecord]  # JLC pads, renumbered to the board's numbers when paired by role
-    source: str = NOT_POLARIZED
+    source: str = NOT_POLARIZED  # how the board pads' roles were found
     kind: str = ""
     swapped: bool = False  # JLC numbers the pads the other way round from the board
+    jlc_source: str = ""  # JLC_MARKS or JLC_NAMES: where the JLC pads' roles came from
+    conflict: bool = False  # JLC's footprint marks and symbol names disagree (the marks win)
 
 
 def _normalize(number: str) -> str:
@@ -141,8 +151,18 @@ def _board_roles(board_pads: Sequence[PadRecord], numbers: List[str]) -> Dict[st
             roles[num] = found.pop()[0]
     if _complete(roles):
         return roles
-    by_number = {num: pin_role(num) for num in numbers}
+    as_names = _cathode_named_c(numbers, {num: num for num in numbers})
+    by_number = {num: pin_role(as_names[num]) for num in numbers}
     return _complete({num: role[0] for num, role in by_number.items() if role is not None})
+
+
+def _cathode_named_c(jlc_nums: List[str], names: Dict[str, str]) -> Dict[str, str]:
+    """*names* with a pin named ``C`` read as the cathode when another pin is the anode (LEDs named A / C)."""
+    c_pins = [num for num in jlc_nums if names.get(num, "").strip().upper() == "C"]
+    anode = any(pin_role(names.get(num, "")) == (POSITIVE, DIODE) for num in jlc_nums if num not in c_pins)
+    if len(c_pins) != 1 or not anode:
+        return names
+    return {**names, c_pins[0]: "K"}
 
 
 def _jlc_roles(jlc_nums: List[str], names: Dict[str, str]) -> Tuple[Dict[str, str], str]:
@@ -151,6 +171,7 @@ def _jlc_roles(jlc_nums: List[str], names: Dict[str, str]) -> Tuple[Dict[str, st
     Any other pin must not mention a polarity at all: a common pin named
     ``K/A`` (a dual diode) means this is not a two-terminal part.
     """
+    names = _cathode_named_c(jlc_nums, names)
     roles: Dict[str, str] = {}
     kinds = set()
     for num in jlc_nums:
@@ -165,6 +186,14 @@ def _jlc_roles(jlc_nums: List[str], names: Dict[str, str]) -> Tuple[Dict[str, st
     return roles, kinds.pop()
 
 
+def board_kind(footprint_name: str) -> str:
+    """DIODE for a KiCad LED_ / D_ footprint, POLARIZED for CP_, else ""."""
+    m = _POLARIZED_FOOTPRINT_RE.match((footprint_name or "").split(":")[-1])
+    if not m:
+        return ""
+    return POLARIZED if m.group(1).upper() == "CP" else DIODE
+
+
 def board_says_polarized(board_pads: Sequence[PadRecord], footprint_name: str) -> bool:
     """True when the board footprint marks itself as polarized."""
     name = (footprint_name or "").split(":")[-1]
@@ -175,18 +204,29 @@ def board_says_polarized(board_pads: Sequence[PadRecord], footprint_name: str) -
     )
 
 
+def _marked_roles(jlc_nums: List[str], marks: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """JLC pad number -> polarity from the footprint's + / - marks, when they name one pad each."""
+    roles = {_normalize(num): sign for num, sign in (marks or {}).items() if _normalize(num) in jlc_nums}
+    return _complete(roles)
+
+
 def match_polarity(
     board_pads: Sequence[PadRecord],
     jlc_pads: Sequence[PadRecord],
     jlc_pin_names: Dict[str, str],
     names_error: str = "",
     footprint_name: str = "",
+    jlc_marks: Optional[Dict[str, str]] = None,
 ) -> PolarityMatch:
     """Renumber *jlc_pads* so each JLC pad shares a number with the board pad of the same polarity.
 
-    *names_error* is set when JLC's symbol could not be fetched; a two-pad
-    part, or a three-pad one the board marks as polarized, then gets
-    ``NAMES_UNAVAILABLE`` rather than silently pairing by number.
+    The JLC pads' roles come from *jlc_marks* (the + / - marks JLC's
+    footprint draws beside its pads, which its placement preview shows),
+    else from JLC's symbol pin names.  When both are present and disagree
+    the marks win and the result is flagged ``conflict``.
+    *names_error* is set when JLC's symbol could not be fetched; without
+    marks, a two-pad part, or a three-pad one the board marks as polarized,
+    then gets ``NAMES_UNAVAILABLE`` rather than silently pairing by number.
     *footprint_name* is the board footprint's name, whose _AK / _KA suffix
     beats KiCad's generic pad-1 convention.
     """
@@ -201,13 +241,22 @@ def match_polarity(
         return unchanged
     # Two pads, or two plus a centred pad: the shapes whose JLC symbol is fetched.
     two_terminal = len(jlc_nums) <= 3
+    marked = _marked_roles(jlc_nums, jlc_marks) if two_terminal else {}
     if names_error:
+        names: Dict[str, str] = {}
+    else:
+        names = {_normalize(k): v for k, v in jlc_pin_names.items()}
+    # A third pin JLC's symbol also names as a polarity (a second "+") means
+    # this isn't a two-terminal part, whatever the marks say.
+    if any(_name_roles(names.get(num, "")) for num in jlc_nums if num not in marked):
+        marked = {}
+    if names_error and not marked:
         if len(jlc_nums) == 2 or (two_terminal and board_says_polarized(board_pads, footprint_name)):
             return PolarityMatch(jlc_pads=list(jlc_pads), source=NAMES_UNAVAILABLE)
         return unchanged
 
-    names = {_normalize(k): v for k, v in jlc_pin_names.items()}
-    jlc_roles, kind = _jlc_roles(jlc_nums, names)
+    named_roles, kind = _jlc_roles(jlc_nums, names)
+    jlc_roles = marked or named_roles
     if not jlc_roles:
         # Polarity-named pins that don't make a two-terminal part (a dual
         # diode's K/A pin) aren't "unnamed"; numbers decide.
@@ -215,6 +264,8 @@ def match_polarity(
         if two_terminal and not named and board_says_polarized(board_pads, footprint_name):
             return PolarityMatch(jlc_pads=list(jlc_pads), source=JLC_UNNAMED)
         return unchanged
+    jlc_source = JLC_MARKS if marked else JLC_NAMES
+    conflict = bool(marked and named_roles and marked != named_roles)
 
     board_roles = _board_roles(board_pads, board_nums)
     source = BY_NAMES
@@ -223,8 +274,16 @@ def match_polarity(
         source = BY_FOOTPRINT_NAME
     if not board_roles:
         if set(board_nums) != {"1", "2"}:
-            return PolarityMatch(jlc_pads=list(jlc_pads), source=UNRESOLVED, kind=kind)
-        pad1 = _KICAD_PAD1_ROLE[kind]
+            return PolarityMatch(
+                jlc_pads=list(jlc_pads), source=UNRESOLVED, kind=kind, jlc_source=jlc_source, conflict=conflict
+            )
+        # KiCad's convention belongs to KiCad's library footprints.  Any other
+        # footprint is most likely JLC's own (imported from EasyEDA), whose
+        # numbering is JLC's, so its numbers pair it.
+        convention = board_kind(footprint_name)
+        if not convention:
+            return unchanged
+        pad1 = _KICAD_PAD1_ROLE[convention]
         board_roles = {"1": pad1, "2": NEGATIVE if pad1 == POSITIVE else POSITIVE}
         source = BY_CONVENTION
 
@@ -243,4 +302,6 @@ def match_polarity(
     renumbered = [PadRecord(number=renumber(p.number), x=p.x, y=p.y, function=p.function) for p in jlc_pads]
     # "Swapped" only means something when both sides use the same two numbers.
     swapped = set(mapping) == set(mapping.values()) and any(src != dst for src, dst in mapping.items())
-    return PolarityMatch(jlc_pads=renumbered, source=source, kind=kind, swapped=swapped)
+    return PolarityMatch(
+        jlc_pads=renumbered, source=source, kind=kind, swapped=swapped, jlc_source=jlc_source, conflict=conflict
+    )
