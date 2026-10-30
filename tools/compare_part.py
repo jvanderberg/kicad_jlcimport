@@ -68,6 +68,7 @@ def convert_to_kicad(comp: dict, tmp_dir: str) -> dict:
         "description": comp.get("description", ""),
         "sym_file": None,
         "fp_file": None,
+        "model_check": None,
     }
 
     import_result = import_component(
@@ -82,6 +83,7 @@ def convert_to_kicad(comp: dict, tmp_dir: str) -> dict:
 
     if import_result is None:
         return result
+    result["model_check"] = import_result.get("model_check")
 
     # import_component(export_only=True) writes files to tmp_dir:
     #   {name}.kicad_sym, {name}.kicad_mod, 3dmodels/{name}.wrl
@@ -374,6 +376,41 @@ def render_3d_model(
         return None
 
 
+def _check_badge(check) -> str:
+    """HTML for one part's 3D model check result."""
+    if check is None:
+        return ""
+    if check.issues:
+        cls, label = "check fail", "3D model check failed"
+    elif check.warnings:
+        cls, label = "check warn", "3D model warning"
+    else:
+        return '<div class="check pass">3D model checks passed</div>'
+    items = "".join(f"<li>{html.escape(d)}</li>" for d in check.details)
+    return f'<div class="{cls}"><strong>{label}</strong><ul>{items}</ul></div>'
+
+
+def _check_summary(parts: list) -> str:
+    """Summary of 3D model checks across all parts, linking to the flagged ones."""
+    checked = [p for p in parts if p and p["metadata"].get("model_check") is not None]
+    failed = [p for p in checked if p["metadata"]["model_check"].issues]
+    warned = [p for p in checked if not p["metadata"]["model_check"].issues and p["metadata"]["model_check"].warnings]
+
+    def links(group):
+        return ", ".join(
+            f'<a href="#{html.escape(p["metadata"]["lcsc_id"])}">{html.escape(p["metadata"]["lcsc_id"])}</a>'
+            for p in group
+        )
+
+    lines = [f"<strong>3D model checks:</strong> {len(checked) - len(failed) - len(warned)} of {len(checked)} passed"]
+    if failed:
+        lines.append(f"<div>Failed ({len(failed)}): {links(failed)}</div>")
+    if warned:
+        lines.append(f"<div>Warnings ({len(warned)}): {links(warned)}</div>")
+    cls = "fail" if failed else "warn" if warned else "pass"
+    return f'<div class="check {cls} summary">{"".join(lines)}</div>'
+
+
 def generate_html(parts: list) -> str:
     """Build an HTML comparison page for all parts."""
     rows = []
@@ -480,9 +517,10 @@ def generate_html(parts: list) -> str:
                 )
 
         rows.append(
-            f'<div class="part">'
+            f'<div class="part" id="{html.escape(meta["lcsc_id"])}">'
             f"<h2>{title_text}</h2>"
             f'<div class="meta">{meta_line}</div>'
+            f"{_check_badge(meta.get('model_check'))}"
             f"{symbol_row}{footprint_row}{model_row}"
             f"</div>"
         )
@@ -514,6 +552,12 @@ def generate_html(parts: list) -> str:
                text-align: center; min-height: 100px; background: #fafafa;
                display: flex; align-items: center; justify-content: center; }}
   .svg-cell.empty {{ color: #999; font-style: italic; }}
+  .check {{ border-radius: 4px; padding: 0.5em 0.8em; margin-bottom: 1em; font-size: 0.9em; }}
+  .check ul {{ margin: 0.3em 0 0; padding-left: 1.2em; }}
+  .check.pass {{ background: #e8f5e9; color: #1b5e20; }}
+  .check.warn {{ background: #fff8e1; color: #6d4c00; }}
+  .check.fail {{ background: #ffebee; color: #b71c1c; }}
+  .check.summary {{ font-size: 1em; }}
   @media (max-width: 600px) {{
     .row-pair {{ flex-direction: column; }}
   }}
@@ -521,6 +565,7 @@ def generate_html(parts: list) -> str:
 </head>
 <body>
 <h1>EasyEDA vs KiCad Comparison</h1>
+{_check_summary(parts)}
 {parts_html}
 </body>
 </html>"""
@@ -609,6 +654,7 @@ def compare_part(lcsc_id: str, tmp_dir: str, verbose: bool = False) -> dict:
         "manufacturer": kicad_files["manufacturer"],
         "manufacturer_part": kicad_files["manufacturer_part"],
         "datasheet": kicad_files["datasheet"],
+        "model_check": kicad_files.get("model_check"),
     }
 
     elapsed = time.time() - start_time
@@ -622,12 +668,20 @@ def compare_part(lcsc_id: str, tmp_dir: str, verbose: bool = False) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Compare EasyEDA and KiCad renderings of JLCPCB parts")
-    parser.add_argument("part_ids", nargs="+", help="LCSC part numbers (e.g. C427602)")
+    parser.add_argument("part_ids", nargs="*", help="LCSC part numbers (e.g. C427602)")
+    parser.add_argument(
+        "--regression", action="store_true", help="Compare the regression parts in tools/regression_parts.txt"
+    )
     parser.add_argument("--no-open", action="store_true", help="Don't open the HTML in a browser")
     parser.add_argument("--output-dir", help="Write HTML to this directory instead of a temp dir")
     parser.add_argument("--workers", type=int, default=20, help="Number of parallel workers (default: 20)")
     parser.add_argument("--verbose", action="store_true", help="Show detailed progress for each part")
     args = parser.parse_args()
+    if args.regression:
+        parts_file = Path(__file__).resolve().parent / "regression_parts.txt"
+        args.part_ids += [line.strip() for line in parts_file.read_text().splitlines() if line.strip()]
+    if not args.part_ids:
+        parser.error("give LCSC part numbers or --regression")
 
     # Check kicad-cli exists
     if not os.path.isfile(KICAD_CLI):
@@ -695,8 +749,14 @@ def main():
 
     print(f"\nHTML written to: {html_path}")
 
-    if not args.output_dir and not args.no_open:
-        webbrowser.open(f"file://{html_path}")
+    checks = [(p["metadata"]["lcsc_id"], p["metadata"].get("model_check")) for p in parts if p]
+    flagged = [(lcsc_id, c) for lcsc_id, c in checks if c is not None and not c.ok]
+    print(f"3D model checks: {sum(1 for _, c in checks if c is not None) - len(flagged)} passed, {len(flagged)} failed")
+    for lcsc_id, check in flagged:
+        print(f"  {lcsc_id}: " + "; ".join(check.details))
+
+    if not args.no_open:
+        webbrowser.open(f"file://{os.path.abspath(html_path)}")
 
 
 if __name__ == "__main__":

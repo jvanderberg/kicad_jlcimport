@@ -23,7 +23,8 @@ from .kicad.library import (
     update_project_lib_tables,
     validate_lib_name,
 )
-from .kicad.model3d import compute_model_transform, save_models
+from .kicad.model3d import ANCHOR_FOOTPRINT, PINS_ALIGNED, PINS_OFFSET, place_model, save_models
+from .kicad.model_checks import ModelCheck, check_model
 from .kicad.symbol_writer import write_symbol
 from .kicad.version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version
 
@@ -108,6 +109,12 @@ def _global_model_path(lib_dir: str, lib_name: str, model_name: str, kicad_versi
     if os.path.normpath(lib_dir) == os.path.normpath(default_dir):
         return f"${{KICAD{kicad_version}_3RD_PARTY}}/{lib_name}.3dshapes/{model_name}.wrl"
     return os.path.join(lib_dir, f"{lib_name}.3dshapes", f"{model_name}.wrl").replace("\\", "/")
+
+
+def _log_model_check(check: ModelCheck, log: Callable[[str], None]) -> None:
+    """Report problems the physical model checks found."""
+    for detail in check.details:
+        log(f"  Warning: 3D model {detail}; check it in the 3D viewer")
 
 
 def import_component(
@@ -280,6 +287,7 @@ def import_component(
     model_rotation = (0.0, 0.0, 0.0)
     uuid_3d = ""
     wrl_source = None
+    model_check = None
     if not reuse_existing_footprint:
         if footprint.model:
             uuid_3d = footprint.model.uuid
@@ -288,9 +296,18 @@ def import_component(
         if uuid_3d:
             wrl_source = download_wrl_source(uuid_3d)
         if footprint.model:
-            model_offset, model_rotation = compute_model_transform(
-                footprint.model, comp["fp_origin_x"], comp["fp_origin_y"], wrl_source
+            placement = place_model(
+                footprint.model, comp["fp_origin_x"], comp["fp_origin_y"], wrl_source, footprint.pads
             )
+            model_offset, model_rotation = placement.offset, placement.rotation
+            if placement.anchor == ANCHOR_FOOTPRINT:
+                log("  3D model: EasyEDA's placement data is unusable; centred on the footprint")
+            if placement.pins == PINS_ALIGNED:
+                log("  3D model: pins aligned to pads")
+            elif placement.pins == PINS_OFFSET:
+                log("  3D model: placed from EasyEDA data; pins land on their pads")
+            model_check = check_model(footprint, placement, wrl_source)
+            _log_model_check(model_check, log)
 
     # Parse symbol (may have multiple units)
     sym_content = ""
@@ -358,7 +375,7 @@ def import_component(
         log("No symbol data available")
 
     if export_only:
-        return _export_only(
+        result = _export_only(
             lib_dir,
             name,
             lcsc_id,
@@ -378,29 +395,33 @@ def import_component(
             model_name=model_name,
         )
 
-    return _import_to_library(
-        lib_dir,
-        lib_name,
-        name,
-        lcsc_id,
-        comp,
-        footprint,
-        uuid_3d,
-        model_offset,
-        model_rotation,
-        use_global,
-        overwrite,
-        sym_content,
-        title,
-        log,
-        kicad_version,
-        wrl_source,
-        metadata,
-        reuse_existing_footprint,
-        footprint_ref,
-        fp_name=fp_name,
-        model_name=model_name,
-    )
+    else:
+        result = _import_to_library(
+            lib_dir,
+            lib_name,
+            name,
+            lcsc_id,
+            comp,
+            footprint,
+            uuid_3d,
+            model_offset,
+            model_rotation,
+            use_global,
+            overwrite,
+            sym_content,
+            title,
+            log,
+            kicad_version,
+            wrl_source,
+            metadata,
+            reuse_existing_footprint,
+            footprint_ref,
+            fp_name=fp_name,
+            model_name=model_name,
+        )
+    if result is not None:
+        result["model_check"] = model_check
+    return result
 
 
 def _export_only(

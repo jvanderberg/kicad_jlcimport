@@ -1,104 +1,397 @@
-"""Tests for model3d.py - VRML conversion and model transforms."""
+"""Tests for model3d.py - 3D model placement, VRML conversion and saving."""
 
+import glob
 import json
+import math
 import os
 
 import pytest
 
-from kicad_jlcimport.easyeda.ee_types import EE3DModel
-from kicad_jlcimport.easyeda.parser import parse_footprint_shapes
+from kicad_jlcimport.easyeda.ee_types import EE3DModel, EEPad
+from kicad_jlcimport.easyeda.parser import _svgnode_outline_bbox, parse_footprint_shapes
 from kicad_jlcimport.kicad.model3d import (
-    _obj_xy_center,
+    ANCHOR_C_ORIGIN,
+    ANCHOR_FOOTPRINT,
+    ANCHOR_NONE,
+    ANCHOR_OUTLINE,
+    PIN_FIT_TOLERANCE_MM,
+    PINS_ALIGNED,
+    PINS_NOT_CHECKED,
+    PINS_OFFSET,
+    PINS_UNMATCHED,
+    _kicad_file_rotation,
+    _kicad_rotation,
+    _matmul,
+    _parse_obj_mesh,
+    _placed_vertices,
+    _rot,
     compute_model_transform,
     convert_to_vrml,
+    place_model,
     save_models,
 )
 
-# Path to test data directory
 TESTDATA_DIR = os.path.join(os.path.dirname(__file__), "..", "testdata")
 
-
-class TestComputeModelTransform:
-    def test_no_obj_source(self):
-        """Without OBJ data, XY offset is zero; only Z is used."""
-        model = EE3DModel(uuid="test", origin_x=0, origin_y=0, z=0, rotation=(0, 0, 0))
-        offset, rotation = compute_model_transform(model, 0, 0)
-        assert offset == (0.0, 0.0, 0.0)
-        assert rotation == (0, 0, 0)
-
-    def test_z_offset_with_obj(self):
-        """Z offset is converted from mils when OBJ data is provided."""
-        obj = "v 0 0 0\nv 1.0 1.0 1.0\n"
-        model = EE3DModel(uuid="test", origin_x=0, origin_y=0, z=50, rotation=(0, 0, 90))
-        offset, rotation = compute_model_transform(model, 0, 0, obj_source=obj)
-        # With 90° rotation, geometry offset (-cx, -cy) = (-0.5, -0.5) transforms to (0.5, -0.5)
-        # x' = -0.5*cos(90°) - (-0.5)*sin(90°) = -0.5*0 - (-0.5)*1 = 0.5
-        # y' = -0.5*sin(90°) + (-0.5)*cos(90°) = -0.5*1 + (-0.5)*0 = -0.5
-        assert offset[0] == pytest.approx(0.5)
-        assert offset[1] == pytest.approx(-0.5)
-        # z_offset = -z_min + mil_to_mm(model.z) = -0 + (50 × 0.254) = 12.7mm
-        assert offset[2] == pytest.approx(12.7, abs=0.01)
-        assert rotation == (0, 0, 90)
-
-    def test_z_offset_without_obj(self):
-        """Without OBJ data, z-offset defaults to 0 (model.z is unreliable)."""
-        model = EE3DModel(uuid="test", origin_x=200, origin_y=300, z=50, rotation=(0, 0, 90))
-        offset, rotation = compute_model_transform(model, 100, 100)
-        assert offset[0] == 0.0
-        assert offset[1] == 0.0
-        assert offset[2] == 0.0
-        assert rotation == (0, 0, 90)
-
-    def test_rotation_preserved(self):
-        """Rotation tuple is passed through unchanged."""
-        model = EE3DModel(uuid="test", origin_x=50, origin_y=50, z=0, rotation=(10, 20, 30))
-        offset, rotation = compute_model_transform(model, 100, 100)
-        assert rotation == (10, 20, 30)
-
-    def test_obj_source_recenters_xy(self):
-        """OBJ bounding-box centre is negated to recenter the model."""
-        obj = "v 1.0 2.0 0.0\nv 3.0 4.0 1.0\n"
-        model = EE3DModel(uuid="test", origin_x=0, origin_y=0, z=0, rotation=(0, 0, 0))
-        offset, _ = compute_model_transform(model, 0, 0, obj_source=obj)
-        # center = (2.0, 3.0); offset = (-2.0, -3.0)
-        assert offset[0] == pytest.approx(-2.0)
-        assert offset[1] == pytest.approx(-3.0)
-        assert offset[2] == 0.0
-
-    def test_obj_source_with_z_offset(self):
-        """OBJ XY correction and Z offset combine correctly."""
-        obj = "v -1.0 0.0 0.0\nv 5.0 2.0 1.0\n"
-        model = EE3DModel(uuid="test", origin_x=0, origin_y=0, z=50, rotation=(0, 0, 0))
-        offset, _ = compute_model_transform(model, 0, 0, obj_source=obj)
-        assert offset[0] == pytest.approx(-2.0)
-        assert offset[1] == pytest.approx(-1.0)
-        assert offset[2] == pytest.approx(12.7, abs=0.01)  # 50 mils × 0.254
+MM = 1 / 0.254  # EasyEDA units per mm
 
 
-class TestObjXyCenter:
-    def test_simple_vertices(self):
-        obj = "v 0 0 0\nv 4.0 6.0 1.0\n"
-        cx, cy = _obj_xy_center(obj)
-        assert cx == pytest.approx(2.0)
-        assert cy == pytest.approx(3.0)
+# ---------------------------------------------------------------------------
+# Synthetic geometry helpers
+# ---------------------------------------------------------------------------
 
-    def test_empty_returns_zero(self):
-        assert _obj_xy_center("") == (0.0, 0.0)
 
-    def test_no_vertex_lines(self):
-        assert _obj_xy_center("f 1 2 3\nusemtl foo\n") == (0.0, 0.0)
+def _obj(*boxes):
+    """OBJ text for axis-aligned boxes given as (x0, x1, y0, y1, z0, z1) in mm."""
+    verts, faces = [], []
+    for x0, x1, y0, y1, z0, z1 in boxes:
+        base = len(verts)
+        verts += [(x, y, z) for z in (z0, z1) for y in (y0, y1) for x in (x0, x1)]
+        for quad in ((0, 1, 3, 2), (4, 5, 7, 6), (0, 1, 5, 4), (2, 3, 7, 6), (0, 2, 6, 4), (1, 3, 7, 5)):
+            faces.append(tuple(base + i + 1 for i in quad))
+    lines = [f"v {x} {y} {z}" for x, y, z in verts] + ["usemtl m"]
+    lines += ["f " + " ".join(str(i) for i in face) for face in faces]
+    return "\n".join(lines)
 
-    def test_ignores_vn_vt(self):
-        obj = "vn 1 0 0\nvt 0.5 0.5\nv 2 4 0\nv 6 8 0\n"
-        cx, cy = _obj_xy_center(obj)
-        assert cx == pytest.approx(4.0)
-        assert cy == pytest.approx(6.0)
 
-    def test_centered_model_returns_zero(self):
-        obj = "v -3 -2 0\nv 3 2 0\n"
-        cx, cy = _obj_xy_center(obj)
-        assert cx == pytest.approx(0.0)
-        assert cy == pytest.approx(0.0)
+def _model(origin=(0.0, 0.0), outline=None, z=0.0, c_rotation=(0.0, 0.0, 0.0)):
+    """EE3DModel as the parser builds it (rotation is c_rotation negated)."""
+    return EE3DModel(
+        uuid="m",
+        origin_x=origin[0],
+        origin_y=origin[1],
+        z=z,
+        rotation=tuple(-a for a in c_rotation),
+        outline=outline,
+    )
+
+
+def _outline_mm(cx, cy, w, h):
+    """Outline bbox in EasyEDA units for a w x h mm box centred at (cx, cy) mm."""
+    return ((cx - w / 2) * MM, (cx + w / 2) * MM, (cy - h / 2) * MM, (cy + h / 2) * MM)
+
+
+def _tht_pad(x, y, number="1", size=1.6):
+    return EEPad(shape="ELLIPSE", x=x, y=y, width=size, height=size, layer="11", number=number, drill=1.0)
+
+
+def _smd_pad(x, y, w, h, number="1", layer="1"):
+    return EEPad(shape="RECT", x=x, y=y, width=w, height=h, layer=layer, number=number, drill=0.0)
+
+
+# Two 0.6 mm square pins at x = ±1.27 through the board, under a body.
+TWO_PIN_PART = _obj(
+    (-1.57, -0.97, -0.3, 0.3, -3.0, 1.0),
+    (0.97, 1.57, -0.3, 0.3, -3.0, 1.0),
+    (-2.5, 2.5, -1.0, 1.0, 1.0, 3.0),
+)
+TWO_PIN_OUTLINE = _outline_mm(0, 0, 5.0, 2.0)
+TWO_PIN_Z = -3.0 * MM  # pin tips 3 mm below the board
+
+
+def _approx(a, b, tol=1e-6):
+    return all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+# ---------------------------------------------------------------------------
+# Step 1: rotation
+# ---------------------------------------------------------------------------
+
+
+class TestRotation:
+    @pytest.mark.parametrize("rz", [0, 90, -90, 180, 270, 45])
+    def test_z_only_rotation_is_negated(self, rz):
+        rot = _kicad_file_rotation((0.0, 0.0, -rz))
+        expected = ((-rz + 180) % 360) - 180 or 0.0
+        assert rot[0] == 0.0 and rot[1] == 0.0
+        assert math.isclose((rot[2] - expected + 180) % 360 - 180, 0.0, abs_tol=1e-6)
+
+    @pytest.mark.parametrize(
+        "c_rotation",
+        [(270, 0, 180), (90, 0, 0), (0, 90, 0), (30, 45, 60), (90, 90, 0), (180, 0, 90), (0, -90, 30)],
+    )
+    def test_kicad_rotation_matches_easyeda_composition(self, c_rotation):
+        """KiCad's Rz·Ry·Rx of the converted angles equals EasyEDA's Rx·Ry·Rz."""
+        ex, ey, ez = c_rotation
+        easyeda = _matmul(_matmul(_rot("x", ex), _rot("y", ey)), _rot("z", ez))
+        kicad = _kicad_rotation(_kicad_file_rotation(tuple(-a for a in c_rotation)))
+        for row_a, row_b in zip(easyeda, kicad):
+            assert _approx(row_a, row_b)
+
+    def test_c2318_vertical_connector_rotation(self):
+        """c_rotation 270,0,180 must stand the connector up, not turn it upside down."""
+        assert _kicad_file_rotation((-270.0, 0.0, -180.0)) == (-90.0, 0.0, 180.0)
+
+
+# ---------------------------------------------------------------------------
+# Step 2: anchor
+# ---------------------------------------------------------------------------
+
+
+class TestAnchor:
+    # 2 x 1 mm block whose bounding box is centred at (0.5, 0.25) mm, z in [-0.25, 0.25]
+    BLOCK = _obj((-0.5, 1.5, -0.25, 0.75, -0.25, 0.25))
+
+    def test_no_obj_gives_zero_offset(self):
+        placement = place_model(_model(c_rotation=(0, 0, 90)), 0, 0)
+        assert placement.offset == (0.0, 0.0, 0.0)
+        assert placement.rotation == (0.0, 0.0, -90.0)
+        assert placement.anchor == ANCHOR_NONE
+
+    def test_empty_obj_gives_zero_offset(self):
+        assert place_model(_model(), 0, 0, "usemtl m\n").offset == (0.0, 0.0, 0.0)
+
+    def test_centres_model_on_outline(self):
+        model = _model(origin=(500 * MM, 500 * MM), outline=_outline_mm(2.0, 1.0, 2.0, 1.0))
+        placement = place_model(model, 0, 0, self.BLOCK)
+        assert placement.anchor == ANCHOR_OUTLINE
+        # KiCad offset Y points up: board y = 1.0 mm down -> -1.0
+        assert _approx(placement.offset, (2.0 - 0.5, -1.0 - 0.25, 0.25))
+
+    def test_outline_is_relative_to_footprint_origin(self):
+        model = _model(outline=_outline_mm(102.0, 51.0, 2.0, 1.0))
+        offset, _ = compute_model_transform(model, 100 * MM, 50 * MM, self.BLOCK)
+        assert _approx(offset[:2], (2.0 - 0.5, -1.0 - 0.25))
+
+    def test_outline_compared_after_z_rotation(self):
+        """A model turned 90° about Z has a 1 x 2 mm outline."""
+        model = _model(outline=_outline_mm(0, 0, 1.0, 2.0), c_rotation=(0, 0, 90))
+        assert place_model(model, 0, 0, self.BLOCK).anchor == ANCHOR_OUTLINE
+
+    def test_mismatched_outline_falls_back_to_c_origin(self):
+        model = _model(origin=(1.0 * MM, 0.0), outline=_outline_mm(0, 0, 0.01, 0.5))
+        placement = place_model(model, 0, 0, self.BLOCK)
+        assert placement.anchor == ANCHOR_C_ORIGIN
+        assert _approx(placement.offset[:2], (1.0 - 0.5, -0.25))
+
+    def test_implausible_c_origin_centres_on_footprint(self):
+        """c_origin hundreds of mm away (seen on C33696) is not trusted."""
+        model = _model(origin=(-875.0 * MM, 798.0 * MM))
+        placement = place_model(model, 0, 0, self.BLOCK)
+        assert placement.anchor == ANCHOR_FOOTPRINT
+        assert _approx(placement.offset[:2], (-0.5, -0.25))
+
+    def test_c_origin_must_cover_the_pads(self):
+        pads = [_smd_pad(-5.0, 0, 1, 1), _smd_pad(-3.0, 0, 1, 1)]
+        far = place_model(_model(origin=(5.0 * MM, 0.0)), 0, 0, self.BLOCK, pads)
+        near = place_model(_model(origin=(-4.0 * MM, 0.0)), 0, 0, self.BLOCK, pads)
+        assert far.anchor == ANCHOR_FOOTPRINT
+        assert near.anchor == ANCHOR_C_ORIGIN
+
+    def test_lowest_point_goes_to_z(self):
+        model = _model(outline=_outline_mm(0.5, -0.25, 2.0, 1.0), z=-3.5 * MM)
+        offset, _ = compute_model_transform(model, 0, 0, self.BLOCK)
+        assert offset[2] == pytest.approx(-3.5 + 0.25)
+
+    def test_lift_is_applied_before_x_rotation(self):
+        """C2318: EasyEDA lifts by z - z_min, then rotates; turned 90° about X it is horizontal."""
+        obj = _obj((-2.5, 12.5, -2.5, 7.0, -2.4, 3.3))
+        model = _model(outline=_outline_mm(5.0, 0.0, 15.0, 9.5), z=2.3 * MM, c_rotation=(270, 0, 180))
+        offset, rotation = compute_model_transform(model, 0, 0, obj)
+        assert rotation == (-90.0, 0.0, 180.0)
+        assert offset[2] == pytest.approx(0.0, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Step 3: pin fit
+# ---------------------------------------------------------------------------
+
+
+class TestPinFit:
+    def test_shifts_pins_onto_holes(self):
+        pads = [_tht_pad(-1.27 + 0.1, 0.2, "1"), _tht_pad(1.27 + 0.1, 0.2, "2")]
+        placement = place_model(_model(outline=TWO_PIN_OUTLINE, z=TWO_PIN_Z), 0, 0, TWO_PIN_PART, pads)
+        assert placement.pins == PINS_ALIGNED
+        assert placement.pin_rms == pytest.approx(0.0, abs=1e-9)
+        # board +0.2 mm (down) is KiCad -0.2 mm
+        assert _approx(placement.offset[:2], (0.1, -0.2))
+
+    def test_without_pads_pins_are_not_checked(self):
+        placement = place_model(_model(outline=TWO_PIN_OUTLINE, z=TWO_PIN_Z), 0, 0, TWO_PIN_PART)
+        assert placement.pins == PINS_NOT_CHECKED
+        assert _approx(placement.offset[:2], (0.0, 0.0))
+
+    def test_keeps_anchor_when_pin_spacing_differs(self):
+        pads = [_tht_pad(-1.5, 0, "1"), _tht_pad(1.5, 0, "2")]
+        placement = place_model(_model(outline=TWO_PIN_OUTLINE, z=TWO_PIN_Z), 0, 0, TWO_PIN_PART, pads)
+        assert placement.pins == PINS_OFFSET
+        assert placement.pin_rms > PIN_FIT_TOLERANCE_MM
+        assert _approx(placement.offset[:2], (0.0, 0.0))
+
+    def test_reports_pins_that_miss_the_pads(self):
+        """C8760-style: the model's leads are nowhere near the holes."""
+        pads = [_tht_pad(-3.75, 0, "1"), _tht_pad(3.75, 0, "2")]
+        placement = place_model(_model(outline=TWO_PIN_OUTLINE, z=TWO_PIN_Z), 0, 0, TWO_PIN_PART, pads)
+        assert placement.pins == PINS_UNMATCHED
+        assert _approx(placement.offset[:2], (0.0, 0.0))
+
+    def test_smd_terminals_larger_than_pads_still_pair(self):
+        """C94598-style: every corner of the terminal lies outside the pad."""
+        obj = _obj((-2.8, -1.8, -0.4, 0.4, 0.0, 0.5), (1.8, 2.8, -0.4, 0.4, 0.0, 0.5), (-1.8, 1.8, -1, 1, 0.1, 1.0))
+        pads = [_smd_pad(-2.3, 0, 0.7, 0.6, "1"), _smd_pad(2.3, 0, 0.7, 0.6, "2")]
+        placement = place_model(_model(outline=_outline_mm(0, 0, 5.6, 2.0)), 0, 0, obj, pads)
+        assert placement.pins == PINS_ALIGNED
+
+    def test_smd_terminals_are_centred(self):
+        obj = _obj((-2.8, -1.8, -0.4, 0.4, 0.0, 0.5), (1.8, 2.8, -0.4, 0.4, 0.0, 0.5))
+        pads = [_smd_pad(-2.3 + 0.05, 0, 1.6, 1.2, "1"), _smd_pad(2.3 + 0.05, 0, 1.6, 1.2, "2")]
+        placement = place_model(_model(outline=_outline_mm(0, 0, 5.6, 0.8)), 0, 0, obj, pads)
+        assert placement.pins == PINS_ALIGNED
+        assert placement.offset[0] == pytest.approx(0.05)
+
+    def test_bottom_side_smd_pads_are_skipped(self):
+        obj = _obj((-2.8, -1.8, -0.4, 0.4, 0.0, 0.5), (1.8, 2.8, -0.4, 0.4, 0.0, 0.5))
+        pads = [_smd_pad(-2.3, 0, 1.6, 1.2, "1", layer="2"), _smd_pad(2.3, 0, 1.6, 1.2, "2", layer="2")]
+        placement = place_model(_model(outline=_outline_mm(0, 0, 5.6, 0.8)), 0, 0, obj, pads)
+        assert placement.pins == PINS_UNMATCHED
+
+    def test_polygon_pads_use_their_outline(self):
+        square = [-0.8, -0.8, 0.8, -0.8, 0.8, 0.8, -0.8, 0.8]
+        pads = [
+            EEPad("POLYGON", -1.27 + 0.1, 0, 0, 0, "11", "1", 1.0, polygon_points=square),
+            EEPad("POLYGON", 1.27 + 0.1, 0, 0, 0, "11", "2", 1.0, polygon_points=square),
+        ]
+        placement = place_model(_model(outline=TWO_PIN_OUTLINE, z=TWO_PIN_Z), 0, 0, TWO_PIN_PART, pads)
+        assert placement.pins == PINS_ALIGNED
+        assert placement.offset[0] == pytest.approx(0.1)
+
+
+# ---------------------------------------------------------------------------
+# outline3D parsing
+# ---------------------------------------------------------------------------
+
+
+def _svgnode(children, transform="scale(1) translate(0, 0)"):
+    return {"attrs": {"transform": transform}, "childNodes": children}
+
+
+def _polyline(points):
+    return {"nodeName": "polyline", "attrs": {"points": points}}
+
+
+class TestOutlineParsing:
+    def test_polyline_bbox(self):
+        node = _svgnode([_polyline("10 20 30 20 30 5 10 5"), _polyline("12 8 40 8")])
+        assert _svgnode_outline_bbox(node) == (10, 40, 5, 20)
+
+    def test_translate_and_scale_applied(self):
+        node = _svgnode([_polyline("0 0 4 2")], transform="scale(2) translate(1, -1)")
+        assert _svgnode_outline_bbox(node) == (2, 10, -2, 2)
+
+    def test_missing_transform_is_identity(self):
+        assert _svgnode_outline_bbox({"childNodes": [_polyline("1 2 3 4")]}) == (1, 3, 2, 4)
+
+    def test_leading_dot_numbers(self):
+        assert _svgnode_outline_bbox(_svgnode([_polyline(".5 .5 1.5 1.5")])) == (0.5, 1.5, 0.5, 1.5)
+
+    @pytest.mark.parametrize(
+        "node",
+        [
+            _svgnode([]),
+            {"attrs": {}},
+            _svgnode([{"nodeName": "path", "attrs": {"d": "M 10 10 A 5 5 0 0 1 20 10"}}]),
+            _svgnode([_polyline("1 2 3")]),
+            _svgnode([_polyline("1 2 3 4")], transform="rotate(45)"),
+            _svgnode([{"nodeName": "polyline", "attrs": {"points": "1 2 3 4", "transform": "rotate(9)"}}]),
+        ],
+    )
+    def test_unrecognised_outline_is_none(self, node):
+        assert _svgnode_outline_bbox(node) is None
+
+
+# ---------------------------------------------------------------------------
+# Real parts (testdata/)
+# ---------------------------------------------------------------------------
+
+
+def _load_part(lcsc_id):
+    with open(os.path.join(TESTDATA_DIR, f"{lcsc_id}_footprint.json")) as f:
+        data = json.load(f)["dataStr"]
+    ox, oy = data["head"]["x"], data["head"]["y"]
+    footprint = parse_footprint_shapes(data["shape"], ox, oy)
+    with open(os.path.join(TESTDATA_DIR, f"{lcsc_id}_model.obj")) as f:
+        obj = f.read()
+    return footprint, ox, oy, obj
+
+
+def _parts_with_models():
+    ids = []
+    for path in sorted(glob.glob(os.path.join(TESTDATA_DIR, "*_model.obj"))):
+        lcsc_id = os.path.basename(path).split("_")[0]
+        if os.path.exists(os.path.join(TESTDATA_DIR, f"{lcsc_id}_footprint.json")):
+            ids.append(lcsc_id)
+    return ids
+
+
+# Through-hole parts whose pins go exactly through their holes once placed.
+THT_ALIGNED = [
+    "C10081",
+    "C138392",
+    "C2203",
+    "C2316",
+    "C2318",
+    "C2320",
+    "C2321",
+    "C2474",
+    "C2562",
+    "C33478",
+    "C3794",
+    "C385834",
+    "C386757",
+    "C386758",
+    "C395958",
+    "C5213",
+    "C668119",
+]
+
+
+class TestRealParts:
+    @pytest.mark.parametrize("lcsc_id", THT_ALIGNED)
+    def test_through_hole_pins_land_in_holes(self, lcsc_id):
+        footprint, ox, oy, obj = _load_part(lcsc_id)
+        placement = place_model(footprint.model, ox, oy, obj, footprint.pads)
+        assert placement.pins == PINS_ALIGNED
+        assert placement.pin_rms <= PIN_FIT_TOLERANCE_MM
+
+    @pytest.mark.parametrize("lcsc_id", _parts_with_models())
+    def test_model_covers_its_footprint(self, lcsc_id):
+        """Every placed model overlaps its pads: never offset off the part."""
+        footprint, ox, oy, obj = _load_part(lcsc_id)
+        placement = place_model(footprint.model, ox, oy, obj, footprint.pads)
+        placed = _placed_vertices(_parse_obj_mesh(obj), placement.rotation, placement.offset)
+        xs = [v[0] for v in placed]
+        ys = [v[1] for v in placed]
+        for pad in footprint.pads:
+            assert min(xs) - 0.5 <= pad.x <= max(xs) + 0.5, lcsc_id
+            assert min(ys) - 0.5 <= pad.y <= max(ys) + 0.5, lcsc_id
+
+    def test_c2318_stands_upright(self):
+        """Vertical XH-5A: housing on the board, 2.5 mm pins below it."""
+        footprint, ox, oy, obj = _load_part("C2318")
+        placement = place_model(footprint.model, ox, oy, obj, footprint.pads)
+        placed = _placed_vertices(_parse_obj_mesh(obj), placement.rotation, placement.offset)
+        assert min(v[2] for v in placed) == pytest.approx(-2.5, abs=0.01)
+        assert max(v[2] for v in placed) == pytest.approx(7.0, abs=0.01)
+
+    def test_c33696_ignores_bogus_c_origin(self):
+        """c_origin is ~1180 mm away; the outline puts the model on its pads."""
+        footprint, ox, oy, obj = _load_part("C33696")
+        placement = place_model(footprint.model, ox, oy, obj, footprint.pads)
+        assert placement.anchor == ANCHOR_OUTLINE
+        assert math.hypot(*placement.offset[:2]) < 0.5
+
+    def test_c3116_degenerate_outline_uses_c_origin(self):
+        footprint, ox, oy, obj = _load_part("C3116")
+        assert place_model(footprint.model, ox, oy, obj, footprint.pads).anchor == ANCHOR_C_ORIGIN
+
+    def test_c8760_mismatched_model_is_reported(self):
+        """EasyEDA's model has its leads on a 9.8 mm diagonal; the pads are 7.5 mm apart in a line."""
+        footprint, ox, oy, obj = _load_part("C8760")
+        assert place_model(footprint.model, ox, oy, obj, footprint.pads).pins == PINS_UNMATCHED
+
+    def test_c94598_terminals_pair_with_pads(self):
+        footprint, ox, oy, obj = _load_part("C94598")
+        assert place_model(footprint.model, ox, oy, obj, footprint.pads).pins != PINS_UNMATCHED
 
 
 class TestConvertToVrml:
@@ -186,367 +479,6 @@ class TestConvertToVrml:
         assert lines[0] == "#VRML V2.0 utf8"
 
 
-class TestTHTConnectorOffsets:
-    """Test THT connector offset calculations with real component data.
-
-    Uses actual footprint and OBJ data from testdata/ to verify against
-    user-validated offset values.
-    """
-
-    def _load_test_data(self, lcsc_id):
-        """Load footprint and OBJ data for a test part."""
-        # Load footprint data
-        fp_path = os.path.join(TESTDATA_DIR, f"{lcsc_id}_footprint.json")
-        with open(fp_path) as f:
-            fp_data = json.load(f)
-
-        # Parse footprint to get model data
-        fp_head = fp_data["dataStr"]["head"]
-        fp_origin_x = fp_head["x"]
-        fp_origin_y = fp_head["y"]
-
-        fp_shapes = fp_data["dataStr"]["shape"]
-        footprint = parse_footprint_shapes(fp_shapes, fp_origin_x, fp_origin_y)
-
-        # Load OBJ data
-        obj_path = os.path.join(TESTDATA_DIR, f"{lcsc_id}_model.obj")
-        with open(obj_path) as f:
-            obj_source = f.read()
-
-        return footprint.model, fp_origin_x, fp_origin_y, obj_source
-
-    def test_c160404_smd_connector(self):
-        """C160404 (SM04B-SRSS-TB) - SMD connector that started issue #29."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C160404")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=-1.5, y=-0.35, z=0.0
-        assert offset[0] == pytest.approx(-1.5, abs=0.01)
-        assert offset[1] == pytest.approx(-0.35, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.2)
-
-    def test_c668119_coincident_origins(self):
-        """C668119 (4-pin header) - model and footprint origins coincide."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C668119")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z≈-0.134 (formula gives 0.0, difference acceptable)
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.15)
-
-    def test_c82899_esp32_module(self):
-        """C82899 (ESP32-WROOM-32) - SMD module with model origin offset."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C82899")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=3.743, z=0.005
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(3.743, abs=0.01)
-        assert offset[2] == pytest.approx(0.005, abs=0.01)
-
-    def test_c33696_outlier_offset(self):
-        """C33696 - part with erroneous 798mm origin offset should default to zero."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C33696")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: should be x=0, y=0, z=0 (798mm offset is EasyEDA data error)
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.2)
-
-    def test_c1027_symmetric_smd(self):
-        """C1027 (L0603 inductor) - symmetric SMD part should use z_max for offset."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C1027")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z=0.254 (symmetric SMD, use z_max)
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(0.254, abs=0.01)
-
-    def test_c3116_symmetric_smd_taller(self):
-        """C3116 - taller symmetric SMD part should use z_max for offset."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C3116")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z=2.6 (symmetric SMD, use z_max)
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(2.6, abs=0.01)
-
-    def test_c385834_rj45_connector(self):
-        """C385834 (RJ45) - uses z_max for parts extending below PCB."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C385834")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=-1.08, z=6.45
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(-1.08, abs=0.05)
-        assert offset[2] == pytest.approx(6.35, abs=0.3)  # z_max (formula gives 6.6)
-
-    def test_c395958_terminal_block(self):
-        """C395958 (2-pin terminal) - uses -z_min/2 for parts extending above PCB."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C395958")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=-0.00005, y=-8.9, z=4.2
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(-8.9, abs=0.25)  # -cy - model_origin_diff
-        assert offset[2] == pytest.approx(4.2, abs=0.8)  # -z_min/2 (formula gives 4.9)
-
-    def test_c5206_dip_package(self):
-        """C5206 (DIP-8) - uses z_max for parts extending below PCB, even with matching origins."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C5206")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=good, y=good, z≈2mm
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(2.0, abs=0.5)  # z_max (formula gives 2.475)
-
-    def test_c6186_spurious_offset(self):
-        """C6186 (SOT-223-3) - spurious model origin offset should be ignored."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C6186")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z=0 (2.921mm offset is spurious)
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.2)
-
-    def test_c5213_spurious_offset(self):
-        """C5213 (SOT-89) - small spurious model origin offset should be ignored."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C5213")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z=1.05 (0.127mm offset is spurious)
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(1.05, abs=0.01)
-
-    def test_c3794_to220_vertical(self):
-        """C3794 (TO-220-3 vertical) - uses intentional y offset, z=0 for mainly-above part."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C3794")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0.65, z=-0.255
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.65, abs=0.01)
-        assert offset[2] == pytest.approx(-0.255, abs=0.01)
-
-    def test_c10081_th_resistor(self):
-        """C10081 (TH Resistor) - no offset needed."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C10081")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z=0
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.2)
-
-    def test_c2474_do41_diode(self):
-        """C2474 (DO-41 Diode) - no offset needed."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C2474")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z=0
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.2)
-
-    def test_c2562_to220_horizontal(self):
-        """C2562 (TO-220-3 horizontal) - cy/height < 5% is ignored, uses z=0 for mainly-above part."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C2562")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z=-2.8 (cy=0.45mm is only 2.1% of height=21.9mm)
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(-2.8, abs=0.01)
-
-    def test_c138392_rj45_tht(self):
-        """C138392 (RJ45-TH) - THT connector with intentional origin offset, z=0 for mainly-above."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C138392")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=-3.35, z=0.321 (cy/height=0.5%, z_max/|z_min|=3.24)
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(-3.35, abs=0.01)
-        assert offset[2] == pytest.approx(0.321, abs=0.01)
-
-    def test_c386757_rj45_tht(self):
-        """C386757 (RJ45-TH) - connector with significant cy, z=0 for mainly-above."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C386757")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=-5.82, z=0 (cy/height=15.5%, z_max/|z_min|=3.55)
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(-5.82, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.2)
-
-    def test_c2078_sot89_with_rotation(self):
-        """C2078 (SOT-89) - Z-rotation=-180° requires offset transformation."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C2078")
-
-        offset, rotation = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=-0.3, y=0, z=0 after Z-rotation transformation
-        assert offset[0] == pytest.approx(-0.3, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.2)
-        assert rotation[2] == pytest.approx(-180.0, abs=0.01)
-
-    def test_c2203_hc49us_crystal(self):
-        """C2203 (HC-49US Crystal) - symmetric THT crystal should use z=0, not z_max."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C2203")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z=0 (symmetric THT crystal should sit flat)
-        # Currently failing: produces z=3.5 due to symmetric SMD detection
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.2)
-
-    def test_c7519_sot23_6(self):
-        """C7519 (SOT-23-6) - spurious model origin offset should be ignored."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C7519")
-
-        offset, _ = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=0, z=0 (SMD part with spurious 0.965mm origin offset)
-        # Currently failing: produces y=-0.965 due to origin offset detection
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(0.0, abs=0.01)
-        assert offset[2] == pytest.approx(0.0, abs=0.2)
-
-    def test_c2316_xh3a_with_rotation(self):
-        """C2316 (XH-3A) - connector with Z-rotation=-180° requires offset transformation."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C2316")
-
-        offset, rotation = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=2.5, y=2.25, z=1.8 after Z-rotation transformation
-        assert offset[0] == pytest.approx(2.5, abs=0.01)
-        assert offset[1] == pytest.approx(2.25, abs=0.01)
-        assert offset[2] == pytest.approx(1.8, abs=0.01)
-        assert rotation[2] == pytest.approx(-180.0, abs=0.01)
-
-    def test_c386758_with_rotation_and_offset(self):
-        """C386758 - THT part with origin offset and Z-rotation=-180° requires correct sign."""
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C386758")
-
-        offset, rotation = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # User verified: x=0, y=1.587, z=-0.55 after Z-rotation transformation
-        assert offset[0] == pytest.approx(0.0, abs=0.01)
-        assert offset[1] == pytest.approx(1.587, abs=0.01)
-        assert offset[2] == pytest.approx(-0.55, abs=0.01)
-        assert rotation[2] == pytest.approx(-180.0, abs=0.01)
-
-    def test_c2320_x_origin_offset_with_rotation(self):
-        """C2320 (PH-3A) - connector with X-axis origin offset and -90° Z-rotation.
-
-        This part has model origin offset in the X direction (0.65mm), which was
-        previously ignored. With -90° rotation, the geometry offset must be rotated
-        but the origin offset must NOT be rotated (stays in footprint space).
-        """
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C2320")
-
-        offset, rotation = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # Expected: centered at (0, 0) after X-offset is properly handled
-        assert offset[0] == pytest.approx(0.0, abs=0.1)
-        assert offset[1] == pytest.approx(0.0, abs=0.1)
-        assert offset[2] == pytest.approx(0.0, abs=0.1)
-        assert rotation[2] == pytest.approx(-90.0, abs=0.01)
-
-    def test_c2321_no_rotation_x_offset(self):
-        """C2321 (PH-4A) - connector with significant X-offset in geometry (cx=3.0mm).
-
-        This part has no rotation but significant X offset in the OBJ geometry.
-        The Y origin offset cancels out the cy offset, resulting in only X offset.
-        """
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C2321")
-
-        offset, rotation = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # Expected: X offset of -3.0mm (from -cx), Y and Z centered
-        assert offset[0] == pytest.approx(-3.0, abs=0.1)
-        assert offset[1] == pytest.approx(0.0, abs=0.1)
-        assert offset[2] == pytest.approx(0.0, abs=0.1)
-        assert rotation[2] == pytest.approx(0.0, abs=0.01)
-
-    def test_c33478_x_origin_offset_with_rotation(self):
-        """C33478 (PH-6A) - connector with X-axis origin offset and -90° Z-rotation.
-
-        Similar to C2320, this validates that X-axis origin offsets are properly
-        handled for rotated parts. The X offset (0.63mm) should be applied in
-        footprint space after the geometry offset is rotated.
-        """
-        model, fp_origin_x, fp_origin_y, obj_source = self._load_test_data("C33478")
-
-        offset, rotation = compute_model_transform(model, fp_origin_x, fp_origin_y, obj_source)
-
-        # Expected: nearly centered (small X offset due to rounding: 0.02mm)
-        assert offset[0] == pytest.approx(0.0, abs=0.1)
-        assert offset[1] == pytest.approx(0.0, abs=0.1)
-        assert offset[2] == pytest.approx(0.0, abs=0.1)
-        assert rotation[2] == pytest.approx(-90.0, abs=0.01)
-
-
-class TestPartsWithoutOBJData:
-    """Test parts where 3D model OBJ data is not available.
-
-    For these parts, z-offset should default to 0 as model.z is unreliable.
-    """
-
-    def test_parts_without_obj_default_to_zero_z(self):
-        """Parts without OBJ data should have z-offset = 0."""
-        test_parts = ["C5213", "C3794", "C8852", "C18901", "C10081", "C138392"]
-
-        for part_id in test_parts:
-            fp_path = os.path.join(TESTDATA_DIR, f"{part_id}_footprint.json")
-            if not os.path.exists(fp_path):
-                continue  # Skip if test data not available
-
-            with open(fp_path) as f:
-                fp_data = json.load(f)
-
-            fp_head = fp_data["dataStr"]["head"]
-            fp_origin_x = fp_head["x"]
-            fp_origin_y = fp_head["y"]
-            fp_shapes = fp_data["dataStr"]["shape"]
-            footprint = parse_footprint_shapes(fp_shapes, fp_origin_x, fp_origin_y)
-
-            if not footprint.model:
-                continue  # Skip if no 3D model
-
-            # No OBJ file available
-            offset, _ = compute_model_transform(footprint.model, fp_origin_x, fp_origin_y, obj_source=None)
-
-            # User verified: z should be 0 for all these parts
-            assert offset[2] == 0.0, f"{part_id} should have z-offset=0, got {offset[2]:.3f}"
-
-
 class TestSaveModels:
     def test_returns_existing_files_when_no_data(self, tmp_path):
         """When no data is provided, existing files are still returned."""
@@ -583,3 +515,55 @@ class TestSaveModels:
         step_out, wrl_out = save_models(str(tmp_path), "part")
         assert step_out is None
         assert wrl_out is None
+
+
+# ---------------------------------------------------------------------------
+# Physical checks (model_checks.py)
+# ---------------------------------------------------------------------------
+
+
+class TestModelChecks:
+    @staticmethod
+    def _check(obj, pads, offset=(0.0, 0.0, 0.0), rotation=(0.0, 0.0, 0.0), holes=(), pins=PINS_ALIGNED):
+        from kicad_jlcimport.easyeda.ee_types import EEFootprint, EEHole
+        from kicad_jlcimport.kicad.model3d import ModelPlacement
+        from kicad_jlcimport.kicad.model_checks import check_model
+
+        footprint = EEFootprint(pads=list(pads), holes=[EEHole(*h) for h in holes])
+        return check_model(footprint, ModelPlacement(offset, rotation, ANCHOR_OUTLINE, pins), obj)
+
+    THT_PADS = [_tht_pad(-1.27, 0, "1"), _tht_pad(1.27, 0, "2")]
+
+    def test_through_hole_part_passes(self):
+        result = self._check(TWO_PIN_PART, self.THT_PADS, offset=(0, 0, 0.0))
+        assert result.ok and not result.warnings
+
+    def test_floating(self):
+        result = self._check(TWO_PIN_PART, self.THT_PADS, offset=(0, 0, 3.5))
+        assert result.issues == ["floating"]
+
+    def test_upside_down_body_through_the_board(self):
+        # Rotated 180° about X the body (z 1..3) ends up 1..3 mm under the board
+        result = self._check(TWO_PIN_PART, self.THT_PADS, rotation=(180.0, 0.0, 0.0))
+        assert "below_board" in result.issues
+
+    def test_sunk_body_is_a_warning(self):
+        result = self._check(TWO_PIN_PART, self.THT_PADS, offset=(0, 0, -1.3))
+        assert result.ok
+        assert result.warnings == ["sunk"]
+
+    def test_pegs_may_go_through_mounting_holes(self):
+        obj = _obj((-0.3, 0.3, -0.3, 0.3, -3.0, 0.0), (-2.0, 2.0, -1.0, 1.0, 0.0, 2.0))
+        pads = [_smd_pad(-1.5, 0, 0.5, 0.5, "1"), _smd_pad(1.5, 0, 0.5, 0.5, "2")]
+        assert self._check(obj, pads, holes=[(0.0, 0.0, 0.5)]).ok
+        assert "below_board" in self._check(obj, pads).issues
+
+    def test_pad_outside_model(self):
+        pads = self.THT_PADS + [_tht_pad(10.0, 0, "3")]
+        assert "off_footprint" in self._check(TWO_PIN_PART, pads).issues
+
+    def test_unmatched_pins_reported(self):
+        assert "pins_unmatched" in self._check(TWO_PIN_PART, self.THT_PADS, pins=PINS_UNMATCHED).issues
+
+    def test_no_model_has_nothing_to_check(self):
+        assert self._check(None, self.THT_PADS).ok
