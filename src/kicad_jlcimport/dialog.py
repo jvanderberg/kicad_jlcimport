@@ -1143,7 +1143,7 @@ class _SpinnerOverlay(wx.Window):
 class JLCImportDialog(wx.Dialog):
     def __init__(self, parent, board, project_dir=None, kicad_version=None, global_lib_dir="", on_close=None):
         # Extra height in the PCB editor for the notebook tab row (Import Parts / Production Files)
-        size = (700, 640) if board is None else (720, 680)
+        size = (800, 640) if board is None else (820, 680)
         super().__init__(parent, title="JLCImport", size=size, style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.board = board
         self._project_dir = project_dir  # Used when board is None (standalone mode)
