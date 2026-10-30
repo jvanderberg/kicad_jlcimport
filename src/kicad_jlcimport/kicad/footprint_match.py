@@ -18,10 +18,18 @@ assemble correctly.
 3. **Geometry fit.**  JLC's pad centres are fitted onto the candidate with
    the production solver (:func:`..production.solver.solve_placement`).  A
    candidate is kept only when the fit lands within
-   ``Tolerances.high_rms`` at a 90° step and the numbering isn't mirrored,
-   which is what lets production export place it with high confidence.
-4. **Ranking.**  Standard variants beat HandSolder ones; then lower RMS
-   residual, then closer pad sizes.
+   ``Tolerances.high_rms`` at a 90° step, which is what lets production
+   export place it with high confidence.  A footprint numbered in mirror
+   image can't fit that closely.
+4. **Every pad lands on a pad.**  The solver fits one point per pad number
+   (the centroid of pads sharing a number), so after the fit each pad on
+   either footprint must also lie on a pad with its number on the other.
+   That rejects a missing or extra pad in a group (an exposed pad without
+   JLC's tie bars) and a pin moved to another pad, which an RMS over many
+   pads would hide.
+5. **Ranking.**  Footprints with no polarity caveat first, then standard
+   variants before HandSolder ones, then lower RMS residual and closer pad
+   sizes.
 
 For polarized two-terminal parts the + / - side of JLC's footprint (its
 polarity marks, else its symbol's pin names) is checked against KiCad's
@@ -30,12 +38,14 @@ in :attr:`FootprintMatch.polarity`.
 """
 
 import functools
+import math
 import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from ..production.conventions import TOP
+from ..production.conventions import TOP, board_to_cpl, place_local
+from ..production.jlc_footprints import needs_pin_names
 from ..production.kicad_pcb import footprint_from_node, parse_sexpr
 from ..production.models import FootprintRecord, PadRecord
 from ..production.polarity import (
@@ -49,7 +59,7 @@ from ..production.polarity import (
 )
 from ..production.solver import (
     DEFAULT_TOLERANCES,
-    MIRRORED,
+    FitResult,
     Tolerances,
     group_pads,
     normalize_pad_number,
@@ -63,9 +73,11 @@ POLARITY_NA = ""  # not a polarized two-terminal part
 POLARITY_SAME = "same"  # pad 1 has the same polarity on both footprints
 POLARITY_REVERSED = "reversed"  # KiCad's pad 1 is the other polarity from JLC's pad 1
 POLARITY_UNKNOWN = "unknown"  # KiCad's footprint is polarized but JLC's doesn't say which pad is which
+POLARITY_CONFLICT = "conflict"  # JLC's footprint marks and its symbol's pin names disagree on which pad is +
 
 MAX_CANDIDATES = 60  # footprint files read per lookup, best name matches first
 MAX_SIZE_ERROR = 0.5  # mean relative pad-size difference above which pads are not the same land
+PAD_SLACK = 0.1  # mm; how far a pad centre may miss a pad of unknown or tiny size after the fit
 _SIZE_WEIGHT = 0.1  # mm of RMS residual one unit of relative pad-size difference is worth
 PITCH_TOL = 0.035  # mm; JLC rounds some pitches to 0.1 mm (P1.3 for 1.27)
 BODY_TOL = 0.3  # mm
@@ -157,10 +169,12 @@ _TWO_PAD_KINDS = {
 _VARIANT_RE = re.compile(r"HandSolder|ReverseMount|Wave|Castellated", re.IGNORECASE)
 _WORD_RE = re.compile(r"[A-Z]+|\d+(?:\.\d+)?")
 _PITCH_RE = re.compile(r"(?:^|[^A-Z])P(\d+(?:\.\d+)?)")
-_KICAD_BODY_RE = re.compile(r"(?<![A-Z0-9.])(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)")
+_KICAD_BODY_RE = re.compile(r"(?<![A-Z0-9.])(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)(MM)?")
 _JLC_BODY_RE = re.compile(r"(?:^|[^A-Z])L(\d+(?:\.\d+)?)-W(\d+(?:\.\d+)?)")
 _JLC_EP_RE = re.compile(r"(?:^|[^A-Z])EP(\d+(?:\.\d+)?)(?:X(\d+(?:\.\d+)?))?")
 _CHUNK_SPLIT_RE = re.compile(r"[_\s(),]+")
+# A size or pitch rather than a part number: "P2.54mm", "D6.3xL11mm", "4.4x6.5mm", "W7.62mm".
+_DIMENSION_RE = re.compile(r"[A-Z]{0,3}\d+(?:X[A-Z]?\d+)*MM")
 _MIN_PART_NUMBER = 6  # characters a part-number chunk needs to count as a match
 
 
@@ -192,6 +206,8 @@ class FootprintMatch:
             text += "; polarity reversed: KiCad's pad 1 is JLC's pad 2, so the symbol's pins would be swapped"
         elif self.polarity == POLARITY_UNKNOWN:
             text += "; polarity can't be checked: JLC's data doesn't say which pad is + or -"
+        elif self.polarity == POLARITY_CONFLICT:
+            text += "; polarity can't be checked: JLC's footprint marks and symbol pin names disagree on which pad is +"
         return text
 
 
@@ -244,6 +260,8 @@ def part_number_chunks(text: str) -> frozenset:
     out = set()
     for chunk in _CHUNK_SPLIT_RE.split((text or "").upper()):
         norm = re.sub(r"[^A-Z0-9]", "", chunk)
+        if _DIMENSION_RE.fullmatch(norm):
+            continue
         if len(norm) >= _MIN_PART_NUMBER and re.search(r"[A-Z]", norm) and re.search(r"\d", norm):
             out.add(norm)
     return frozenset(out)
@@ -259,10 +277,11 @@ def _pitch(text: str) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
-def _kicad_body(name: str) -> Optional[Tuple[float, float]]:
+def _kicad_body(name: str, needs_unit: bool = False) -> Optional[Tuple[float, float]]:
+    """Body size written as ``AxB`` (``AxBmm`` when *needs_unit*, so a ``1x04`` pin array isn't a body)."""
     upper = name.upper()
     for m in _KICAD_BODY_RE.finditer(upper):
-        if upper[max(0, m.start() - 2) : m.start()] == "EP":
+        if upper[max(0, m.start() - 2) : m.start()] == "EP" or (needs_unit and not m.group(3)):
             continue
         return tuple(sorted((float(m.group(1)), float(m.group(2)))))
     return None
@@ -285,7 +304,7 @@ def _exposed_pad(text: str) -> Optional[Tuple[float, float]]:
 def _name_conflicts(names: Sequence[str], fp_name: str) -> bool:
     """True when a JLC package name and the footprint name state a different pitch, body or exposed pad."""
     fp_pitch = _pitch(fp_name)
-    fp_body = _kicad_body(fp_name)
+    fp_body = _kicad_body(fp_name, needs_unit=True)
     fp_ep = _exposed_pad(fp_name)
     for name in names:
         ep = _exposed_pad(name)
@@ -383,24 +402,72 @@ def size_error(a: Sequence[PadRecord], b: Sequence[PadRecord]) -> float:
 
 
 def _polarity(
-    kicad: FootprintRecord, jlc_pads: Sequence[PadRecord], pin_names: Dict[str, str], marks: Dict[str, str]
+    kicad: FootprintRecord,
+    jlc_pads: Sequence[PadRecord],
+    pin_names: Dict[str, str],
+    marks: Dict[str, str],
+    polarized: bool = False,
 ) -> Optional[str]:
     """How pad 1 of the KiCad footprint lines up with JLC's polarity (a POLARITY_* value).
 
-    None when JLC's part is polarized but the KiCad footprint isn't one of
-    KiCad's polarized footprints (LED_ / D_ / CP_ or an _AK / _KA name), so
-    it shows no polarity at all.
+    Only two-terminal shapes (two pads, or two plus a centred pad) have a
+    polarity to check; on anything else the pad numbers already fix which
+    pad is which.  *polarized* says JLC's part is polarized even when its
+    data doesn't say which pad is + (its symbol draws a +).  None when JLC's
+    part is polarized but the KiCad footprint isn't one of KiCad's polarized
+    footprints (LED_ / D_ / CP_ or an _AK / _KA name), so it shows no
+    polarity at all.
     """
+    if not needs_pin_names(list(jlc_pads)):
+        return POLARITY_NA
     kicad_polarized = bool(board_kind(kicad.footprint) or footprint_name_roles(kicad.footprint))
-    jlc_polarized = bool(jlc_pad_roles(jlc_pads, pin_names, marks))
-    if not jlc_polarized:
+    roles = jlc_pad_roles(jlc_pads, pin_names, marks)
+    if not roles and not polarized:
         return POLARITY_UNKNOWN if kicad_polarized else POLARITY_NA
     if not kicad_polarized:
         return None
+    if not roles:
+        return POLARITY_UNKNOWN
     match = match_polarity(kicad.pads, jlc_pads, pin_names, footprint_name=kicad.footprint, jlc_marks=marks)
     if match.source not in (BY_NAMES, BY_FOOTPRINT_NAME, BY_CONVENTION) or not match.jlc_source:
         return POLARITY_UNKNOWN
+    if match.conflict:
+        return POLARITY_CONFLICT
     return POLARITY_REVERSED if match.swapped else POLARITY_SAME
+
+
+def _pad_reach(pad: PadRecord) -> float:
+    """Radius of the circle inscribed in *pad*; 0 when its size is unknown."""
+    return min(pad.width, pad.height) / 2 if pad.width > 0 and pad.height > 0 else 0.0
+
+
+def pads_line_up(kicad_pads: Sequence[PadRecord], jlc_pads: Sequence[PadRecord], fit: FitResult) -> bool:
+    """True when, placed by *fit*, every numbered pad on either footprint lies on a pad with its number on the other.
+
+    A pad centre "lies on" a pad when it is within the larger of the two
+    pads' inscribed radii (or :data:`PAD_SLACK`).  Split exposed pads and
+    paste segments pass; a group with a pad the other footprint has no copper
+    for, or a pin that moved to another pad, does not.
+    """
+    jlc = [
+        (normalize_pad_number(p.number), place_local((p.x, p.y), fit.origin, fit.angle, TOP), _pad_reach(p))
+        for p in jlc_pads
+        if normalize_pad_number(p.number)
+    ]
+    kicad = [
+        (normalize_pad_number(p.number), board_to_cpl(p.x, p.y), _pad_reach(p))
+        for p in kicad_pads
+        if normalize_pad_number(p.number)
+    ]
+    for side, other in ((jlc, kicad), (kicad, jlc)):
+        for num, (x, y), reach in side:
+            if not any(
+                math.hypot(x - ox, y - oy) <= max(reach, other_reach, PAD_SLACK)
+                for other_num, (ox, oy), other_reach in other
+                if other_num == num
+            ):
+                return False
+    return True
 
 
 def fit_footprint(
@@ -410,14 +477,17 @@ def fit_footprint(
     marks: Optional[Dict[str, str]] = None,
     ref: str = "",
     tol: Tolerances = DEFAULT_TOLERANCES,
+    polarized: bool = False,
 ) -> Optional[FootprintMatch]:
     """The fit of JLC's pads onto *kicad*'s, or None unless it is the same land pattern.
 
     Same pad numbers and through-hole pads, JLC's pad centres within
-    ``tol.high_rms`` RMS after a rotation by a 90° step, numbering not
-    mirrored, pad sizes within :data:`MAX_SIZE_ERROR`, and a polarized
-    footprint for a polarized part.  *pin_names* and *marks* are JLC's
-    symbol pin names and footprint + / - marks, used to check polarity.
+    ``tol.high_rms`` RMS after a rotation by a 90° step, every pad on a pad
+    of the other footprint (:func:`pads_line_up`), mean pad-size difference
+    within :data:`MAX_SIZE_ERROR`, and a polarized footprint for a polarized
+    part.  *pin_names* and *marks* are JLC's symbol pin names and footprint
+    + / - marks, used to check polarity; *polarized* says the part is
+    polarized even if they don't say which pad is +.
     """
     jlc_groups = group_pads(jlc_pads)
     kicad_groups = group_pads(kicad.pads)
@@ -426,12 +496,12 @@ def fit_footprint(
     if _drilled(jlc_pads) != _drilled(kicad.pads):
         return None
     fit = solve_placement(kicad.pads, jlc_pads, TOP, kicad_orientation=0.0, tol=tol)
-    if not fit.snapped or MIRRORED in fit.flags or fit.rms > tol.high_rms:
+    if not fit.snapped or fit.rms > tol.high_rms or not pads_line_up(kicad.pads, jlc_pads, fit):
         return None
     sizes = size_error(jlc_pads, kicad.pads)
     if sizes > MAX_SIZE_ERROR:
         return None
-    polarity = _polarity(kicad, jlc_pads, pin_names or {}, marks or {})
+    polarity = _polarity(kicad, jlc_pads, pin_names or {}, marks or {}, polarized)
     if polarity is None:
         return None
     return FootprintMatch(
@@ -454,14 +524,18 @@ def find_matching_footprint(
     project_dir: str = "",
     kicad_version: int = DEFAULT_KICAD_VERSION,
     libraries: Optional[Sequence[Tuple[str, str]]] = None,
+    polarized_symbol: bool = False,
 ) -> Optional[FootprintMatch]:
     """The best KiCad library footprint with the same pads as JLC's footprint, or None.
 
     *jlc_pads* are JLC's footprint pads (footprint-local mm, with sizes).
     *package_names* are JLC's package strings (the part's package, its
-    footprint's title) and its manufacturer part number.  *prefix* is the symbol's designator prefix, which
-    picks the kind of footprint for two-pad parts; with no known prefix a
-    two-pad part gets no match.  *libraries* defaults to the libraries in
+    footprint's title) and its manufacturer part number.  *prefix* is the
+    symbol's designator prefix, which picks the kind of footprint for
+    two-pad parts; with no known prefix a two-pad part gets no match.
+    *polarized_symbol* says JLC's symbol draws a + (a polarized capacitor);
+    a capacitor with one gets no unpolarized ``C_`` footprint even when JLC
+    doesn't say which pad is +.  *libraries* defaults to the libraries in
     the project and global fp-lib-tables.
     """
     names = [n for n in dict.fromkeys(package_names) if n]
@@ -473,6 +547,8 @@ def find_matching_footprint(
         two_pad_prefixes = _two_pad_prefixes(prefix)
         if two_pad_prefixes is None:
             return None
+    # Only capacitors choose between an unpolarized (C_) and a polarized (CP_) footprint.
+    polarized = polarized_symbol and two_pad_prefixes is not None and "CP_" in two_pad_prefixes
     if libraries is None:
         libraries = _iter_footprint_libraries(project_dir, kicad_version)
 
@@ -481,7 +557,7 @@ def find_matching_footprint(
         record = read_footprint_file(path)
         if record is None:
             continue
-        match = fit_footprint(record, jlc_pads, pin_names, marks, ref=f"{lib_name}:{fp_name}")
+        match = fit_footprint(record, jlc_pads, pin_names, marks, ref=f"{lib_name}:{fp_name}", polarized=polarized)
         if match is None:
             continue
         key = (

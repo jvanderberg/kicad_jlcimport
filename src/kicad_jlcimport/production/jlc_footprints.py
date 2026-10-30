@@ -69,9 +69,14 @@ def _mark_strokes(shapes: List[str]) -> List[Tuple[Tuple[float, float], Tuple[fl
 
 
 def _marks(shapes: List[str]) -> List[Tuple[str, float, float]]:
+    """(sign, x, y) of each mark on the polarity layer."""
+    return _signs(_mark_strokes(shapes))
+
+
+def _signs(segments: List[Tuple[Tuple[float, float], Tuple[float, float]]]) -> List[Tuple[str, float, float]]:
     """(sign, x, y) of each mark: two crossing strokes make a ``+``, a lone stroke a ``-``."""
     strokes = []
-    for (ax, ay), (bx, by) in _mark_strokes(shapes):
+    for (ax, ay), (bx, by) in segments:
         strokes.append(((ax + bx) / 2, (ay + by) / 2, math.hypot(bx - ax, by - ay), math.atan2(by - ay, bx - ax)))
     used = set()
     marks = []
@@ -115,6 +120,20 @@ def polarity_marks(shapes: List[str]) -> Dict[str, str]:
             return {}
         roles[dist[0][1]] = sign
     return roles if len(roles) == 2 else {}
+
+
+def symbol_draws_plus(symbol_data: List[Dict[str, Any]]) -> bool:
+    """True when an EasyEDA symbol draws a ``+`` (two short crossing lines), as polarized capacitor symbols do."""
+    segments = []
+    for data in symbol_data:
+        shapes, _, _ = _data_shapes(data)
+        for shape in shapes:
+            parts = shape.split("~")
+            if parts[0] == "PL" and len(parts) > 1:
+                nums = [float(v) for v in _NUMBER_RE.findall(parts[1])]
+                if len(nums) == 4:
+                    segments.append(((nums[0], nums[1]), (nums[2], nums[3])))
+    return any(sign == "+" for sign, _, _ in _signs(segments))
 
 
 def jlc_footprint_from_data(lcsc: str, fp_data: Dict[str, Any]) -> JlcFootprint:

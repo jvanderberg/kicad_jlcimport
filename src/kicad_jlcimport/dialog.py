@@ -1013,7 +1013,7 @@ class MetadataEditDialog(wx.Dialog):
     def _fit_text(self, ref: str) -> str:
         """Fit description for *ref*: the matcher's for its suggestion, else a note that it wasn't checked."""
         if not ref:
-            return "No KiCad library footprint has the same pads as JLC's footprint."
+            return "No KiCad library footprint found with the same pads as JLC's footprint."
         if ref == self._footprint_candidate_ref and self._footprint_candidate_fit:
             return f"Matches JLC's pads: {self._footprint_candidate_fit}"
         return "Pads not checked against JLC's footprint; check pad count, pitch and pin numbering."

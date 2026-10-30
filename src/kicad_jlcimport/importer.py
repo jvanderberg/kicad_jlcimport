@@ -27,7 +27,12 @@ from .kicad.model3d import ANCHOR_FOOTPRINT, PINS_ALIGNED, PINS_OFFSET, place_mo
 from .kicad.model_checks import ModelCheck, check_model
 from .kicad.symbol_writer import write_symbol
 from .kicad.version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version
-from .production.jlc_footprints import jlc_footprint_from_data, needs_pin_names, pin_names_from_data
+from .production.jlc_footprints import (
+    jlc_footprint_from_data,
+    needs_pin_names,
+    pin_names_from_data,
+    symbol_draws_plus,
+)
 
 
 def _build_description(comp: dict) -> str:
@@ -116,11 +121,14 @@ def _suggest_footprint(comp: dict, package: str, project_dir: str, kicad_version
     """A KiCad library footprint with the same pads as JLC's footprint for *comp*, or None.
 
     Uses the component data already fetched: JLC's footprint pads and
-    +/- marks, and its symbol's pin names for two-terminal parts.
+    +/- marks, and for two-terminal parts its symbol's pin names and whether
+    the symbol draws a + (a polarized capacitor).
     """
     fp_data = comp.get("footprint_data") or {}
     jlc = jlc_footprint_from_data(comp.get("lcsc_id", ""), fp_data)
-    pin_names = pin_names_from_data(comp.get("symbol_data_list") or []) if needs_pin_names(jlc.pads) else {}
+    symbol_data = comp.get("symbol_data_list") or []
+    two_terminal = needs_pin_names(jlc.pads)
+    pin_names = pin_names_from_data(symbol_data) if two_terminal else {}
     return find_matching_footprint(
         jlc.pads,
         [package, comp.get("package", ""), fp_data.get("title", ""), comp.get("manufacturer_part", "")],
@@ -129,6 +137,7 @@ def _suggest_footprint(comp: dict, package: str, project_dir: str, kicad_version
         marks=jlc.pad_marks,
         project_dir=project_dir,
         kicad_version=kicad_version,
+        polarized_symbol=two_terminal and symbol_draws_plus(symbol_data),
     )
 
 
@@ -186,9 +195,10 @@ def import_component(
         symbol_kwargs: Optional extra keyword arguments forwarded to
             ``write_symbol()`` (e.g. ``include_pin_dots``, ``hide_properties``).
         confirm_reuse_footprint: Optional callback called when an existing KiCad
-            footprint matches JLC's pads. Receives ``(package, footprint_ref)`` and
-            returns ``True`` to reuse the existing footprint reference in the
-            symbol, or ``False`` to generate a new footprint as before.
+            footprint matches JLC's pads with no polarity caveat. Receives
+            ``(package, footprint_ref)`` and returns ``True`` to reuse the existing
+            footprint reference in the symbol, or ``False`` to generate a new
+            footprint as before.
 
     Returns:
         dict with keys: title, name, fp_content, sym_content; or None if cancelled.
@@ -293,7 +303,8 @@ def import_component(
     if candidate_ref:
         if reuse_choice_from_metadata is True:
             reuse_existing_footprint = True
-        elif reuse_choice_from_metadata is None and confirm_reuse_footprint:
+        elif reuse_choice_from_metadata is None and confirm_reuse_footprint and match and match.recommended:
+            # This callback only gets the ref, so it isn't offered a footprint with a polarity caveat.
             reuse_existing_footprint = confirm_reuse_footprint(package, candidate_ref)
         if reuse_existing_footprint:
             footprint_ref = candidate_ref

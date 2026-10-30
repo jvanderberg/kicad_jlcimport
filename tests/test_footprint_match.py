@@ -7,17 +7,20 @@ import pytest
 from kicad_jlcimport import importer
 from kicad_jlcimport.kicad import footprint_match as fm
 from kicad_jlcimport.kicad.footprint_match import (
+    POLARITY_CONFLICT,
     POLARITY_NA,
     POLARITY_REVERSED,
     POLARITY_SAME,
     POLARITY_UNKNOWN,
     FootprintMatch,
     find_matching_footprint,
+    fit_footprint,
     package_tokens,
     part_number_chunks,
     read_footprint_file,
 )
-from kicad_jlcimport.production.models import PadRecord
+from kicad_jlcimport.production.jlc_footprints import symbol_draws_plus
+from kicad_jlcimport.production.models import FootprintRecord, PadRecord
 
 # SOT-363 / SC-70-6: two rows of three pads, 0.65 mm pitch, 1.9 mm apart.
 SOT363 = [
@@ -33,6 +36,40 @@ SC74 = [(n, x * 1.15, y * 0.95 / 0.65, w, h) for n, x, y, w, h in SOT363]
 SOT23_3 = [("1", -1.0, -0.95, 0.9, 0.8), ("2", -1.0, 0.95, 0.9, 0.8), ("3", 1.0, 0.0, 0.9, 0.8)]
 CHIP_0603 = [("1", -0.775, 0.0, 0.9, 0.95), ("2", 0.775, 0.0, 0.9, 0.95)]
 DIP8 = [(str(i + 1), -3.81 if i < 4 else 3.81, -3.81 + 2.54 * (i if i < 4 else 7 - i), 1.6, 1.6) for i in range(8)]
+# Four-pad RGB LED: 1, 2 down the left, 3, 4 up the right.
+PLCC4 = [
+    ("1", -1.5, -0.75, 1.0, 0.9),
+    ("2", -1.5, 0.75, 1.0, 0.9),
+    ("3", 1.5, 0.75, 1.0, 0.9),
+    ("4", 1.5, -0.75, 1.0, 0.9),
+]
+
+
+def qfp(count, pitch, span=15.0):
+    """A square QFP: *count* pads (0.3 x 1.5 mm) numbered anticlockwise from the top of the left side."""
+    per_side = count // 4
+    pads = []
+    for i in range(count):
+        side, k = divmod(i, per_side)
+        off = (k - (per_side - 1) / 2) * pitch
+        x, y = [(-span, off), (off, span), (span, -off), (-off, -span)][side]
+        w, h = (1.5, 0.3) if side % 2 == 0 else (0.3, 1.5)
+        pads.append((str(i + 1), x, y, w, h))
+    return pads
+
+
+def record(name, pads):
+    """A KiCad footprint record with *pads* (number, x, y, w, h)."""
+    return FootprintRecord(
+        reference="",
+        value="",
+        footprint=name,
+        x=0.0,
+        y=0.0,
+        orientation=0.0,
+        side="top",
+        pads=[PadRecord(number=n, x=x, y=y, width=w, height=h) for n, x, y, w, h in pads],
+    )
 
 
 def _pad_line(num, x, y, w, h, drill=0.0):
@@ -104,6 +141,11 @@ class TestPackageTokens:
         assert "B4BPHKS" in part_number_chunks("CONN-TH_B4B-PH-K-S")
         assert part_number_chunks("SOT-23") == frozenset()
 
+    def test_pitch_and_size_are_not_part_numbers(self):
+        assert part_number_chunks("Plugin,P=2.54mm") == frozenset()
+        assert part_number_chunks("Plugin,D6.3xL11mm") == frozenset()
+        assert part_number_chunks("PinHeader_1x04_P2.54mm_Vertical") == frozenset()
+
 
 class TestNameConflicts:
     def test_pitch(self):
@@ -113,6 +155,10 @@ class TestNameConflicts:
     def test_body(self):
         assert fm._name_conflicts(["QFN-24_L4.0-W4.0-P0.50"], "QFN-24-1EP_5x5mm_P0.5mm")
         assert not fm._name_conflicts(["QFN-24_L4.0-W4.0-P0.50"], "QFN-24-1EP_4x4mm_P0.5mm_EP2.6x2.6mm")
+
+    def test_pin_array_is_not_a_body(self):
+        name = "JST_SH_SM04B-SRSS-TB_1x04-1MP_P1.00mm_Horizontal"
+        assert not fm._name_conflicts(["CONN-SMD_4P-P1.00_L6.0-W4.2_SM04B-SRSS-TB"], name)
 
     def test_exposed_pad(self):
         assert fm._name_conflicts(["QFN-40_L6.0-W6.0-EP2.9"], "QFN-40-1EP_6x6mm_P0.5mm_EP4.6x4.6mm")
@@ -170,15 +216,58 @@ class TestPadGroupsAndGeometry:
         assert find_matching_footprint(jlc(SOT363), ["SOT-363"], libraries=libraries) is None
 
     def test_through_hole_part_does_not_get_smd_footprint(self, libs):
-        libraries = libs("Package_DIP", [("DIP-8_W7.62mm_SMDSocket", DIP8), ("DIP-8_W7.62mm", DIP8, 0.8)])
+        # The SMD footprint's shorter name would win the tie-break if the drills weren't checked.
+        libraries = libs("Package_DIP", [("DIP-8_SMD", DIP8), ("DIP-8_W7.62mm", DIP8, 0.8)])
         match = find_matching_footprint(jlc(DIP8, drill=0.8), ["DIP-8_L10.0-W6.5-P2.54"], libraries=libraries)
         assert match is not None
         assert match.ref == "Package_DIP:DIP-8_W7.62mm"
+
+    def test_angle_off_a_90_degree_step_gives_nothing(self, libs):
+        libraries = libs("Package_TO_SOT_SMD", [("SOT-363_SC-70-6", SOT363)])
+        assert find_matching_footprint(jlc(SOT363, angle=45), ["SOT-363"], libraries=libraries) is None
 
     def test_offset_origin_still_fits(self, libs):
         libraries = libs("Package_TO_SOT_SMD", [("SOT-363_SC-70-6", SOT363)])
         match = find_matching_footprint(jlc(SOT363, dx=0.95, dy=0.65), ["SOT-363"], libraries=libraries)
         assert match is not None
+
+
+class TestEveryPadLandsOnAPad:
+    def test_large_package_with_two_pins_swapped_gives_nothing(self):
+        # The RMS over 208 pads stays under 0.05 mm, but pins 1 and 2 sit on each other's pads.
+        pads = qfp(208, 0.5)
+        swapped = [("2",) + pads[0][1:], ("1",) + pads[1][1:]] + pads[2:]
+        assert fit_footprint(record("LQFP-208", pads), jlc(pads)) is not None
+        assert fit_footprint(record("LQFP-208", swapped), jlc(pads)) is None
+
+    def test_group_missing_a_pad_gives_nothing(self):
+        # JLC's exposed pad has four tie bars numbered like it; the candidate's has none.
+        body = [(str(i + 1), -1.4, -0.75 + 0.5 * i, 0.7, 0.28) for i in range(4)]
+        body += [(str(8 - i), 1.4, -0.75 + 0.5 * i, 0.7, 0.28) for i in range(4)]
+        tie_bars = [("9", x, y, 0.28, 0.6) for x in (-0.25, 0.25) for y in (-1.4, 1.4)]
+        exposed = [("9", 0.0, 0.0, 1.2, 1.6)]
+        assert fit_footprint(record("WSON-8", body + exposed), jlc(body + exposed + tie_bars)) is None
+        assert fit_footprint(record("WSON-8", body + exposed + tie_bars), jlc(body + exposed + tie_bars)) is not None
+
+    def test_pads_sharing_a_number_spread_differently_give_nothing(self):
+        # Same centre for each pad number, but the pads themselves are 2 mm apart on one and 6 mm on the other.
+        narrow = [
+            ("1", -1.0, -2.0, 1.0, 1.0),
+            ("1", 1.0, -2.0, 1.0, 1.0),
+            ("2", -1.0, 2.0, 1.0, 1.0),
+            ("2", 1.0, 2.0, 1.0, 1.0),
+        ]
+        wide = [(n, x * 3, y, w, h) for n, x, y, w, h in narrow]
+        assert fit_footprint(record("SW_x", wide), jlc(narrow)) is None
+
+    def test_exposed_pad_split_into_segments_still_fits(self):
+        body = [(str(i + 1), -2.7, -1.905 + 1.27 * i, 1.5, 0.6) for i in range(4)]
+        body += [(str(8 - i), 2.7, -1.905 + 1.27 * i, 1.5, 0.6) for i in range(4)]
+        whole = [("9", 0.0, 0.0, 2.4, 3.2)]
+        split = [("9", x, y, 1.1, 1.5) for x in (-0.6, 0.6) for y in (-0.8, 0.8)]
+        match = fit_footprint(record("SOIC-8-1EP", body + whole), jlc(body + split, angle=90))
+        assert match is not None
+        assert match.pad_groups == 9
 
 
 class TestRanking:
@@ -198,6 +287,12 @@ class TestRanking:
         libraries = libs("Package_TO_SOT_SMD", [("SOT-363", near), ("SOT-363_SC-70-6", SOT363)])
         match = find_matching_footprint(jlc(SOT363), ["SOT-363"], libraries=libraries)
         assert match.ref == "Package_TO_SOT_SMD:SOT-363_SC-70-6"
+
+    def test_footprint_without_polarity_caveat_beats_shorter_name(self, libs):
+        libs("Capacitor_Tantalum_SMD", [("CP_0603", CHIP_0603)])
+        libraries = libs("Capacitor_SMD", [("C_0603_1608Metric", CHIP_0603)])
+        match = find_matching_footprint(jlc(CHIP_0603), ["C0603"], prefix="C", libraries=libraries)
+        assert match.ref == "Capacitor_SMD:C_0603_1608Metric"
 
     def test_part_number_in_name_finds_connector(self, libs):
         header = [("1", 0.0, 0.0, 1.2, 1.7), ("2", 2.0, 0.0, 1.2, 1.7), ("3", 4.0, 0.0, 1.2, 1.7)]
@@ -269,6 +364,42 @@ class TestTwoPadParts:
         assert match.polarity == POLARITY_UNKNOWN
         assert not match.recommended
         assert "can't be checked" in match.describe()
+
+    def test_marks_and_pin_names_that_disagree_are_a_caveat(self, libs):
+        libraries = self._libraries(libs)
+        match = find_matching_footprint(
+            jlc(CHIP_0603),
+            ["LED0603-RD"],
+            prefix="LED",
+            marks={"1": "-", "2": "+"},
+            pin_names={"1": "A", "2": "K"},
+            libraries=libraries,
+        )
+        assert match.polarity == POLARITY_CONFLICT
+        assert not match.recommended
+        assert "disagree" in match.describe()
+
+    def test_four_pad_led_has_no_polarity_caveat(self, libs):
+        libraries = libs("LED_SMD", [("LED_RGB_PLCC-4", PLCC4)])
+        match = find_matching_footprint(jlc(PLCC4), ["PLCC-4"], prefix="LED", libraries=libraries)
+        assert match.polarity == POLARITY_NA
+        assert match.recommended
+
+    def test_capacitor_whose_symbol_draws_plus_gets_no_unpolarized_footprint(self, libs):
+        libraries = libs("Capacitor_SMD", [("C_1206_3216Metric", CHIP_0603)])
+        names = ["CASE-A_3216"]
+        assert find_matching_footprint(jlc(CHIP_0603), names, "C", libraries=libraries) is not None
+        assert find_matching_footprint(jlc(CHIP_0603), names, "C", libraries=libraries, polarized_symbol=True) is None
+        libraries = libs("Capacitor_Tantalum_SMD", [("CP_EIA-3216-18_Kemet-A", CHIP_0603)])
+        match = find_matching_footprint(jlc(CHIP_0603), names, "C", libraries=libraries, polarized_symbol=True)
+        assert match.ref == "Capacitor_Tantalum_SMD:CP_EIA-3216-18_Kemet-A"
+        assert match.polarity == POLARITY_UNKNOWN
+
+    def test_plus_on_symbol_only_matters_for_capacitors(self, libs):
+        libraries = self._libraries(libs)
+        match = find_matching_footprint(jlc(CHIP_0603), ["R0603"], "R", libraries=libraries, polarized_symbol=True)
+        assert match.ref == "Resistor_SMD:R_0603_1608Metric"
+        assert match.polarity == POLARITY_NA
 
     def test_ak_footprint_name_states_pad_order(self, libs):
         libraries = libs("LED_SMD", [("LED_0603_1608Metric_AK", CHIP_0603)])
@@ -370,6 +501,25 @@ def _easyeda_pad(num, x, y, w, h):
     return f"PAD~RECT~{x / u + 400}~{y / u + 300}~{w / u}~{h / u}~1~~{num}~0~~0~gge{num}~0~~Y~0~0~0.2~"
 
 
+# A "+" as EasyEDA symbols draw it (C2029), and a ceramic capacitor's plates and leads.
+_PLUS = ["PL~5 -3 9 -3~#880000~1~0~none~rep8~0", "PL~7 -5 7 -1~#880000~1~0~none~rep9~0"]
+_PLATES = [
+    "PL~13 -8 13 8~#880000~1~0~none~rep2~0",
+    "PL~10 0 13 0~#880000~1~0~none~rep5~0",
+    "PL~17 -8 17 8~#880000~1~0~none~rep3~0",
+    "PL~17 0 20 0~#880000~1~0~none~rep6~0",
+]
+
+
+class TestSymbolDrawsPlus:
+    def test_plus(self):
+        assert symbol_draws_plus([{"dataStr": {"shape": _PLATES + _PLUS}}])
+
+    def test_unpolarized_capacitor(self):
+        assert not symbol_draws_plus([{"dataStr": {"shape": _PLATES}}])
+        assert not symbol_draws_plus([])
+
+
 class TestImporterSuggestion:
     def _comp(self, pads, package):
         return {
@@ -392,6 +542,15 @@ class TestImporterSuggestion:
         comp = self._comp(SOT363, "SOT-363_L2.0-W1.3-P0.65-LS2.1-BR")
         match = importer._suggest_footprint(comp, "", "", 10)
         assert match.ref == "Package_TO_SOT_SMD:SOT-363_SC-70-6"
+
+    def test_capacitor_symbol_with_plus_gets_no_unpolarized_footprint(self, libs, monkeypatch):
+        libraries = libs("Capacitor_SMD", [("C_1206_3216Metric", CHIP_0603)])
+        monkeypatch.setattr(fm, "_iter_footprint_libraries", lambda *a, **k: libraries)
+        comp = self._comp(CHIP_0603, "CASE-A_3216")
+        comp["prefix"] = "C"
+        assert importer._suggest_footprint(comp, "", "", 10).ref == "Capacitor_SMD:C_1206_3216Metric"
+        comp["symbol_data_list"] = [{"dataStr": {"head": {"x": 0, "y": 0}, "shape": _PLUS}}]
+        assert importer._suggest_footprint(comp, "", "", 10) is None
 
     def test_no_suggestion_when_nothing_fits(self, libs, monkeypatch):
         libraries = libs("Package_TO_SOT_SMD", [("SOT-23-3", SOT23_3), ("SC-74-6_1.55x2.9mm", SC74)])

@@ -1384,6 +1384,31 @@ class TestReuseFootprint:
         assert symbol_kwargs["footprint_ref"] == "TestLib:TestPart"
         assert write_footprint_called == [True]
 
+    def test_confirm_callback_not_offered_a_polarity_caveat(self, tmp_path, monkeypatch):
+        fake_comp = self._make_fake_comp()
+        fake_fp = EEFootprint()
+        fake_fp.pads.append(
+            EEPad(shape="RECT", x=0, y=0, width=1, height=1, layer="1", number="1", drill=0, rotation=0)
+        )
+        monkeypatch.setattr(importer, "fetch_full_component", lambda _: fake_comp)
+        monkeypatch.setattr(
+            importer, "_suggest_footprint", lambda *a, **k: _match("LED_SMD:LED_0603_1608Metric", POLARITY_REVERSED)
+        )
+        monkeypatch.setattr(importer, "parse_symbol_shapes", lambda *a, **k: self._make_fake_symbol())
+        monkeypatch.setattr(importer, "write_symbol", lambda *a, **k: '  (symbol "TestPart")\n')
+        monkeypatch.setattr(importer, "parse_footprint_shapes", lambda *a, **k: fake_fp)
+        monkeypatch.setattr(importer, "write_footprint", lambda *a, **k: "(footprint TestPart)\n")
+
+        result = importer.import_component(
+            "C123",
+            str(tmp_path),
+            "TestLib",
+            log=lambda msg: None,
+            confirm_reuse_footprint=lambda package, ref: (_ for _ in ()).throw(AssertionError("offered")),
+        )
+
+        assert result is not None
+
     def test_metadata_callback_can_choose_use_existing(self, tmp_path, monkeypatch):
         fake_comp = self._make_fake_comp()
         symbol_kwargs = {}
