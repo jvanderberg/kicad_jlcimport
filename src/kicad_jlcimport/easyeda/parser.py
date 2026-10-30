@@ -3,7 +3,7 @@
 import json
 import math
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from .ee_types import (
     EE3DModel,
@@ -229,6 +229,8 @@ def _parse_pad(parts: List[str]) -> EEPad:
     # parts[10] = polygon_nodes (space-separated coords, empty for ELLIPSE)
     # parts[11] = rotation
     # parts[13] = slot length (oval drill slot, in mils — full length, not radius)
+    # parts[14] = slot end points "x1 y1 x2 y2" (absolute, mils; empty if no slot)
+    # parts[15] = plated: "Y" or "N"
     polygon_str = parts[10] if len(parts) > 10 else ""
     rotation = float(parts[11]) if len(parts) > 11 and parts[11] else 0.0
     try:
@@ -255,6 +257,8 @@ def _parse_pad(parts: List[str]) -> EEPad:
                 poly_points.append(mil_to_mm(coords[i] - x))
                 poly_points.append(mil_to_mm(coords[i + 1] - y))
 
+    plated = not (len(parts) > 15 and parts[15].strip().upper() == "N")
+
     return EEPad(
         shape=shape,
         x=mil_to_mm(x),
@@ -267,7 +271,27 @@ def _parse_pad(parts: List[str]) -> EEPad:
         rotation=rotation,
         polygon_points=poly_points,
         slot_length=mil_to_mm(slot_length_mil),
+        slot_angle=_slot_angle(parts[14]) if len(parts) > 14 else None,
+        plated=plated,
     )
+
+
+def _slot_angle(points: str) -> Optional[float]:
+    """Return the direction in degrees of the slot whose end points are *points*.
+
+    *points* is EasyEDA's "x1 y1 x2 y2".  Returns None if it is missing,
+    malformed, or the two ends coincide.
+    """
+    try:
+        coords = [float(c) for c in points.split()]
+    except ValueError:
+        return None
+    if len(coords) != 4 or not all(math.isfinite(c) for c in coords):
+        return None
+    dx, dy = coords[2] - coords[0], coords[3] - coords[1]
+    if math.hypot(dx, dy) < 1e-6:
+        return None
+    return math.degrees(math.atan2(dy, dx))
 
 
 def _parse_track(parts: List[str]) -> EETrack:
