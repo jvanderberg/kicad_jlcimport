@@ -525,9 +525,12 @@ def _import_to_library(
 
         log("Downloading 3D model...")
         step_data = download_step(uuid_3d) if overwrite or not step_existed else None
-        if wrl_source is None and (overwrite or not wrl_existed):
-            wrl_source = download_wrl_source(uuid_3d)
-        step_path, wrl_path = save_models(paths["models_dir"], model_name, step_data, wrl_source)
+        # wrl_source may already have been downloaded to compute the model
+        # transform; that alone must not overwrite an existing .wrl.
+        wrl_to_save = None
+        if overwrite or not wrl_existed:
+            wrl_to_save = wrl_source if wrl_source is not None else download_wrl_source(uuid_3d)
+        step_path, wrl_path = save_models(paths["models_dir"], model_name, step_data, wrl_to_save)
 
         # Use WRL instead of STEP for consistency with offset calculations (which use OBJ/WRL geometry)
         if wrl_path:
