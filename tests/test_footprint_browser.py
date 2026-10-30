@@ -931,6 +931,20 @@ class TestCheckExistingFiles:
         existing = importer._check_existing_files(str(tmp_path), "Lib", "CustomFP", sym_name="WrongName")
         assert "symbol" not in existing
 
+    def test_unit_sub_symbol_is_not_reported_as_existing(self, tmp_path):
+        sym_file = tmp_path / "Lib.kicad_sym"
+        sym_file.write_text('(kicad_symbol_lib\n  (symbol "A"\n    (symbol "A_1_1")\n  )\n)\n')
+        assert "symbol" not in importer._check_existing_files(str(tmp_path), "Lib", "A_1_1")
+        assert "symbol" in importer._check_existing_files(str(tmp_path), "Lib", "A")
+
+    def test_unparseable_library_is_not_reported(self, tmp_path):
+        (tmp_path / "Lib.kicad_sym").write_text('(kicad_symbol_lib\n  (symbol "A"\n)\n')
+        assert importer._check_existing_files(str(tmp_path), "Lib", "A") == []
+
+    def test_uses_known_symbol_names(self, tmp_path):
+        existing = importer._check_existing_files(str(tmp_path), "Lib", "FP", sym_name="A", symbol_names={"A"})
+        assert existing == ["symbol"]
+
     def test_detects_3d_model(self, tmp_path):
         models_dir = tmp_path / "Lib.3dshapes"
         models_dir.mkdir()

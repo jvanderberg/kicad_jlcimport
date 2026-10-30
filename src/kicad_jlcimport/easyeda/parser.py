@@ -3,7 +3,7 @@
 import json
 import math
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from .ee_types import (
     EE3DModel,
@@ -229,6 +229,8 @@ def _parse_pad(parts: List[str]) -> EEPad:
     # parts[10] = polygon_nodes (space-separated coords, empty for ELLIPSE)
     # parts[11] = rotation
     # parts[13] = slot length (oval drill slot, in mils — full length, not radius)
+    # parts[14] = slot end points "x1 y1 x2 y2" (absolute, mils; empty if no slot)
+    # parts[15] = plated: "Y" or "N"
     polygon_str = parts[10] if len(parts) > 10 else ""
     rotation = float(parts[11]) if len(parts) > 11 and parts[11] else 0.0
     try:
@@ -255,6 +257,8 @@ def _parse_pad(parts: List[str]) -> EEPad:
                 poly_points.append(mil_to_mm(coords[i] - x))
                 poly_points.append(mil_to_mm(coords[i + 1] - y))
 
+    plated = not (len(parts) > 15 and parts[15].strip().upper() == "N")
+
     return EEPad(
         shape=shape,
         x=mil_to_mm(x),
@@ -267,7 +271,27 @@ def _parse_pad(parts: List[str]) -> EEPad:
         rotation=rotation,
         polygon_points=poly_points,
         slot_length=mil_to_mm(slot_length_mil),
+        slot_angle=_slot_angle(parts[14]) if len(parts) > 14 else None,
+        plated=plated,
     )
+
+
+def _slot_angle(points: str) -> Optional[float]:
+    """Return the direction in degrees of the slot whose end points are *points*.
+
+    *points* is EasyEDA's "x1 y1 x2 y2".  Returns None if it is missing,
+    malformed, or the two ends coincide.
+    """
+    try:
+        coords = [float(c) for c in points.split()]
+    except ValueError:
+        return None
+    if len(coords) != 4 or not all(math.isfinite(c) for c in coords):
+        return None
+    dx, dy = coords[2] - coords[0], coords[3] - coords[1]
+    if math.hypot(dx, dy) < 1e-6:
+        return None
+    return math.degrees(math.atan2(dy, dx))
 
 
 def _parse_track(parts: List[str]) -> EETrack:
@@ -662,7 +686,64 @@ def _parse_svgnode(parts: List[str]) -> EE3DModel:
         origin_y=origin_y,
         z=z,
         rotation=rot,
+        outline=_svgnode_outline_bbox(data),
     )
+
+
+_NUMBER_RE = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
+_TRANSFORM_RE = re.compile(r"(scale|translate)\(([^)]*)\)")
+
+
+def _outline_transform(transform: str) -> Optional[Tuple[float, float, float]]:
+    """Parse the outline group's ``scale(s) translate(tx, ty)`` as (s, tx, ty).
+
+    Returns None for any other kind of transform.
+    """
+    if _TRANSFORM_RE.sub("", transform).strip():
+        return None
+    scale, tx, ty = 1.0, 0.0, 0.0
+    for name, args in _TRANSFORM_RE.findall(transform):
+        nums = [float(n) for n in _NUMBER_RE.findall(args)]
+        if name == "scale":
+            if len(nums) != 1:
+                return None
+            scale *= nums[0]
+        else:
+            if len(nums) not in (1, 2):
+                return None
+            # SVG applies the rightmost transform first: p' = s * (p + t)
+            tx += nums[0]
+            ty += nums[1] if len(nums) == 2 else 0.0
+    return scale, tx, ty
+
+
+def _svgnode_outline_bbox(node: dict) -> Optional[Tuple[float, float, float, float]]:
+    """Bounding box of the outline3D drawing EasyEDA makes of the placed model.
+
+    EasyEDA draws the outline as polylines inside one ``g`` group.  Anything
+    else (paths, curves, nested groups, other transforms) is not interpreted
+    and yields None, so the caller falls back to ``c_origin``.
+    """
+    group = _outline_transform((node.get("attrs") or {}).get("transform") or "")
+    if group is None:
+        return None
+    scale, tx, ty = group
+    xs: List[float] = []
+    ys: List[float] = []
+    for child in node.get("childNodes") or []:
+        if not isinstance(child, dict) or child.get("nodeName") != "polyline":
+            return None
+        attrs = child.get("attrs") or {}
+        if attrs.get("transform"):
+            return None
+        nums = [float(n) for n in _NUMBER_RE.findall(attrs.get("points") or "")]
+        if len(nums) % 2:
+            return None
+        xs.extend(scale * (x + tx) for x in nums[0::2])
+        ys.extend(scale * (y + ty) for y in nums[1::2])
+    if not xs:
+        return None
+    return min(xs), max(xs), min(ys), max(ys)
 
 
 def _parse_rect_as_tracks(parts: List[str]) -> List[EETrack]:

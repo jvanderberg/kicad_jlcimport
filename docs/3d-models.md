@@ -2,64 +2,60 @@
 
 ## Model Format
 
-EasyEDA provides 3D models in OBJ format. We convert these to both:
-- **WRL (VRML 2.0)** - Used in KiCad footprint references
-- **STEP** - Saved for compatibility but not referenced
+EasyEDA provides 3D models in OBJ format. We convert these to:
+- **WRL (VRML 2.0)**, which KiCad footprints reference
+- **STEP**, saved for compatibility but not referenced
 
 ### Why WRL instead of STEP?
 
-Our offset calculations analyze the OBJ/WRL geometry (bounding box, center point). WRL files maintain the exact same geometry and coordinate system as the OBJ source. STEP files can have different origins/orientations after conversion, causing mismatches between calculated offsets and actual model placement.
+The placement is computed from the OBJ geometry, and the WRL keeps exactly the same geometry and coordinate system. EasyEDA's STEP files can have a different origin or orientation, so an offset computed from the OBJ would not apply to them.
 
-Both files are saved, but KiCad footprints reference the WRL for consistency.
+## Placement
 
-## Offset Calculation
+`place_model()` in `src/kicad_jlcimport/kicad/model3d.py` turns EasyEDA's `SVGNODE` data into KiCad's `(model (offset) (rotate))`. EasyEDA gives:
 
-The 3D model offset has two independent components:
+| Field | Meaning |
+|---|---|
+| `c_rotation` | Model rotation in degrees (x, y, z) |
+| `outline3D` child polylines | EasyEDA's own top-view outline of the placed model |
+| `c_width`, `c_height` | Size of that outline |
+| `z` | Height of the model's lowest point |
+| `c_origin` | A reference point; **unreliable**, sometimes hundreds of mm off |
 
-### 1. Geometry Offset
+Placement has three steps.
 
-Compensates for the 3D model's bounding box not being centered at the origin. Calculated in **model space**, so it rotates with the model:
+### 1. Rotation
 
-```
-geometry = (-cx, -cy_effective, z_offset)
-```
+EasyEDA's 3D view (three.js) composes the angles as `Rx · Ry · Rz`, so Z is applied to the model first. KiCad applies its file rotation as `Rz(-rz) · Ry(-ry) · Rx(-rx)`, so X goes first. The EasyEDA matrix is decomposed back into KiCad's order. For models rotated about Z only, which is nearly all of them, this is just the negated `c_rotation`. C2318 (a vertical XH connector, `c_rotation` 270,0,180) is the case that shows the order matters: without the conversion it renders upside down.
 
-Where:
-- `cx, cy` = OBJ bounding box center
-- `cy_effective` = cy only if significant (|cy|/height > 5%), else 0
-- `z_offset = -z_min + (model.z / 3.937)` (universal formula)
+### 2. Anchor
 
-The geometry offset is then rotated by the model's Z-axis rotation to transform from model space to footprint space.
+EasyEDA draws the outline with only the Z rotation applied. The model's Z-rotated XY bounding box is centred on the outline's bounding box.
 
-### 2. Origin Offset
+The outline is used only if its size matches the model's Z-rotated size to within 5%. Otherwise (a few parts have a degenerate outline) `c_origin` is used. If that would put the model clear of its own pads, it is ignored too and the model is centred on the footprint origin.
 
-Compensates for EasyEDA's model origin differing from the footprint origin. Calculated in **footprint space**, so it's NOT rotated:
+Vertically, EasyEDA lifts the unrotated model so its lowest point is at `z`, then rotates it. For Z-only rotations that leaves the lowest point at `z`.
 
-```
-origin = (-diff_x, -diff_y, 0)
-```
+### 3. Pin fit
 
-Where `diff_x`, `diff_y` are the differences between model origin and footprint origin in EasyEDA units, converted to mm.
+The model's pins are paired with the pads they land on:
+- **Through-hole pads** pair with where the model's geometry passes through the board surface.
+- **Top-side SMD pads** pair with model faces resting on the board, clipped to the pad.
 
-**Spurious offset filtering:** Small offsets (<0.5mm), unreasonable offsets (>40% of height for parts <3mm tall), and outliers (>50mm) are treated as EasyEDA data errors and zeroed out.
+If shifting the model by the mean pin-to-pad error then centres every pin on its pad to within 0.05 mm RMS, the shift is applied. Through-hole pins have one physically correct position, so this corrects EasyEDA's own placement error (typically 0.05 to 0.2 mm). SMD land patterns usually extend past their terminals; they leave a larger residual and keep the anchor placement.
 
-### Final Offset
+The import log reports the outcome:
+- `pins aligned to pads`
+- `placed from EasyEDA data; pins land on their pads`
+- a warning when the model's pins don't reach the pads at all. EasyEDA's own model and footprint disagree in that case: for example C8760, whose model has its leads 9.8 mm apart on a diagonal while the pads are 7.5 mm apart in a line.
 
-```
-offset = (geometry_x + origin_x, geometry_y + origin_y, geometry_z)
-```
+## Coordinates and units
 
-## Unit Conversions
+- EasyEDA units: 1 unit = 10 mil = 0.254 mm.
+- OBJ vertices are in mm.
+- KiCad's VRML unit is 0.1 inch, so the WRL divides by 2.54.
+- KiCad's model offset Y axis points up, opposite to the board's Y.
 
-EasyEDA uses a coordinate system where **1 unit = 10 mils = 0.254mm**.
+## Testing
 
-Conversion factors:
-- `3.937 = 1/0.254` (EasyEDA units → mm)
-- Both XY coordinates and Z offsets use the same unit system
-
-## Implementation
-
-See `src/kicad_jlcimport/kicad/model3d.py`:
-- `compute_model_transform()` - Main offset/rotation calculation
-- `save_models()` - Saves STEP and WRL files
-- `convert_to_vrml()` - OBJ to VRML 2.0 conversion
+`tests/test_model3d.py` tests each step with synthetic geometry. It also checks real parts from `testdata/`: through-hole pins must land in their holes, every model must cover its pads, C2318 must stand upright, and C8760 must be reported. `tools/compare_part.py` renders parts with KiCad for a visual check (see `VISUAL_TESTING.md`).

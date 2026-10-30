@@ -7,6 +7,8 @@ import os
 import re
 import sys
 
+from ._fileio import atomic_write
+from ._format import escape_sexpr
 from .version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version, version_dir_name
 
 _DEFAULT_CONFIG = {"lib_name": "JLCImport", "global_lib_dir": "", "use_global": False}
@@ -15,6 +17,11 @@ _DEFAULT_CONFIG = {"lib_name": "JLCImport", "global_lib_dir": "", "use_global": 
 def _config_path() -> str:
     """Get path to the jlcimport config file."""
     return os.path.join(_kicad_config_base(), "jlcimport.json")
+
+
+def config_path() -> str:
+    """Return the path of the jlcimport.json config file."""
+    return _config_path()
 
 
 def load_config() -> dict:
@@ -49,16 +56,16 @@ def save_config(config: dict) -> None:
     """Save config to jlcimport.json."""
     path = _config_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
-        f.write("\n")
+    atomic_write(path, json.dumps(config, indent=2) + "\n")
 
 
 def ensure_lib_structure(base_path: str, lib_name: str = "JLCImport") -> dict:
     """Create library directory structure if needed.
 
     Returns dict with paths: sym_path, fp_dir, models_dir
+    Raises LibraryNameError if *lib_name* is not a safe library name.
     """
+    lib_name = validate_lib_name(lib_name)
     sym_path = os.path.join(base_path, f"{lib_name}.kicad_sym")
     fp_dir = os.path.join(base_path, f"{lib_name}.pretty")
     models_dir = os.path.join(base_path, f"{lib_name}.3dshapes")
@@ -73,6 +80,43 @@ def ensure_lib_structure(base_path: str, lib_name: str = "JLCImport") -> dict:
     }
 
 
+class SymbolLibraryError(ValueError):
+    """An existing .kicad_sym file could not be parsed and was left unchanged."""
+
+
+def check_symbol_lib(sym_path: str) -> set[str]:
+    """Return the top-level symbol names in *sym_path* (empty if it doesn't exist).
+
+    Raises SymbolLibraryError if the file exists but can't be safely edited.
+    """
+    if not os.path.exists(sym_path):
+        return set()
+    _, symbols, _ = _read_symbol_lib(sym_path)
+    return {sym_name for sym_name, _, _ in symbols}
+
+
+def _read_symbol_lib(sym_path: str) -> tuple[str, list[tuple[str, int, int]], int]:
+    """Read a library verbatim (line endings preserved) and locate its symbols."""
+    try:
+        with open(sym_path, encoding="utf-8", newline="") as f:
+            lib_content = f.read()
+    except UnicodeDecodeError as e:
+        raise SymbolLibraryError(
+            f"{sym_path} is not UTF-8 text, so it is not a KiCad symbol library. It was left unchanged."
+        ) from e
+    except OSError as e:
+        raise SymbolLibraryError(f"{sym_path} could not be read: {e.strerror or e}") from e
+    scan = _scan_symbol_lib(lib_content)
+    if scan is None:
+        raise SymbolLibraryError(
+            f"{sym_path} is not a well-formed KiCad symbol library "
+            "(unbalanced parentheses, unterminated string, or trailing data). "
+            "It was left unchanged; open it in KiCad's Symbol Editor or fix it by hand."
+        )
+    symbols, root_close = scan
+    return lib_content, symbols, root_close
+
+
 def add_symbol_to_lib(
     sym_path: str,
     name: str,
@@ -82,8 +126,12 @@ def add_symbol_to_lib(
 ) -> bool:
     """Add a symbol to the .kicad_sym library file.
 
-    Creates the library file if it doesn't exist.
-    Returns True if symbol was added/replaced, False if it already exists and overwrite=False.
+    Creates the library file if it doesn't exist.  An existing symbol with the
+    same name is replaced in place, keeping its position in the file.  The
+    file's line endings are preserved.
+    Returns True if symbol was added/replaced, False if it already exists and
+    overwrite=False.  Raises SymbolLibraryError if the existing file is not a
+    well-formed library.
     """
     if not os.path.exists(sym_path):
         # Create new library with this symbol
@@ -92,63 +140,127 @@ def add_symbol_to_lib(
         header += '  (generator "JLCImport")\n'
         if has_generator_version(kicad_version):
             header += '  (generator_version "1.0")\n'
-        with open(sym_path, "w", encoding="utf-8") as f:
-            f.write(header)
-            f.write(content)
-            f.write(")\n")
+        atomic_write(sym_path, _checked_library(sym_path, header + content + ")\n", name))
         return True
 
-    # Read existing library
-    with open(sym_path, encoding="utf-8") as f:
-        lib_content = f.read()
+    lib_content, symbols, root_close = _read_symbol_lib(sym_path)
 
-    # Check if symbol already exists
-    search_str = f'(symbol "{name}"'
-    if search_str in lib_content:
-        if not overwrite:
-            return False
-        # Remove existing symbol block
-        lib_content = _remove_symbol(lib_content, name)
-
-    # Insert before final closing paren
-    last_paren = lib_content.rfind(")")
-    if last_paren == -1:
+    matches = [(start, end) for sym_name, start, end in symbols if sym_name == name]
+    if matches and not overwrite:
         return False
 
-    new_content = lib_content[:last_paren] + content + ")\n"
-    with open(sym_path, "w", encoding="utf-8") as f:
-        f.write(new_content)
+    newline = "\r\n" if "\r\n" in lib_content else "\n"
+    if newline != "\n":
+        content = content.replace("\r\n", "\n").replace("\n", newline)
 
+    if matches:
+        # Replace the first occurrence in place and drop any duplicates
+        # (earlier versions could append a second copy instead of replacing).
+        pieces = []
+        pos = 0
+        for i, (start, end) in enumerate(matches):
+            start, end = _expand_to_lines(lib_content, start, end)
+            pieces.append(lib_content[pos:start])
+            if i == 0:
+                pieces.append(content)
+            pos = end
+        pieces.append(lib_content[pos:])
+        new_content = "".join(pieces)
+    else:
+        # Insert before the closing paren of (kicad_symbol_lib ...)
+        new_content = lib_content[:root_close] + content + ")" + newline
+
+    atomic_write(sym_path, _checked_library(sym_path, new_content, name))
     return True
 
 
-def _remove_symbol(lib_content: str, name: str) -> str:
-    """Remove a symbol block from library content."""
-    search = f'  (symbol "{name}"'
-    start = lib_content.find(search)
-    if start == -1:
-        return lib_content
+def _checked_library(sym_path: str, text: str, name: str) -> str:
+    """Return *text* if it is a well-formed library containing *name* exactly once.
 
-    # Find matching closing paren by counting depth
+    A last line of defence: if the generated symbol is malformed, refuse to
+    write rather than leave a library that every later import rejects.
+    """
+    scan = _scan_symbol_lib(text)
+    if scan is None or [sym_name for sym_name, _, _ in scan[0]].count(name) != 1:
+        raise SymbolLibraryError(
+            f"The generated symbol {name!r} is malformed, so {sym_path} was left unchanged. "
+            "Please report this part to the JLCImport issue tracker."
+        )
+    return text
+
+
+_SYMBOL_HEAD_RE = re.compile(r'\(\s*symbol\s+"((?:[^"\\]|\\.)*)"', re.S)
+# A complete quoted string, a paren, or a lone quote (an unterminated string).
+_SEXPR_TOKEN_RE = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[()"]', re.S)
+
+
+def _scan_symbol_lib(text: str) -> tuple[list[tuple[str, int, int]], int] | None:
+    """Locate the top-level symbols of a .kicad_sym file.
+
+    Returns ``(symbols, root_close)`` where *symbols* is a list of
+    ``(name, start, end)`` spans covering each ``(symbol "name" ...)`` node
+    directly inside ``(kicad_symbol_lib ...)`` and *root_close* is the index
+    of the root node's closing paren.  Parentheses inside quoted strings are
+    ignored.  Unit sub-symbols (``(symbol "X_1_1" ...)`` nested inside a
+    symbol) are not reported.  Returns None if the text is not balanced or
+    has content after the root node, so callers never rewrite a file they
+    don't fully understand.
+    """
+    symbols = []
     depth = 0
-    i = start
-    in_symbol = False
-    while i < len(lib_content):
-        c = lib_content[i]
-        if c == "(":
+    sym_start = -1
+    sym_name = ""
+    for m in _SEXPR_TOKEN_RE.finditer(text):
+        tok = m.group()
+        if tok == "(":
             depth += 1
-            in_symbol = True
-        elif c == ")":
+            if depth == 2:
+                head = _SYMBOL_HEAD_RE.match(text, m.start())
+                if head:
+                    sym_start = m.start()
+                    sym_name = re.sub(r"\\(.)", r"\1", head.group(1), flags=re.S)
+        elif tok == ")":
             depth -= 1
-            if in_symbol and depth == 0:
-                # Found the end - include trailing newline
-                end = i + 1
-                while end < len(lib_content) and lib_content[end] in ("\n", "\r"):
-                    end += 1
-                return lib_content[:start] + lib_content[end:]
-        i += 1
+            if depth == 1 and sym_start >= 0:
+                symbols.append((sym_name, sym_start, m.end()))
+                sym_start = -1
+            elif depth == 0:
+                if text[m.end() :].strip():
+                    return None
+                return symbols, m.start()
+            elif depth < 0:
+                return None
+        elif tok == '"':
+            return None
+    return None
 
-    return lib_content
+
+def symbol_exists(sym_path: str, name: str) -> bool:
+    """Return True if *sym_path* contains a top-level symbol named *name*.
+
+    Raises SymbolLibraryError if the file exists but can't be parsed.
+    """
+    if not os.path.exists(sym_path):
+        return False
+    _, symbols, _ = _read_symbol_lib(sym_path)
+    return any(sym_name == name for sym_name, _, _ in symbols)
+
+
+def _expand_to_lines(text: str, start: int, end: int) -> tuple[int, int]:
+    """Widen a span to whole lines when it is the only thing on them."""
+    line_start = text.rfind("\n", 0, start) + 1
+    if text[line_start:start].strip():
+        line_start = start
+    line_end = end
+    while line_end < len(text) and text[line_end] in " \t":
+        line_end += 1
+    if text.startswith("\r\n", line_end):
+        line_end += 2
+    elif text.startswith("\n", line_end):
+        line_end += 1
+    else:
+        line_end = end
+    return line_start, line_end
 
 
 def save_footprint(fp_dir: str, name: str, content: str, overwrite: bool = False) -> bool:
@@ -160,8 +272,7 @@ def save_footprint(fp_dir: str, name: str, content: str, overwrite: bool = False
     if os.path.exists(fp_path) and not overwrite:
         return False
 
-    with open(fp_path, "w", encoding="utf-8") as f:
-        f.write(content)
+    atomic_write(fp_path, content)
     return True
 
 
@@ -277,8 +388,10 @@ def _update_lib_table(table_path: str, table_type: str, lib_name: str, lib_type:
     """Add an entry to a lib-table file (global or project).
 
     Returns True if the file was newly created.
+    Raises LibraryNameError if *lib_name* is not a safe library name.
     """
-    entry = f'  (lib (name "{lib_name}")(type "{lib_type}")(uri "{uri}")(options "")(descr ""))'
+    lib_name = validate_lib_name(lib_name)
+    entry = f'  (lib (name "{lib_name}")(type "{lib_type}")(uri "{escape_sexpr(uri)}")(options "")(descr ""))'
 
     if os.path.exists(table_path):
         with open(table_path, encoding="utf-8") as f:
@@ -287,20 +400,16 @@ def _update_lib_table(table_path: str, table_type: str, lib_name: str, lib_type:
             return False
         last_paren = content.rfind(")")
         if last_paren >= 0:
-            new_content = content[:last_paren] + entry + "\n)\n"
-            with open(table_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
+            atomic_write(table_path, content[:last_paren] + entry + "\n)\n")
         return False
     else:
-        with open(table_path, "w", encoding="utf-8") as f:
-            f.write(f"({table_type}\n")
-            f.write("  (version 7)\n")
-            f.write(entry + "\n")
-            f.write(")\n")
+        atomic_write(table_path, f"({table_type}\n  (version 7)\n{entry}\n)\n")
         return True
 
 
-_WINDOWS_RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$", re.IGNORECASE)
+_WINDOWS_RESERVED = re.compile(
+    r"^(CON|PRN|AUX|NUL|COM[0-9\u00b9\u00b2\u00b3]|LPT[0-9\u00b9\u00b2\u00b3])$", re.IGNORECASE
+)
 _LIB_ENTRY_RE = re.compile(
     r'\(lib\s+\(name\s+"([^"]+)"\)\s*\(type\s+"([^"]+)"\)\s*\(uri\s+"([^"]+)"\)',
     re.IGNORECASE,
@@ -732,6 +841,42 @@ def find_best_matching_footprint(
     if best is None:
         return None
     return f"{best[1]}:{best[2]}"
+
+
+class LibraryNameError(ValueError):
+    """The configured library name can't be used safely."""
+
+
+_LIB_NAME_BAD_CHARS = set('/\\:"<>|?*')
+
+
+def validate_lib_name(lib_name: str) -> str:
+    """Return *lib_name* stripped of surrounding whitespace, or raise LibraryNameError.
+
+    The name becomes a KiCad library nickname, part of ``Lib:Footprint``
+    references, and the stem of the .kicad_sym/.pretty/.3dshapes paths, so it
+    must be a single safe filename on every OS.  Names are never silently
+    rewritten: a renamed library would point imports somewhere unexpected.
+    """
+    if lib_name is not None and not isinstance(lib_name, str):
+        raise LibraryNameError(f"Library name must be text, not {type(lib_name).__name__}.")
+    name = (lib_name or "").strip()
+    if not name:
+        raise LibraryNameError("Library name is empty.")
+    for ch in name:
+        if ch in _LIB_NAME_BAD_CHARS or ord(ch) < 32 or ord(ch) == 127:
+            shown = repr(ch) if ch.isprintable() else f"control character {ch!r}"
+            raise LibraryNameError(
+                f"Library name {name!r} contains {shown}, which can't be used in a KiCad library name or file name."
+            )
+    if "${" in name or "$(" in name:
+        raise LibraryNameError(f"Library name {name!r} contains a KiCad variable reference ('${{' or '$(').")
+    if name in (".", "..") or name.endswith("."):
+        raise LibraryNameError(f"Library name {name!r} can't be '.' or '..', or end with '.'.")
+    # Windows treats "CON", "CON.txt" and "CON .x" all as the console device.
+    if _WINDOWS_RESERVED.match(name.split(".")[0].rstrip(" ")):
+        raise LibraryNameError(f"Library name {name!r} starts with a reserved device name on Windows.")
+    return name
 
 
 def sanitize_name(title: str) -> str:

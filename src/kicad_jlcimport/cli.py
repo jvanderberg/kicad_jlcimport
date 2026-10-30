@@ -16,7 +16,14 @@ from kicad_jlcimport.easyeda.api import (
     validate_lcsc_id,
 )
 from kicad_jlcimport.importer import import_component
-from kicad_jlcimport.kicad.library import get_global_lib_dir, load_config
+from kicad_jlcimport.kicad.library import (
+    LibraryNameError,
+    SymbolLibraryError,
+    config_path,
+    get_global_lib_dir,
+    load_config,
+    validate_lib_name,
+)
 from kicad_jlcimport.kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
 from kicad_jlcimport.production.export import board_basename, default_output_dir, make_caches, write_bom_cpl
 from kicad_jlcimport.production.kicad_pcb import read_board
@@ -112,7 +119,12 @@ def cmd_import(args):
         print(f"  Error: {e}")
         return
 
-    lib_name = args.lib_name
+    try:
+        lib_name = validate_lib_name(args.lib_name)
+    except LibraryNameError as e:
+        print(f"  Error: {e}")
+        print(f'  Pass a different --lib-name, or change "lib_name" in {config_path()}')
+        sys.exit(1)
     kicad_version = args.kicad_version
 
     def log(msg):
@@ -188,6 +200,9 @@ def cmd_import(args):
     except APIError as e:
         print(f"  Error: {e}")
         return
+    except SymbolLibraryError as e:
+        print(f"  Error: {e}")
+        sys.exit(1)
 
     fp_content = result["fp_content"]
     sym_content = result["sym_content"]

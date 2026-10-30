@@ -7,18 +7,24 @@ from typing import Callable
 
 from .easyeda.api import download_step, download_wrl_source, fetch_full_component
 from .easyeda.parser import parse_footprint_shapes, parse_symbol_shapes
+from .kicad._fileio import atomic_write
 from .kicad.footprint_writer import write_footprint
 from .kicad.library import (
+    SymbolLibraryError,
     _default_3rdparty_dir,
     add_symbol_to_lib,
+    check_symbol_lib,
     ensure_lib_structure,
     find_best_matching_footprint,
     sanitize_name,
     save_footprint,
+    symbol_exists,
     update_global_lib_tables,
     update_project_lib_tables,
+    validate_lib_name,
 )
-from .kicad.model3d import compute_model_transform, save_models
+from .kicad.model3d import ANCHOR_FOOTPRINT, PINS_ALIGNED, PINS_OFFSET, place_model, save_models
+from .kicad.model_checks import ModelCheck, check_model
 from .kicad.symbol_writer import write_symbol
 from .kicad.version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version
 
@@ -54,13 +60,20 @@ def _build_keywords(comp: dict) -> str:
 
 
 def _check_existing_files(
-    lib_dir: str, lib_name: str, fp_name: str, sym_name: str = "", model_name: str = ""
+    lib_dir: str,
+    lib_name: str,
+    fp_name: str,
+    sym_name: str = "",
+    model_name: str = "",
+    symbol_names: set[str] | None = None,
 ) -> list[str]:
     """Return a list of existing file types (e.g. ["footprint", "symbol", "3D model"]).
 
     *fp_name* is the footprint filename.
     *sym_name* is the symbol name inside the .kicad_sym (defaults to *fp_name*).
     *model_name* is the 3D model filename (defaults to *fp_name*).
+    *symbol_names* are the library's top-level symbol names if already known;
+    otherwise the library is read.
     """
     sym_name = sym_name or fp_name
     model_name = model_name or fp_name
@@ -68,13 +81,14 @@ def _check_existing_files(
     fp_path = os.path.join(lib_dir, f"{lib_name}.pretty", f"{fp_name}.kicad_mod")
     if os.path.exists(fp_path):
         existing.append("footprint")
-    sym_path = os.path.join(lib_dir, f"{lib_name}.kicad_sym")
-    if os.path.exists(sym_path):
+    if symbol_names is not None:
+        if sym_name in symbol_names:
+            existing.append("symbol")
+    else:
         try:
-            with open(sym_path, encoding="utf-8") as f:
-                if f'(symbol "{sym_name}"' in f.read():
-                    existing.append("symbol")
-        except (PermissionError, OSError):
+            if symbol_exists(os.path.join(lib_dir, f"{lib_name}.kicad_sym"), sym_name):
+                existing.append("symbol")
+        except (OSError, SymbolLibraryError):
             pass
     models_dir = os.path.join(lib_dir, f"{lib_name}.3dshapes")
     step_path = os.path.join(models_dir, f"{model_name}.step")
@@ -95,6 +109,12 @@ def _global_model_path(lib_dir: str, lib_name: str, model_name: str, kicad_versi
     if os.path.normpath(lib_dir) == os.path.normpath(default_dir):
         return f"${{KICAD{kicad_version}_3RD_PARTY}}/{lib_name}.3dshapes/{model_name}.wrl"
     return os.path.join(lib_dir, f"{lib_name}.3dshapes", f"{model_name}.wrl").replace("\\", "/")
+
+
+def _log_model_check(check: ModelCheck, log: Callable[[str], None]) -> None:
+    """Report problems the physical model checks found."""
+    for detail in check.details:
+        log(f"  Warning: 3D model {detail}; check it in the 3D viewer")
 
 
 def import_component(
@@ -148,7 +168,12 @@ def import_component(
 
     Returns:
         dict with keys: title, name, fp_content, sym_content; or None if cancelled.
+
+    Raises:
+        LibraryNameError: *lib_name* is not a safe library name (checked before any fetch).
+        SymbolLibraryError: the existing symbol library can't be read or safely edited.
     """
+    lib_name = validate_lib_name(lib_name)
     if component_data is not None:
         comp = component_data
     else:
@@ -166,6 +191,12 @@ def import_component(
         # Some EasyEDA payloads omit package while JLC search results include it.
         if search_result.get("package") and not comp.get("package"):
             comp["package"] = search_result["package"]
+
+    # Fail before any dialog or file write if the symbol library can't be
+    # edited safely.
+    existing_symbols = None
+    if not export_only and comp.get("symbol_data_list"):
+        existing_symbols = check_symbol_lib(os.path.join(lib_dir, f"{lib_name}.kicad_sym"))
 
     title = comp["title"]
     name = sanitize_name(title)
@@ -217,7 +248,9 @@ def import_component(
     # Check for existing files and ask user to confirm overwrite.
     # This runs after metadata editing so fp_name reflects any user rename.
     if not export_only and confirm_overwrite:
-        existing = _check_existing_files(lib_dir, lib_name, fp_name, sym_name=name, model_name=model_name)
+        existing = _check_existing_files(
+            lib_dir, lib_name, fp_name, sym_name=name, model_name=model_name, symbol_names=existing_symbols
+        )
         if existing:
             if not confirm_overwrite(fp_name, existing):
                 return None
@@ -254,6 +287,7 @@ def import_component(
     model_rotation = (0.0, 0.0, 0.0)
     uuid_3d = ""
     wrl_source = None
+    model_check = None
     if not reuse_existing_footprint:
         if footprint.model:
             uuid_3d = footprint.model.uuid
@@ -262,9 +296,18 @@ def import_component(
         if uuid_3d:
             wrl_source = download_wrl_source(uuid_3d)
         if footprint.model:
-            model_offset, model_rotation = compute_model_transform(
-                footprint.model, comp["fp_origin_x"], comp["fp_origin_y"], wrl_source
+            placement = place_model(
+                footprint.model, comp["fp_origin_x"], comp["fp_origin_y"], wrl_source, footprint.pads
             )
+            model_offset, model_rotation = placement.offset, placement.rotation
+            if placement.anchor == ANCHOR_FOOTPRINT:
+                log("  3D model: EasyEDA's placement data is unusable; centred on the footprint")
+            if placement.pins == PINS_ALIGNED:
+                log("  3D model: pins aligned to pads")
+            elif placement.pins == PINS_OFFSET:
+                log("  3D model: placed from EasyEDA data; pins land on their pads")
+            model_check = check_model(footprint, placement, wrl_source)
+            _log_model_check(model_check, log)
 
     # Parse symbol (may have multiple units)
     sym_content = ""
@@ -332,7 +375,7 @@ def import_component(
         log("No symbol data available")
 
     if export_only:
-        return _export_only(
+        result = _export_only(
             lib_dir,
             name,
             lcsc_id,
@@ -352,29 +395,33 @@ def import_component(
             model_name=model_name,
         )
 
-    return _import_to_library(
-        lib_dir,
-        lib_name,
-        name,
-        lcsc_id,
-        comp,
-        footprint,
-        uuid_3d,
-        model_offset,
-        model_rotation,
-        use_global,
-        overwrite,
-        sym_content,
-        title,
-        log,
-        kicad_version,
-        wrl_source,
-        metadata,
-        reuse_existing_footprint,
-        footprint_ref,
-        fp_name=fp_name,
-        model_name=model_name,
-    )
+    else:
+        result = _import_to_library(
+            lib_dir,
+            lib_name,
+            name,
+            lcsc_id,
+            comp,
+            footprint,
+            uuid_3d,
+            model_offset,
+            model_rotation,
+            use_global,
+            overwrite,
+            sym_content,
+            title,
+            log,
+            kicad_version,
+            wrl_source,
+            metadata,
+            reuse_existing_footprint,
+            footprint_ref,
+            fp_name=fp_name,
+            model_name=model_name,
+        )
+    if result is not None:
+        result["model_check"] = model_check
+    return result
 
 
 def _export_only(
@@ -421,8 +468,7 @@ def _export_only(
     )
 
     fp_path = os.path.join(out_dir, f"{fp_name}.kicad_mod")
-    with open(fp_path, "w") as f:
-        f.write(fp_content)
+    atomic_write(fp_path, fp_content)
     log(f"  Saved: {fp_path}")
 
     if sym_content:
@@ -433,8 +479,7 @@ def _export_only(
         if has_generator_version(kicad_version):
             sym_lib += '  (generator_version "1.0")\n'
         sym_lib += sym_content + ")\n"
-        with open(sym_path, "w") as f:
-            f.write(sym_lib)
+        atomic_write(sym_path, sym_lib)
         log(f"  Saved: {sym_path}")
 
     if uuid_3d:
@@ -501,9 +546,12 @@ def _import_to_library(
 
         log("Downloading 3D model...")
         step_data = download_step(uuid_3d) if overwrite or not step_existed else None
-        if wrl_source is None and (overwrite or not wrl_existed):
-            wrl_source = download_wrl_source(uuid_3d)
-        step_path, wrl_path = save_models(paths["models_dir"], model_name, step_data, wrl_source)
+        # wrl_source may already have been downloaded to compute the model
+        # transform; that alone must not overwrite an existing .wrl.
+        wrl_to_save = None
+        if overwrite or not wrl_existed:
+            wrl_to_save = wrl_source if wrl_source is not None else download_wrl_source(uuid_3d)
+        step_path, wrl_path = save_models(paths["models_dir"], model_name, step_data, wrl_to_save)
 
         # Use WRL instead of STEP for consistency with offset calculations (which use OBJ/WRL geometry)
         if wrl_path:

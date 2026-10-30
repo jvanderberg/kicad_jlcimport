@@ -1,6 +1,7 @@
 """Generate KiCad .kicad_mod footprint files (v8 and v9)."""
 
-from typing import Tuple
+import math
+from typing import Optional, Tuple
 
 from ..easyeda.ee_types import EEFootprint
 from ..easyeda.parser import compute_arc_midpoint
@@ -27,7 +28,7 @@ def write_footprint(
     lines = []
 
     # Determine if SMD or through-hole
-    has_tht = any(pad.layer == "11" for pad in footprint.pads)
+    has_tht = any(pad.layer == "11" and pad.drill > 0 for pad in footprint.pads)
     attr = "through_hole" if has_tht else "smd"
 
     # Calculate bounding box for reference/value placement
@@ -42,7 +43,7 @@ def write_footprint(
     ref_y = min_y - 1.0
     val_y = max_y + 1.0
 
-    lines.append(f'(footprint "{name}"')
+    lines.append(f'(footprint "{_escape(name)}"')
     lines.append(f"  (version {footprint_format_version(kicad_version)})")
     lines.append('  (generator "JLCImport")')
     if has_generator_version(kicad_version):
@@ -61,7 +62,9 @@ def write_footprint(
     lines.append("    (effects (font (size 1 1) (thickness 0.15)))")
     lines.append("  )")
     if datasheet:
-        lines.append(f'  (property "Datasheet" "{datasheet}" (at 0 0 0) (layer "F.Fab") (hide yes) (uuid "{_uuid()}")')
+        lines.append(
+            f'  (property "Datasheet" "{_escape(datasheet)}" (at 0 0 0) (layer "F.Fab") (hide yes) (uuid "{_uuid()}")'
+        )
         lines.append("    (effects (font (size 1 1) (thickness 0.15)))")
         lines.append("  )")
     if description:
@@ -71,7 +74,9 @@ def write_footprint(
         lines.append("    (effects (font (size 1 1) (thickness 0.15)))")
         lines.append("  )")
     if lcsc_id:
-        lines.append(f'  (property "LCSC" "{lcsc_id}" (at 0 0 0) (layer "F.Fab") (hide yes) (uuid "{_uuid()}")')
+        lines.append(
+            f'  (property "LCSC" "{_escape(lcsc_id)}" (at 0 0 0) (layer "F.Fab") (hide yes) (uuid "{_uuid()}")'
+        )
         lines.append("    (effects (font (size 1 1) (thickness 0.15)))")
         lines.append("  )")
 
@@ -156,18 +161,19 @@ def write_footprint(
             # Use a minimal anchor size — the actual shape is defined
             # entirely by the gr_poly primitive.  A large anchor would fill
             # in the castellated notches of the custom polygon.
-            lines.append(f'  (pad "{pad.number}" {pad_type} {pad_shape} {custom_at} (size 0.1 0.1)')
+            lines.append(f'  (pad "{_escape(pad.number)}" {pad_type} {pad_shape} {custom_at} (size 0.1 0.1)')
             if pad.drill > 0:
-                lines.append(f"    {_drill_str(pad)}")
+                # Custom pads are written unrotated, so the slot is measured on the board.
+                lines.append(f"    {_drill_str(pad, written_rotation=0.0)}")
             lines.append(f"    (layers {layers_str})")
             lines.append("    (options (clearance outline) (anchor rect))")
             lines.append("    (primitives")
             lines.append(f"      (gr_poly (pts {pts_str}) (width 0) (fill yes))")
             lines.append(f'    ) (uuid "{_uuid()}"))')
         else:
-            pad_line = f'  (pad "{pad.number}" {pad_type} {pad_shape} {at_str} {size_str}'
+            pad_line = f'  (pad "{_escape(pad.number)}" {pad_type} {pad_shape} {at_str} {size_str}'
             if pad.drill > 0:
-                pad_line += f" {_drill_str(pad)}"
+                pad_line += f" {_drill_str(pad, written_rotation=pad.rotation)}"
             pad_line += f' (layers {layers_str}) (uuid "{_uuid()}"))'
             lines.append(pad_line)
 
@@ -185,7 +191,7 @@ def write_footprint(
     if model_path:
         ox, oy, oz = model_offset
         rx, ry, rz = model_rotation
-        lines.append(f'  (model "{model_path}"')
+        lines.append(f'  (model "{_escape(model_path)}"')
         lines.append(f"    (offset (xyz {_geom(ox)} {_geom(oy)} {_geom(oz)}))")
         lines.append("    (scale (xyz 1 1 1))")
         lines.append(f"    (rotate (xyz {_fmt(rx)} {_fmt(ry)} {_fmt(rz)}))")
@@ -198,21 +204,47 @@ def write_footprint(
     return "\n".join(lines) + "\n"
 
 
-def _drill_str(pad) -> str:
+def _drill_str(pad, written_rotation: float) -> str:
     """Return the KiCad drill specification string for a pad.
 
-    For oval slot drills (slot_length > 0), returns ``(drill oval W H)``
-    with the slot oriented to match the pad aspect ratio.
+    For oval slot drills (slot_length > 0), returns ``(drill oval W H)``,
+    where W runs along the pad's own x axis.  *written_rotation* is the
+    rotation the pad is written with (KiCad rotates the drill with the pad).
     For circular drills, returns ``(drill D)``.
     """
     if pad.slot_length > 0:
-        if pad.height >= pad.width:
-            # Vertical slot: narrow dimension = drill, long dimension = slot_length
-            return f"(drill oval {_geom(pad.drill)} {_geom(pad.slot_length)})"
-        else:
-            # Horizontal slot: long dimension = slot_length, narrow dimension = drill
+        if _slot_along_pad_x(pad, written_rotation):
             return f"(drill oval {_geom(pad.slot_length)} {_geom(pad.drill)})"
+        return f"(drill oval {_geom(pad.drill)} {_geom(pad.slot_length)})"
     return f"(drill {_geom(pad.drill)})"
+
+
+def _slot_along_pad_x(pad, written_rotation: float) -> bool:
+    """Return True if the pad's slot runs along the pad's own x axis.
+
+    Uses the slot direction EasyEDA records.  The sign of EasyEDA's pad
+    rotation relative to KiCad's hasn't been verified, so the slot is
+    measured against the pad under both signs; they always agree for
+    0/90/180/270 degree pads.  If they disagree, or EasyEDA gives no
+    direction, fall back to the pad's long axis.
+    """
+    if pad.slot_angle is not None:
+        answers = {
+            _mostly_along_x(pad.slot_angle - written_rotation),
+            _mostly_along_x(pad.slot_angle + written_rotation),
+        }
+        if len(answers) == 1 and None not in answers:
+            return answers.pop()
+    return pad.width > pad.height
+
+
+def _mostly_along_x(angle_deg: float) -> Optional[bool]:
+    """True if *angle_deg* is nearer the x axis, False if nearer y, None at 45 degrees."""
+    c = abs(math.cos(math.radians(angle_deg)))
+    s = abs(math.sin(math.radians(angle_deg)))
+    if abs(c - s) < 1e-9:
+        return None
+    return c > s
 
 
 def _pad_type_info(pad):
@@ -230,9 +262,14 @@ def _pad_type_info(pad):
     if pad_shape == "custom" and not pad.polygon_points:
         pad_shape = "rect"
 
-    if pad.layer == "11":
+    if pad.layer == "11" and pad.drill <= 0:
+        # Multi-layer pad without a hole: KiCad has no drill-less thru_hole
+        # pad, so put plain copper on both sides.
+        pad_type = "smd"
+        layers = ["F.Cu", "B.Cu", "F.Mask", "B.Mask"]
+    elif pad.layer == "11":
         # Through-hole
-        pad_type = "thru_hole"
+        pad_type = "thru_hole" if pad.plated else "np_thru_hole"
         layers = ["*.Cu", "*.Mask"]
         # First pad is often rect for THT
         if pad.number == "1" and pad_shape == "rect":
