@@ -898,6 +898,8 @@ class MetadataEditDialog(wx.Dialog):
 
     def __init__(self, parent, metadata: dict):
         self._footprint_candidate_ref = metadata.get("__footprint_candidate_ref", "")
+        self._footprint_candidate_fit = metadata.get("__footprint_candidate_fit", "")
+        self._footprint_candidate_recommended = bool(metadata.get("__footprint_candidate_recommended", True))
         # Start with the auto-matched candidate pre-selected (may be overridden by Browse)
         self._kicad_footprint_ref = self._footprint_candidate_ref
         _gkv = getattr(parent, "_get_kicad_version", None)
@@ -970,8 +972,8 @@ class MetadataEditDialog(wx.Dialog):
         self._rb_import.Bind(wx.EVT_RADIOBUTTON, lambda _e: self._update_name_fields_state())
         fp_box.Add(self._rb_import, 0, wx.BOTTOM, 6)
 
-        # Radio 2: use a KiCad footprint — auto-matched ref shown as the label,
-        # Browse… button lets the user pick a different one from the library browser.
+        # Radio 2: use a KiCad footprint — the ref whose pads match JLC's is shown
+        # as the label; Browse… lets the user pick a different one.
         kicad_row = wx.BoxSizer(wx.HORIZONTAL)
         self._rb_kicad = wx.RadioButton(self, label="Use KiCad footprint:")
         self._rb_kicad.Bind(wx.EVT_RADIOBUTTON, lambda _e: self._update_name_fields_state())
@@ -987,10 +989,16 @@ class MetadataEditDialog(wx.Dialog):
         kicad_row.Add(self._browse_btn, 0, wx.ALIGN_CENTER_VERTICAL)
         fp_box.Add(kicad_row, 0, wx.EXPAND)
 
+        # How well the suggested footprint fits JLC's pads (and any polarity caveat).
+        self._fit_label = wx.StaticText(self, label=self._fit_text(self._kicad_footprint_ref))
+        self._fit_label.Wrap(480)
+        fp_box.Add(self._fit_label, 0, wx.LEFT | wx.TOP, 4)
+
         vbox.Add(fp_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
-        # Default selection: pre-select "Use KiCad footprint" when a candidate exists
-        if self._footprint_candidate_ref:
+        # Pre-select the KiCad footprint only when its pads match JLC's with no
+        # polarity caveat; otherwise JLC's own footprint is the default.
+        if self._footprint_candidate_ref and self._footprint_candidate_recommended:
             self._rb_kicad.SetValue(True)
         else:
             self._rb_import.SetValue(True)
@@ -1001,6 +1009,14 @@ class MetadataEditDialog(wx.Dialog):
         self.SetSizer(vbox)
         # Apply initial enable/disable state to the name fields
         self._update_name_fields_state()
+
+    def _fit_text(self, ref: str) -> str:
+        """Fit description for *ref*: the matcher's for its suggestion, else a note that it wasn't checked."""
+        if not ref:
+            return "No KiCad library footprint found with the same pads as JLC's footprint."
+        if ref == self._footprint_candidate_ref and self._footprint_candidate_fit:
+            return f"Matches JLC's pads: {self._footprint_candidate_fit}"
+        return "Pads not checked against JLC's footprint; check pad count, pitch and pin numbering."
 
     def _update_name_fields_state(self) -> None:
         """Grey out Footprint name / 3D model name when a KiCad library footprint is selected.
@@ -1028,6 +1044,8 @@ class MetadataEditDialog(wx.Dialog):
             if chosen:
                 self._kicad_footprint_ref = chosen
                 self._kicad_ref_label.SetLabel(chosen)
+                self._fit_label.SetLabel(self._fit_text(chosen))
+                self._fit_label.Wrap(480)
                 self._rb_kicad.SetValue(True)
                 self._update_name_fields_state()
                 self.Layout()

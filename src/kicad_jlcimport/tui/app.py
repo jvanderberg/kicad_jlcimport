@@ -15,6 +15,7 @@ from textual.containers import Center, Container, Horizontal, Vertical, Vertical
 from textual.screen import Screen
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -199,7 +200,7 @@ class MetadataEditScreen(Screen):
     #meta-dialog {
         width: 70;
         height: auto;
-        max-height: 20;
+        max-height: 30;
         background: #1a1a1a;
         border: solid #333333;
         padding: 1 2;
@@ -215,6 +216,15 @@ class MetadataEditScreen(Screen):
     }
     #meta-desc, #meta-keywords, #meta-manufacturer {
         margin: 0;
+    }
+    #meta-reuse {
+        height: 1;
+        padding: 0;
+        border: none;
+        background: transparent;
+    }
+    #meta-fit {
+        color: #888888;
     }
     #meta-buttons {
         height: 1;
@@ -236,6 +246,16 @@ class MetadataEditScreen(Screen):
             yield Input(value=self._metadata.get("keywords", ""), id="meta-keywords")
             yield Static("Manufacturer", classes="meta-label")
             yield Input(value=self._metadata.get("manufacturer", ""), id="meta-manufacturer")
+            ref = self._metadata.get("__footprint_candidate_ref", "")
+            if ref:
+                # Ticked only when the KiCad footprint's pads match JLC's with no polarity caveat.
+                yield Static("Footprint", classes="meta-label")
+                yield Checkbox(
+                    f"Use KiCad footprint {ref}",
+                    value=bool(self._metadata.get("__footprint_candidate_recommended", True)),
+                    id="meta-reuse",
+                )
+                yield Static(self._metadata.get("__footprint_candidate_fit", ""), id="meta-fit")
             with Horizontal(id="meta-buttons"):
                 yield Button("OK", id="meta-ok", variant="success")
                 yield Button("Cancel", id="meta-cancel")
@@ -253,13 +273,14 @@ class MetadataEditScreen(Screen):
         self.dismiss(None)
 
     def _accept(self):
-        self.dismiss(
-            {
-                "description": self.query_one("#meta-desc", Input).value,
-                "keywords": self.query_one("#meta-keywords", Input).value,
-                "manufacturer": self.query_one("#meta-manufacturer", Input).value,
-            }
-        )
+        result = {
+            "description": self.query_one("#meta-desc", Input).value,
+            "keywords": self.query_one("#meta-keywords", Input).value,
+            "manufacturer": self.query_one("#meta-manufacturer", Input).value,
+        }
+        if self._metadata.get("__footprint_candidate_ref"):
+            result["__reuse_existing_footprint"] = self.query_one("#meta-reuse", Checkbox).value
+        self.dismiss(result)
 
 
 class JLCImportTUI(App):

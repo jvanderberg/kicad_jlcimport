@@ -8,6 +8,7 @@ from typing import Callable
 from .easyeda.api import download_step, download_wrl_source, fetch_full_component
 from .easyeda.parser import parse_footprint_shapes, parse_symbol_shapes
 from .kicad._fileio import atomic_write
+from .kicad.footprint_match import FootprintMatch, find_matching_footprint
 from .kicad.footprint_writer import write_footprint
 from .kicad.library import (
     SymbolLibraryError,
@@ -15,7 +16,6 @@ from .kicad.library import (
     add_symbol_to_lib,
     check_symbol_lib,
     ensure_lib_structure,
-    find_best_matching_footprint,
     sanitize_name,
     save_footprint,
     symbol_exists,
@@ -27,6 +27,12 @@ from .kicad.model3d import ANCHOR_FOOTPRINT, PINS_ALIGNED, PINS_OFFSET, place_mo
 from .kicad.model_checks import ModelCheck, check_model
 from .kicad.symbol_writer import write_symbol
 from .kicad.version import DEFAULT_KICAD_VERSION, has_generator_version, symbol_format_version
+from .production.jlc_footprints import (
+    jlc_footprint_from_data,
+    needs_pin_names,
+    pin_names_from_data,
+    symbol_draws_plus,
+)
 
 
 def _build_description(comp: dict) -> str:
@@ -111,6 +117,30 @@ def _global_model_path(lib_dir: str, lib_name: str, model_name: str, kicad_versi
     return os.path.join(lib_dir, f"{lib_name}.3dshapes", f"{model_name}.wrl").replace("\\", "/")
 
 
+def _suggest_footprint(comp: dict, package: str, project_dir: str, kicad_version: int) -> FootprintMatch | None:
+    """A KiCad library footprint with the same pads as JLC's footprint for *comp*, or None.
+
+    Uses the component data already fetched: JLC's footprint pads and
+    +/- marks, and for two-terminal parts its symbol's pin names and whether
+    the symbol draws a + (a polarized capacitor).
+    """
+    fp_data = comp.get("footprint_data") or {}
+    jlc = jlc_footprint_from_data(comp.get("lcsc_id", ""), fp_data)
+    symbol_data = comp.get("symbol_data_list") or []
+    two_terminal = needs_pin_names(jlc.pads)
+    pin_names = pin_names_from_data(symbol_data) if two_terminal else {}
+    return find_matching_footprint(
+        jlc.pads,
+        [package, comp.get("package", ""), fp_data.get("title", ""), comp.get("manufacturer_part", "")],
+        prefix=comp.get("prefix", ""),
+        pin_names=pin_names,
+        marks=jlc.pad_marks,
+        project_dir=project_dir,
+        kicad_version=kicad_version,
+        polarized_symbol=two_terminal and symbol_draws_plus(symbol_data),
+    )
+
+
 def _log_model_check(check: ModelCheck, log: Callable[[str], None]) -> None:
     """Report problems the physical model checks found."""
     for detail in check.details:
@@ -147,9 +177,12 @@ def import_component(
         search_result: Optional search result dict with ``brand``, ``description``,
             and ``datasheet`` fields from the JLCPCB search API.
         confirm_metadata: Optional callback that receives a dict with ``description``,
-            ``keywords``, and ``manufacturer`` keys. When a footprint match is
-            available it also includes ``__package_name`` and
-            ``__footprint_candidate_ref``. The callback may set
+            ``keywords``, and ``manufacturer`` keys. When a KiCad library
+            footprint has the same pads as JLC's footprint it also includes
+            ``__package_name``, ``__footprint_candidate_ref``,
+            ``__footprint_candidate_fit`` (a one-line description of the fit)
+            and ``__footprint_candidate_recommended`` (False when the polarity
+            doesn't line up or can't be checked). The callback may set
             ``__reuse_existing_footprint`` to request reusing that footprint.
             Returns the (possibly edited) dict to use, or ``None`` to cancel the import.
         confirm_overwrite: Optional callback called when existing files are detected.
@@ -161,10 +194,11 @@ def import_component(
             API call to ``fetch_full_component`` is skipped.
         symbol_kwargs: Optional extra keyword arguments forwarded to
             ``write_symbol()`` (e.g. ``include_pin_dots``, ``hide_properties``).
-        confirm_reuse_footprint: Optional callback called when a likely existing
-            footprint match is found. Receives ``(package, footprint_ref)`` and
-            returns ``True`` to reuse the existing footprint reference in the
-            symbol, or ``False`` to generate a new footprint as before.
+        confirm_reuse_footprint: Optional callback called when an existing KiCad
+            footprint matches JLC's pads with no polarity caveat. Receives
+            ``(package, footprint_ref)`` and returns ``True`` to reuse the existing
+            footprint reference in the symbol, or ``False`` to generate a new
+            footprint as before.
 
     Returns:
         dict with keys: title, name, fp_content, sym_content; or None if cancelled.
@@ -202,14 +236,15 @@ def import_component(
     name = sanitize_name(title)
     package = comp.get("package", "")
     candidate_ref = None
+    match = None
     reuse_existing_footprint = False
     reuse_choice_from_metadata = None
-    if not export_only:
-        candidate_ref = find_best_matching_footprint(
-            package,
-            project_dir=lib_dir if not use_global else "",
-            kicad_version=kicad_version,
-        )
+    if not export_only and (confirm_metadata or confirm_reuse_footprint):
+        search_package = (search_result or {}).get("package", "")
+        match = _suggest_footprint(comp, search_package, lib_dir if not use_global else "", kicad_version)
+        if match is not None:
+            candidate_ref = match.ref
+            log(f"KiCad footprint {match.ref} matches JLC's pads: {match.describe()}")
 
     # Compute metadata that will be written to KiCad files
     metadata = {
@@ -218,9 +253,11 @@ def import_component(
         "manufacturer": comp.get("manufacturer", ""),
     }
     metadata["__component_name"] = name  # shown/editable in dialog as footprint & 3D name
-    if candidate_ref:
+    if match is not None:
         metadata["__package_name"] = package
-        metadata["__footprint_candidate_ref"] = candidate_ref
+        metadata["__footprint_candidate_ref"] = match.ref
+        metadata["__footprint_candidate_fit"] = match.describe()
+        metadata["__footprint_candidate_recommended"] = match.recommended
     if confirm_metadata:
         metadata = confirm_metadata(metadata)
         if metadata is None:
@@ -234,6 +271,8 @@ def import_component(
             reuse_choice_from_metadata = bool(metadata["__reuse_existing_footprint"])
     metadata.pop("__package_name", None)
     metadata.pop("__footprint_candidate_ref", None)
+    metadata.pop("__footprint_candidate_fit", None)
+    metadata.pop("__footprint_candidate_recommended", None)
     metadata.pop("__reuse_existing_footprint", None)
     metadata.pop("__manually_chosen_footprint", None)
     # Apply user-edited footprint / 3D-model name overrides (EasyEDA import only).
@@ -264,7 +303,8 @@ def import_component(
     if candidate_ref:
         if reuse_choice_from_metadata is True:
             reuse_existing_footprint = True
-        elif reuse_choice_from_metadata is None and confirm_reuse_footprint:
+        elif reuse_choice_from_metadata is None and confirm_reuse_footprint and match and match.recommended:
+            # This callback only gets the ref, so it isn't offered a footprint with a polarity caveat.
             reuse_existing_footprint = confirm_reuse_footprint(package, candidate_ref)
         if reuse_existing_footprint:
             footprint_ref = candidate_ref

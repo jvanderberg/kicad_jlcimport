@@ -37,13 +37,18 @@ class PadRecord:
     For board footprints ``x``/``y`` are board coordinates (mm, Y down).
     For JLC/EasyEDA footprints they are footprint-local (mm, Y down).
     ``function`` is the schematic pin name KiCad attaches to a board pad
-    (e.g. ``K``); empty when unknown.
+    (e.g. ``K``); empty when unknown.  ``width`` / ``height`` are the pad's
+    size in its own frame and ``drill`` its hole diameter (mm; 0 for an SMD
+    pad or when unknown).
     """
 
     number: str
     x: float
     y: float
     function: str = ""
+    width: float = 0.0
+    height: float = 0.0
+    drill: float = 0.0
 
 
 @dataclass
