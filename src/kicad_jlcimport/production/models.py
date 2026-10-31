@@ -27,7 +27,7 @@ LCSC_FIELD_NAMES = (
     "JLC Part",
 )
 
-_LCSC_RE = re.compile(r"^C\d{1,12}$")
+_LCSC_RE = re.compile(r"^C[0-9]{1,12}$")
 
 
 @dataclass

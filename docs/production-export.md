@@ -3,7 +3,7 @@
 The **Production Files** tab of the JLCImport dialog (PCB Editor > Tools > External Plugins > JLCImport) produces everything a JLCPCB PCBA order needs:
 
 - `<board>-gerbers.zip`: Gerbers for every copper layer, the masks, paste, silkscreen and Edge.Cuts, plus Excellon drill files (mm, separate PTH/NPTH)
-- `<board>-bom.csv`: `Comment,Designator,Footprint,JLCPCB Part #`, grouped by value + footprint + LCSC number
+- `<board>-bom.csv`: `Comment,Designator,Footprint,JLCPCB Part #`, one line per LCSC number (see [BOM lines](#bom-lines))
 - `<board>-cpl.csv`: `Designator,Mid X,Mid Y,Rotation,Layer`
 - `<board>-report.txt`: the check results
 
@@ -29,6 +29,12 @@ The tab always works on the board that is open now, so File > Revert, Open or Sa
 DNP footprints and footprints excluded from the BOM are left out of both the BOM and the CPL. Footprints excluded from position files stay in the BOM but are left out of the CPL.
 
 JLCPCB accepts at most 300 BOM line items per order.
+
+### BOM lines
+
+JLCPCB matches BOM lines by part number. If two lines carry the same number, it unticks both with quantity 0 and assembles neither, so the BOM puts every footprint that shares an LCSC number on one line, even when their Values differ (two LEDs labelled `TX` and `RX`, say). That line's Comment and Footprint columns list the group's distinct values, joined with ` / ` in designator order. Footprints without a valid LCSC number are grouped by value, footprint and the raw field text.
+
+The check gives a warning when one LCSC number is used with different footprints, since that is usually a wrong part number. It gives an error if one part number still appears on more than one BOM line, which can happen when identical invalid numbers (`C2286;`, say) sit on parts with different Values.
 
 ### Part types and fees
 

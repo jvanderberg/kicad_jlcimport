@@ -3,7 +3,7 @@
 import csv
 import os
 import zipfile
-from typing import Callable, Dict, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 
 from .conventions import BOTTOM
 from .models import FootprintRecord, natural_key
@@ -13,24 +13,52 @@ BOM_HEADER = ["Comment", "Designator", "Footprint", "JLCPCB Part #"]
 CPL_HEADER = ["Designator", "Mid X", "Mid Y", "Rotation", "Layer"]
 
 
-def build_bom_rows(footprints: Sequence[FootprintRecord]) -> List[List[str]]:
-    """Group BOM parts by (value, footprint, LCSC) into JLCPCB BOM rows.
+def distinct(values: Iterable[str]) -> List[str]:
+    """The distinct non-empty *values*, in first-seen order."""
+    seen: List[str] = []
+    for v in values:
+        if v and v not in seen:
+            seen.append(v)
+    return seen
 
-    Footprints without a valid LCSC number keep their raw field value (if
-    any) so JLCPCB's BOM matcher shows them as unmatched rather than losing
-    them.
+
+def join_distinct(values: Iterable[str]) -> str:
+    """The distinct non-empty *values*, in first-seen order, joined with `` / ``."""
+    return " / ".join(distinct(values))
+
+
+def build_bom_rows(footprints: Sequence[FootprintRecord]) -> List[List[str]]:
+    """Group BOM parts into JLCPCB BOM rows: one row per LCSC part number.
+
+    JLCPCB matches BOM lines by part number.  When two lines carry the same
+    number it unticks both with quantity 0, so it assembles neither.  For that
+    reason every part with a valid LCSC number gets one line, however its
+    Values or footprints differ (two LEDs named "TX" and "RX", say).  The
+    Comment and Footprint columns are the group's distinct values, in
+    designator order.
+
+    Footprints without a valid LCSC number are grouped by (value, footprint,
+    raw field value).  They keep the raw value (if any), so JLCPCB's BOM
+    matcher shows them as unmatched instead of losing them.
     """
-    groups: Dict[Tuple[str, str, str], List[str]] = {}
+    groups: Dict[Tuple[str, ...], List[FootprintRecord]] = {}
     for fp in footprints:
         if not fp.in_bom:
             continue
-        part = fp.lcsc or fp.raw_lcsc
-        groups.setdefault((fp.value, fp.footprint, part), []).append(fp.reference)
+        key = (fp.lcsc,) if fp.lcsc else (fp.value, fp.footprint, fp.raw_lcsc)
+        groups.setdefault(key, []).append(fp)
 
     rows = []
-    for (value, footprint, part), refs in groups.items():
-        refs.sort(key=natural_key)
-        rows.append([value, ",".join(refs), footprint, part])
+    for members in groups.values():
+        members.sort(key=lambda f: natural_key(f.reference))
+        rows.append(
+            [
+                join_distinct(f.value for f in members),
+                ",".join(f.reference for f in members),
+                join_distinct(f.footprint for f in members),
+                members[0].lcsc or members[0].raw_lcsc,
+            ]
+        )
     rows.sort(key=lambda r: natural_key(r[1].split(",")[0]))
     return rows
 
