@@ -666,9 +666,12 @@ USB_C = "USB_C_Receptacle_HRO_TYPE-C-31-M-12"
 SOT_223 = "SOT-223-3_TabPin2"
 
 
-class TestUsbCStackedPads:
-    """KiCad's HRO TYPE-C-31-M-12 stacks A1/B12, A12/B1, A4/B9 and A9/B4 on one land each and numbers the shield
-    pads SH; JLC's C165948 draws each stacked pair as one pad (A1B12, B1A12, ...) and numbers the shield 1-4."""
+class TestStackedPads:
+    """KiCad footprints with several pads on one land.
+
+    KiCad's HRO TYPE-C-31-M-12 stacks A1/B12, A12/B1, A4/B9 and A9/B4 on one land each and numbers the shield
+    pads SH; JLC's C165948 draws each stacked pair as one pad (A1B12, B1A12, ...) and numbers the shield 1-4.
+    """
 
     @pytest.mark.parametrize("x,y,theta,side", POSES)
     def test_solves_with_medium_confidence(self, x, y, theta, side):
@@ -696,6 +699,23 @@ class TestUsbCStackedPads:
         fp = kicad_library_footprint(USB_C, 0.0, 0.0, 0.0)
         paired = pair_unmatched_by_position(fp.pads, load_jlc("C165948").pads, cv.TOP)
         assert sorted(p.number for p in paired) == sorted(p.number for p in fp.pads if p.number)
+
+    @pytest.mark.parametrize("x,y,theta,side", POSES)
+    def test_pads_stacked_under_one_number_keep_their_weight(self, x, y, theta, side):
+        # KiCad's edge-mount SMA has pad 2 on both copper sides at two of its lands; JLC draws each land once
+        # and numbers them 1-5.  Each JLC land takes one pad per board pad, so pad 2's centre doesn't move.
+        name = "SMA_Molex_73251-2120_EdgeMount_Horizontal"
+        local, seen = [], set()
+        for pad in kicad_library_footprint(name, 0.0, 0.0, 0.0).pads:
+            if (pad.x, pad.y) not in seen:
+                seen.add((pad.x, pad.y))
+                local.append(pad)
+        jlc = JlcFootprint("C1", pads=[replace(pad, number=str(i)) for i, pad in enumerate(local, 1)])
+        pl = compute_placement(kicad_library_footprint(name, x, y, theta, side), jlc)
+        assert pl.source == SOLVED and pl.confidence == MEDIUM
+        assert pl.fit.rms == pytest.approx(0.0, abs=1e-6)
+        assert pl.rotation == pytest.approx(cv.cpl_rotation(theta, side))
+        assert (pl.x, pl.y) == pytest.approx(expected_cpl(x, y, theta, side, (0.0, 0.0)), abs=1e-6)
 
     def test_symmetric_stacked_pattern_is_still_ambiguous(self):
         # Two pads stacked at each corner of a square: one site each, and a square fits four ways round.
@@ -737,6 +757,16 @@ class TestTabNumberedLikeAPin:
     @pytest.mark.parametrize("lcsc", ["C347256", "C73181"])
     def test_wrong_package_is_still_flagged(self, lcsc):
         pl = compute_placement(kicad_library_footprint(SOT_223, 10.0, 20.0, 0.0, lcsc=lcsc), load_jlc(lcsc))
+        assert pl.source == ESTIMATED and pl.confidence == LOW
+        assert HIGH_RESIDUAL in pl.fit.flags
+
+    def test_sot223_part_on_a_dpak_land_is_flagged(self):
+        # KiCad's TO-252-3_TabPin2 has SOT-223's pin pitch and pin-to-tab distance, but a 6.4 x 5.8 mm tab
+        # against JLC's 2.47 x 3.6 mm one: different pads, so the tab isn't paired.
+        fp = kicad_library_footprint("TO-252-3_TabPin2", 10.0, 20.0, 0.0, lcsc="C16398")
+        jlc = load_jlc("C16398")
+        assert pair_unmatched_by_position(fp.pads, jlc.pads, cv.TOP) is None
+        pl = compute_placement(fp, jlc)
         assert pl.source == ESTIMATED and pl.confidence == LOW
         assert HIGH_RESIDUAL in pl.fit.flags
 

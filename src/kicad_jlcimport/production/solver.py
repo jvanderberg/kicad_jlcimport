@@ -158,6 +158,7 @@ class Tolerances:
     snap_deg: float = 1.0
     min_spread: float = 0.01  # points closer than this don't determine an orientation
     same_site: float = 0.01  # pads closer than this are one land when matching by position
+    pad_size_ratio: float = 1.5  # pads whose longer sides differ more than this aren't paired by position
     symmetry_tol: float = 0.05
     min_matched_fraction: float = 0.5
 
@@ -459,11 +460,13 @@ def _sites(points: Sequence[Point], tol: float) -> List[List[int]]:
 
 
 def _site_numbers(pads: Sequence[PadRecord], site: Sequence[int]) -> List[str]:
-    """The pad numbers at a site, once each (as written on the first pad with that number)."""
-    numbers: Dict[str, str] = {}
-    for i in site:
-        numbers.setdefault(normalize_pad_number(pads[i].number), pads[i].number)
-    return list(numbers.values())
+    """The number of each pad at a site, repeats included.
+
+    A JLC pad matched to the site is copied once per board pad, so a number
+    stacked twice on the board (a pad on each copper side) is twice on JLC's
+    side too and the two footprints' groups keep the same weight.
+    """
+    return [pads[i].number for i in site]
 
 
 def match_pads_by_position(
@@ -482,7 +485,7 @@ def match_pads_by_position(
     USB-C pads A1 and B12, stacked on one land, match JLC's single ``A1B12``
     pad.  Site centroids are aligned and every 90° step (and KiCad's angle
     plus 90° steps) is tried; each JLC site takes the numbers of the nearest
-    board site, one pad per number.  Returns None when the site counts differ
+    board site, one pad per board pad.  Returns None when the site counts differ
     or nothing fits within ``tol.medium_rms``.
 
     A symmetric pattern can fit in more than one orientation with a different
@@ -560,9 +563,9 @@ def _claim_nearest(a: Sequence[Point], b: Sequence[Point]) -> Tuple[List[int], L
     return [i for i in range(len(a)) if i not in used_a], [j for j in range(len(b)) if j not in used_b]
 
 
-def _reach(pads: Sequence[PadRecord]) -> float:
-    """Half the longest side of the largest pad (0 when the sizes are unknown)."""
-    return max(max(pad.width, pad.height) for pad in pads) / 2
+def _longest_side(pads: Sequence[PadRecord]) -> float:
+    """The longest side of the largest pad (0 when the sizes are unknown)."""
+    return max(max(pad.width, pad.height) for pad in pads)
 
 
 def pair_unmatched_by_position(
@@ -583,11 +586,13 @@ def pair_unmatched_by_position(
     numbers only one footprint has, and the extra pads of a group that has
     more pads on one footprint (the pads of the group nearest the other
     footprint's keep the number).  Each JLC site among them is paired with a
-    board site when each is the other's nearest and they are no further apart
-    than half the longest side of the smaller of the two pads (at least
-    ``tol.medium_rms``), and takes the board site's numbers.  The fit is
-    then solved again with :func:`solve_placement`, which judges it as usual.
-    Returns None when no pad is renamed.
+    board site when each is the other's nearest, they are no further apart
+    than half the longer side of the smaller of the two pads (at least
+    ``tol.medium_rms``), and neither pad's longer side is more than
+    ``tol.pad_size_ratio`` times the other's (a DPAK's tab is not a SOT-223's).
+    The JLC pad then takes the board site's numbers.  The fit is solved again
+    with :func:`solve_placement`, which judges it as usual.  Returns None
+    when no pad is renamed.
     """
     board = [pad for pad in board_pads if normalize_pad_number(pad.number)]
     jlc = [pad for pad in jlc_pads if normalize_pad_number(pad.number)]
@@ -642,8 +647,10 @@ def pair_unmatched_by_position(
         bs, dist = nearest(j_points[js], b_points)
         if nearest(b_points[bs], j_points)[0] != js:
             continue
-        reach = min(_reach([board[i] for i in board_sites[bs]]), _reach([jlc[i] for i in site]))
-        if dist <= max(reach, tol.medium_rms):
+        sizes = sorted((_longest_side([board[i] for i in board_sites[bs]]), _longest_side([jlc[i] for i in site])))
+        if sizes[0] > 0 and sizes[1] > tol.pad_size_ratio * sizes[0]:
+            continue
+        if dist <= max(sizes[0] / 2, tol.medium_rms):
             renamed[site[0]] = _site_numbers(board, board_sites[bs])
             renamed.update((i, []) for i in site[1:])
     if not renamed:

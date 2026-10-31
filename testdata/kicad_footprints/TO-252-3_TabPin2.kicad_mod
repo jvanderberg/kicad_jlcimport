@@ -1,0 +1,292 @@
+(footprint "TO-252-3_TabPin2"
+	(version 20260206)
+	(generator "kicad-footprint-generator")
+	(layer "F.Cu")
+	(descr "TO-252/DPAK SMD package, http://www.infineon.com/cms/en/product/packages/PG-TO252/PG-TO252-3-1/")
+	(tags "DPAK TO-252 DPAK-3 TO-252-3 SOT-428")
+	(property "Reference" "REF**"
+		(at 0 -4.5 0)
+		(layer "F.SilkS")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "TO-252-3_TabPin2"
+		(at 0 4.5 0)
+		(layer "F.Fab")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "KiLib_Generator" "package/TO_SOT/SMD"
+		(at 0 0 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -3.31 -3.45)
+		(end -3.31 -3.18)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_line
+		(start -3.31 3.45)
+		(end -3.31 3.18)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_line
+		(start 3.11 -3.45)
+		(end -3.31 -3.45)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_line
+		(start 3.11 3.45)
+		(end -3.31 3.45)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_poly
+		(pts
+			(xy -5.04 -3.14)
+			(xy -5.38 -3.61)
+			(xy -4.7 -3.61)
+		)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.SilkS")
+	)
+	(fp_rect
+		(start -6.39 -3.5)
+		(end 4.71 3.5)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+	)
+	(fp_line
+		(start -5.81 -2.655)
+		(end -5.81 -1.905)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -5.81 -1.905)
+		(end -3.11 -1.905)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -5.81 -0.375)
+		(end -5.81 0.375)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -5.81 0.375)
+		(end -3.11 0.375)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -5.81 1.905)
+		(end -5.81 2.655)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -5.81 2.655)
+		(end -3.11 2.655)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -3.11 -0.375)
+		(end -5.81 -0.375)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -3.11 1.905)
+		(end -5.81 1.905)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.705 -2.655)
+		(end -5.81 -2.655)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 3.11 -2.7)
+		(end 4.11 -2.7)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 4.11 -2.7)
+		(end 4.11 2.7)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 4.11 2.7)
+		(end 3.11 2.7)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_poly
+		(pts
+			(xy 3.11 -3.25)
+			(xy 3.11 3.25)
+			(xy -3.11 3.25)
+			(xy -3.11 -2.25)
+			(xy -2.11 -3.25)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.Fab")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "" smd roundrect
+		(at -0.415 -1.525)
+		(size 3.05 2.75)
+		(layers "F.Paste")
+		(roundrect_rratio 0.090909)
+	)
+	(pad "" smd roundrect
+		(at -0.415 1.525)
+		(size 3.05 2.75)
+		(layers "F.Paste")
+		(roundrect_rratio 0.090909)
+	)
+	(pad "" smd roundrect
+		(at 2.935 -1.525)
+		(size 3.05 2.75)
+		(layers "F.Paste")
+		(roundrect_rratio 0.090909)
+	)
+	(pad "" smd roundrect
+		(at 2.935 1.525)
+		(size 3.05 2.75)
+		(layers "F.Paste")
+		(roundrect_rratio 0.090909)
+	)
+	(pad "1" smd roundrect
+		(at -5.04 -2.28)
+		(size 2.2 1.2)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.208333)
+	)
+	(pad "2" smd roundrect
+		(at -5.04 0)
+		(size 2.2 1.2)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.208333)
+	)
+	(pad "2" smd roundrect
+		(at 1.26 0)
+		(size 6.4 5.8)
+		(layers "F.Cu" "F.Mask")
+		(roundrect_rratio 0.043103)
+	)
+	(pad "3" smd roundrect
+		(at -5.04 2.28)
+		(size 2.2 1.2)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.208333)
+	)
+	(embedded_fonts no)
+	(model "${KICAD10_3DMODEL_DIR}/Package_TO_SOT_SMD.3dshapes/TO-252-3_TabPin2.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

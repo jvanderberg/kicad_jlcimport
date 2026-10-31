@@ -106,6 +106,11 @@ class TestMatchPolarity:
         assert m.source == pol.BY_NAMES and m.swapped
         assert [(p.number, p.x) for p in m.jlc_pads] == [("1", -0.75), ("2", 0.75)]
 
+    def test_renumbered_pads_keep_their_size(self):
+        jlc = [PadRecord("2", -0.75, 0.0, width=0.8, height=0.9, drill=0.3), PadRecord("1", 0.75, 0.0, width=0.7)]
+        m = pol.match_polarity(self.board(("K_1", "A_2")), jlc, JLC_LED_NAMES)
+        assert [(p.number, p.width, p.height, p.drill) for p in m.jlc_pads] == [("1", 0.8, 0.9, 0.3), ("2", 0.7, 0, 0)]
+
     def test_kicad_convention_when_board_has_no_names(self):
         m = pol.match_polarity(self.board(), JLC_LED_PADS, JLC_LED_NAMES, footprint_name=LED_FP)
         assert m.source == pol.BY_CONVENTION and m.kind == pol.DIODE and m.swapped
