@@ -42,7 +42,7 @@ The LCSC number is read from the first non-empty footprint field named `LCSC`, `
 
 JLCPCB places each part using the orientation and origin of **its own EasyEDA footprint** for that LCSC part. Your KiCad footprint may use a different 0° orientation (a stock KiCad library footprint, for example) and a different origin (pin 1 instead of the centre). To find the rotation and position JLCPCB needs, the plugin fits JLC's footprint onto your actual pads:
 
-1. Pads are paired by pad number (whitespace is trimmed and case is ignored). Polarized two-terminal parts are the exception (see [Polarity of LEDs, diodes and polarized capacitors](#polarity-of-leds-diodes-and-polarized-capacitors)). Unnumbered pads are ignored. Pads that share a number (split thermal pads, several GND or shield pads) are reduced to the centroid of their group on each footprint.
+1. Pads are paired by pad number (whitespace is trimmed and case is ignored). Polarized two-terminal parts are the exception (see [Polarity of LEDs, diodes and polarized capacitors](#polarity-of-leds-diodes-and-polarized-capacitors)). Unnumbered pads are ignored. Pads that share a number (split thermal pads, several GND or shield pads) are reduced to the centroid of their group on each footprint. Copies of a pad stacked at one position (KiCad's thermal-via footprints, or a pad on both copper sides) count once.
 2. The closed-form 2D least-squares rigid fit (rotation + translation, no scale) is computed:
 
    ```

@@ -7,7 +7,8 @@ actual pads:
 
 1. Pads are paired by number.  Pads sharing a number (thermal pads split
    into segments, several GND pins, …) are reduced to the centroid of their
-   group on each side, so one group contributes one point.
+   group on each side, so one group contributes one point.  Copies of a pad
+   stacked at one position count once.
 2. JLC's local points ``q`` (Y up, mirrored for bottom-side parts — see
    :mod:`.conventions`) and board points ``p`` (CPL frame) are fitted with
    the closed-form 2D least-squares rigid transform::
@@ -196,14 +197,30 @@ def normalize_pad_number(number: str) -> str:
     return (number or "").strip().upper()
 
 
-def group_pads(pads: Sequence[PadRecord]) -> Dict[str, List[Point]]:
-    """Group pad positions by normalized number, skipping unnumbered pads."""
-    groups: Dict[str, List[Point]] = {}
-    for pad in pads:
+def _group_indices(pads: Sequence[PadRecord], tol: float) -> Dict[str, List[int]]:
+    """Indices of *pads* grouped by normalized number, skipping unnumbered pads.
+
+    A pad within *tol* of one already in its group is the same land (KiCad
+    stacks copies of a pad for each copper side or for thermal vias) and is
+    left out, so stacked copies don't pull the group's centre towards them.
+    """
+    groups: Dict[str, List[int]] = {}
+    for i, pad in enumerate(pads):
         num = normalize_pad_number(pad.number)
-        if num:
-            groups.setdefault(num, []).append((pad.x, pad.y))
+        if not num:
+            continue
+        group = groups.setdefault(num, [])
+        if all(math.hypot(pad.x - pads[j].x, pad.y - pads[j].y) > tol for j in group):
+            group.append(i)
     return groups
+
+
+def group_pads(pads: Sequence[PadRecord]) -> Dict[str, List[Point]]:
+    """Group pad positions by normalized number, skipping unnumbered pads and stacked copies."""
+    return {
+        num: [(pads[i].x, pads[i].y) for i in group]
+        for num, group in _group_indices(pads, DEFAULT_TOLERANCES.same_site).items()
+    }
 
 
 def _centroid(points: Sequence[Point]) -> Point:
@@ -596,11 +613,8 @@ def pair_unmatched_by_position(
     """
     board = [pad for pad in board_pads if normalize_pad_number(pad.number)]
     jlc = [pad for pad in jlc_pads if normalize_pad_number(pad.number)]
-    board_groups: Dict[str, List[int]] = {}
-    jlc_groups: Dict[str, List[int]] = {}
-    for groups, pads in ((board_groups, board), (jlc_groups, jlc)):
-        for i, pad in enumerate(pads):
-            groups.setdefault(normalize_pad_number(pad.number), []).append(i)
+    board_groups = _group_indices(board, tol.same_site)
+    jlc_groups = _group_indices(jlc, tol.same_site)
     common = sorted(set(board_groups) & set(jlc_groups))
     anchors = [n for n in common if len(board_groups[n]) == len(jlc_groups[n])]
     if len(anchors) < 2:

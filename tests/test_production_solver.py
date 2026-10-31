@@ -700,18 +700,36 @@ class TestStackedPads:
         paired = pair_unmatched_by_position(fp.pads, load_jlc("C165948").pads, cv.TOP)
         assert sorted(p.number for p in paired) == sorted(p.number for p in fp.pads if p.number)
 
-    @pytest.mark.parametrize("x,y,theta,side", POSES)
-    def test_pads_stacked_under_one_number_keep_their_weight(self, x, y, theta, side):
-        # KiCad's edge-mount SMA has pad 2 on both copper sides at two of its lands; JLC draws each land once
-        # and numbers them 1-5.  Each JLC land takes one pad per board pad, so pad 2's centre doesn't move.
-        name = "SMA_Molex_73251-2120_EdgeMount_Horizontal"
+    SMA = "SMA_Molex_73251-2120_EdgeMount_Horizontal"
+
+    def sma_lands(self):
+        """The SMA's pads with each land drawn once: KiCad has pad 2 on both copper sides at two of its lands."""
         local, seen = [], set()
-        for pad in kicad_library_footprint(name, 0.0, 0.0, 0.0).pads:
+        for pad in kicad_library_footprint(self.SMA, 0.0, 0.0, 0.0).pads:
             if (pad.x, pad.y) not in seen:
                 seen.add((pad.x, pad.y))
                 local.append(pad)
-        jlc = JlcFootprint("C1", pads=[replace(pad, number=str(i)) for i, pad in enumerate(local, 1)])
-        pl = compute_placement(kicad_library_footprint(name, x, y, theta, side), jlc)
+        return local
+
+    def test_stacked_copies_count_once(self):
+        board = kicad_library_footprint(self.SMA, 0.0, 0.0, 0.0).pads
+        assert len(group_pads(board)["2"]) == 4 < sum(1 for p in board if p.number == "2")
+
+    @pytest.mark.parametrize("x,y,theta,side", POSES)
+    def test_stacked_copies_dont_pull_the_fit(self, x, y, theta, side):
+        # JLC draws each land once under the same numbers: the stacked copies don't move pad 2's centre.
+        jlc = JlcFootprint("C1", pads=self.sma_lands())
+        pl = compute_placement(kicad_library_footprint(self.SMA, x, y, theta, side), jlc)
+        assert pl.source == SOLVED and pl.confidence == HIGH
+        assert GROUP_SIZE_MISMATCH not in pl.fit.flags
+        assert pl.rotation == pytest.approx(cv.cpl_rotation(theta, side))
+        assert (pl.x, pl.y) == pytest.approx(expected_cpl(x, y, theta, side, (0.0, 0.0)), abs=1e-6)
+
+    @pytest.mark.parametrize("x,y,theta,side", POSES)
+    def test_stacked_copies_dont_pull_a_position_match(self, x, y, theta, side):
+        # JLC numbers the lands 1-5: matched by position, each JLC land takes one pad per board pad.
+        jlc = JlcFootprint("C1", pads=[replace(pad, number=str(i)) for i, pad in enumerate(self.sma_lands(), 1)])
+        pl = compute_placement(kicad_library_footprint(self.SMA, x, y, theta, side), jlc)
         assert pl.source == SOLVED and pl.confidence == MEDIUM
         assert pl.fit.rms == pytest.approx(0.0, abs=1e-6)
         assert pl.rotation == pytest.approx(cv.cpl_rotation(theta, side))

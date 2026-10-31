@@ -1,61 +1,40 @@
 # JLCImport
 
-JLCImport is a KiCad action plugin that imports symbols, footprints, and 3D models from LCSC/JLCPCB into your project or global library.
+A KiCad plugin that imports LCSC/JLCPCB parts (symbol, footprint and 3D model) into your project or global library, and writes the files for a JLCPCB assembly order.
 
-## Features
-
-- Imports symbol, footprint, and 3D model data in one step.
-- Offers a footprint from your KiCad libraries instead of JLC's, but only one with the same pads ([details](docs/usage.md#using-a-kicad-library-footprint-instead-of-jlcs)).
-- Works with project libraries or global KiCad libraries.
-- Includes searchable part lookup with stock and type filtering.
-- Handles modern KiCad formats (8/9/10).
-- Ships with plugin, CLI, GUI, and TUI workflows.
-- **JLCPCB production files**: writes the Gerber zip, BOM and placement (CPL) file for a JLCPCB assembly order, after checking that every part is in stock and working out the rotation JLCPCB needs for each part.
+- Search parts with stock and Basic/Extended filters, and import them in one step.
+- Use a footprint from your KiCad libraries instead of JLC's, when one has the same pads ([details](docs/usage.md#using-a-kicad-library-footprint-instead-of-jlcs)).
+- Write the Gerbers, BOM and placement (CPL) file for JLCPCB assembly, with stock checked and rotations solved for each part.
+- Works as a KiCad plugin, a CLI, a desktop GUI and a terminal UI, with KiCad 8, 9 and 10.
 
 ![Search and details](images/search_results.png)
 
 ## Install
 
-1. Open KiCad and go to **Tools > Plugin and Content Manager**
-2. Open repository settings and add:
-   `https://github.com/jvanderberg/kicad_jlcimport/releases/latest/download/repository.json`
-3. Refresh repositories
-4. Install **JLCImport**
+1. In KiCad, open **Tools > Plugin and Content Manager**.
+2. In the repository settings, add `https://github.com/jvanderberg/kicad_jlcimport/releases/latest/download/repository.json`.
+3. Refresh the repositories and install **JLCImport**.
 
-Fallback: install from ZIP using [Releases](https://github.com/jvanderberg/kicad_jlcimport/releases) (`JLCImport-vX.X.X.zip`, not "Source code" ZIP).
+Or install `JLCImport-vX.X.X.zip` (not "Source code") from [Releases](https://github.com/jvanderberg/kicad_jlcimport/releases) with **Install from File**.
 
-For local development, link `src/kicad_jlcimport` into your KiCad plugin directory and restart KiCad.
+## Import a part
 
-## Use In KiCad
+Open **PCB Editor > Tools > External Plugins > JLCImport**, search for a part, choose the Project or Global library, and click **Import**. If this creates `sym-lib-table` or `fp-lib-table` for the first time, reopen the project once.
 
-Open `PCB Editor > Tools > External Plugins > JLCImport`.
+## JLCPCB production files
 
-1. Search for a part.
-2. Pick Project or Global destination.
-3. Set library name if needed.
-4. Click Import.
+On the **Production Files** tab, set the number of boards and click **Check JLCPCB**. Every part is looked up at JLCPCB (stock, Basic/Extended, price), and its rotation and position are solved against JLCPCB's own footprint. The summary lists the order, the fees, how well each placement solved, and any problems. **Generate** writes these files to `<project>/production/`:
 
-If `sym-lib-table` or `fp-lib-table` is created for the first time, reopen the project once.
+| File | Contents |
+| --- | --- |
+| `<board>-gerbers.zip` | Gerbers and drill files (also left unzipped in `gerbers/`) |
+| `<board>-bom.csv` | BOM: comment, designators, footprint, LCSC part number |
+| `<board>-cpl.csv` | Placements: designator, position, rotation, side |
+| `<board>-report.txt` | The check: summary, errors and warnings, and every part's stock and placement |
 
-### JLCPCB Production Files
+Before ordering, check the parts the report warns about in JLCPCB's placement preview. To correct a part for good, add a `JLCPCB Rotation Offset` or `JLCPCB Position Offset` field to its footprint. `jlcimport-cli production` does the same from a saved board, with `--json` for scripts. See the [production export guide](docs/production-export.md).
 
-In the PCB Editor, open JLCImport and switch to the **Production Files** tab.
-
-1. Set **Boards to assemble** (and the output folder, if not `<project>/production/`).
-2. Click **Check JLCPCB**. Each part is looked up at JLCPCB (stock, Basic/Extended, price) and its placement rotation is worked out from JLCPCB's own footprint. Untick **Check stock and prices** if you only need placements.
-3. The summary shows the order, the fees, how well the placements solved, and any errors or warnings. Click **Review details** to see every part, or **Generate** to write the Gerber zip, BOM, CPL and a report.
-
-Before ordering, look at the parts the report warns about (polarized parts and estimated placements) in JLCPCB's placement preview. If a part is wrong, add a `JLCPCB Rotation Offset` (degrees) or `JLCPCB Position Offset` (`dx, dy` in mm) field to its footprint. The [production export guide](docs/production-export.md) covers the check, the overrides and the `jlcimport-cli production` command, which does the same from the command line (Gerbers via KiCad's `kicad-cli`, and `--json` output for scripts).
-
-## CLI, GUI, And TUI
-
-This repo also ships standalone tools:
-
-- `jlcimport-cli` for scripts and batch work.
-- `jlcimport-gui` for a desktop app outside KiCad.
-- `jlcimport-tui` for terminal workflow.
-
-Quick examples:
+## CLI, GUI and TUI
 
 ```bash
 jlcimport-cli search "100nF 0402" -t basic
@@ -65,51 +44,28 @@ jlcimport-gui -p /path/to/project
 jlcimport-tui --kicad-version 9
 ```
 
-Create or activate the local environment with:
+The plugin needs no extra Python packages. The GUI needs `wxPython` (`pip install -e '.[gui]'`); the TUI needs Python 3.10+ and `textual` (`pip install -e '.[tui]'`). For development, run `source install.sh` (macOS/Linux) or `. .\install.ps1` (Windows) to set up the environment, and link `src/kicad_jlcimport` into KiCad's plugin directory.
 
-```bash
-source install.sh      # macOS/Linux
-. .\install.ps1        # Windows PowerShell
-```
+Settings (mainly the library name) are kept in `jlcimport.json` in KiCad's config directory and shared by the plugin, CLI and TUI.
+
+On Windows with KiCad 9, symbol preview can fail if `wx.svg._nanosvg` is missing; see [fixes/README.md](fixes/README.md).
 
 ## Recent Updates
 
-Based on recent git history:
+- `v1.6.7`: snap tiny EasyEDA rounding errors to metric/imperial grids, keeping exact mil values.
+- `v1.6.5`: fall back to the LCSC product page URL when JLCPCB's search omits it.
+- `v1.6.4`: follow KiCad 10's chained (`Table`) fp-lib-tables in the footprint browser.
+- `v1.4.0`: KiCad footprint browser with live preview, footprint/3D model renaming, KiCad library footprint reuse.
+- `v1.2.10`: Python 3.9 fix in library handling.
+- `v1.2.9`: non-modal plugin dialog, multi-unit symbols.
+- `v1.2.8`: sturdier SVG path parsing.
 
-- `v1.6.7`: normalize tiny EasyEDA geometry residuals to common metric/imperial grids for generated KiCad coordinates and dimensions while preserving exact mil values.
-- `v1.6.5`: global search now falls back to a constructed `lcsc.com/product-detail/<code>.html` URL when the JLCPCB API omits `lcscGoodsUrl` (common for less-popular variants); skipped for `C99*` JLC-internal codes that don't have an LCSC.com listing.
-- `v1.6.4`: support for KiCad 10 `(type "Table")` fp-lib-table indirection (Linux/Windows fresh installs ship a chained default table) — footprint browser now resolves bundled libraries when they live behind a Table entry; cycle detection prevents loops on self-referential or circular table chains.
-- `v1.4.0`: KiCad footprint browser with live preview, footprint/3D model renaming, KiCad library footprint reuse, SpinnerOverlay deadlock fix, multi-unit symbol crash fix, and pinned ruff version.
-- `v1.2.10`: fixed Python 3.9 annotation evaluation in library handling.
-- `v1.2.9`: made the plugin dialog non-modal and added multi-unit symbol support.
-- `v1.2.8`: hardened SVG path parsing for better import reliability.
-- `v1.2.x`: continued fixes for datasheets, rendering, path handling, and KiCad 9 support.
+## Documentation
 
-## Configuration
-
-The plugin stores settings in `jlcimport.json` in your KiCad config directory. Right now this is mainly the library name preference, shared across plugin, CLI, and TUI.
-
-## Compatibility
-
-The project targets KiCad 8, 9, and 10.
-
-For the plugin inside KiCad, no extra Python packages are required.
-
-For standalone tools:
-
-- GUI needs `wxPython` (`pip install -e '.[gui]'`)
-- TUI needs Python 3.10+ and `textual` dependencies (`pip install -e '.[tui]'`)
-
-## Troubleshooting
-
-On Windows with KiCad 9, symbol preview may fail if `wx.svg._nanosvg` is missing. Use the fix in [fixes/README.md](fixes/README.md).
-
-## Detailed Documentation
-
-- [Full usage guide](docs/usage.md)
-- [3D model notes](docs/3d-models.md)
+- [Usage guide](docs/usage.md)
 - [JLCPCB production export](docs/production-export.md)
-- [Architecture overview](docs/architecture.md)
+- [3D models](docs/3d-models.md)
+- [Architecture](docs/architecture.md)
 - [Visual comparison output](https://jvanderberg.github.io/kicad_jlcimport/)
 
 ## License
