@@ -45,6 +45,7 @@ from .solver import (
     describe_flags,
     match_pads_by_position,
     normalize_pad_number,
+    pair_unmatched_by_position,
     solve_placement,
 )
 
@@ -159,30 +160,41 @@ def solve_against_jlc(fp: FootprintRecord, jlc_fp: JlcFootprint) -> FitResult:
     When JLC numbers the pads in mirror image of the board footprint, no
     rotation pairs every number, so the pads are matched by position instead
     (pin 1 nearest pin 1) rather than falling back to KiCad's own angle.
+    When most numbers pair but a few pads are numbered differently (a tab
+    numbered like a pin), just those pads are paired by position.
     """
     polarity = match_polarity(
         fp.pads, jlc_fp.pads, jlc_fp.pin_names, jlc_fp.symbol_error, fp.footprint, jlc_marks=jlc_fp.pad_marks
     )
     polarity.own_footprint = own_footprint_name(fp.footprint, jlc_fp)
     fit = solve_placement(fp.pads, polarity.jlc_pads, fp.side, kicad_orientation=fp.orientation, polarity=polarity)
-    if not fit.usable:
-        mirrored = MIRRORED in fit.flags
-        renumbered = match_pads_by_position(
-            fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation, break_ties=mirrored
-        )
-        if renumbered is not None:
-            by_position = solve_placement(fp.pads, renumbered, fp.side, kicad_orientation=fp.orientation)
-            if by_position.usable:
-                if not mirrored:
-                    flag = MATCHED_BY_POSITION
-                elif is_isolated_array(fp.footprint, jlc_fp.title):
-                    flag = MIRRORED_ARRAY
-                else:
-                    flag = MIRRORED_BY_POSITION
-                cap_confidence(by_position, flag)
-                fit = by_position
-        elif not mirrored:
-            _estimate_by_position(fp, jlc_fp, fit)
+    if fit.usable:
+        return fit
+    mirrored = MIRRORED in fit.flags
+    renumbered = match_pads_by_position(
+        fp.pads, jlc_fp.pads, fp.side, kicad_orientation=fp.orientation, break_ties=mirrored
+    )
+    if renumbered is not None:
+        by_position = solve_placement(fp.pads, renumbered, fp.side, kicad_orientation=fp.orientation)
+        if by_position.usable:
+            if not mirrored:
+                flag = MATCHED_BY_POSITION
+            elif is_isolated_array(fp.footprint, jlc_fp.title):
+                flag = MIRRORED_ARRAY
+            else:
+                flag = MIRRORED_BY_POSITION
+            cap_confidence(by_position, flag)
+            return by_position
+    if mirrored:
+        return fit
+    paired = pair_unmatched_by_position(fp.pads, polarity.jlc_pads, fp.side)
+    if paired is not None:
+        by_pairing = solve_placement(fp.pads, paired, fp.side, kicad_orientation=fp.orientation, polarity=polarity)
+        if by_pairing.usable:
+            cap_confidence(by_pairing, MATCHED_BY_POSITION)
+            return by_pairing
+    if renumbered is None:
+        _estimate_by_position(fp, jlc_fp, fit)
     return fit
 
 

@@ -33,7 +33,7 @@ the pads stay paired by number and the result is flagged ``JLC_UNNAMED``.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .models import PadRecord
@@ -324,7 +324,7 @@ def match_polarity(
         # that now belongs to a polarized pad.
         return f"jlc:{number}" if num in taken else number
 
-    renumbered = [PadRecord(number=renumber(p.number), x=p.x, y=p.y, function=p.function) for p in jlc_pads]
+    renumbered = [replace(p, number=renumber(p.number)) for p in jlc_pads]
     # "Swapped" only means something when both sides use the same two numbers.
     swapped = set(mapping) == set(mapping.values()) and any(src != dst for src, dst in mapping.items())
     return PolarityMatch(

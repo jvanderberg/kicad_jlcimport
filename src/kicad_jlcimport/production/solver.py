@@ -7,7 +7,8 @@ actual pads:
 
 1. Pads are paired by number.  Pads sharing a number (thermal pads split
    into segments, several GND pins, …) are reduced to the centroid of their
-   group on each side, so one group contributes one point.
+   group on each side, so one group contributes one point.  Copies of a pad
+   stacked at one position count once.
 2. JLC's local points ``q`` (Y up, mirrored for bottom-side parts — see
    :mod:`.conventions`) and board points ``p`` (CPL frame) are fitted with
    the closed-form 2D least-squares rigid transform::
@@ -32,11 +33,19 @@ actual pads:
 
 When the pad numbers don't line up at all (JLC renumbered its footprint,
 say), :func:`match_pads_by_position` pairs pads by position instead.  It
-only accepts a match that fits in exactly one orientation.
+only accepts a match that fits in exactly one orientation.  When most numbers
+line up but a few pads are numbered differently (KiCad numbers a SOT-223 tab
+like its middle pin, JLC gives it a number of its own),
+:func:`pair_unmatched_by_position` pairs just those pads by position, with the
+orientation fixed by the pads that do pair by number.
+
+Pads at the same position (KiCad stacks a USB-C connector's A1 and B12 on one
+land, which JLC draws as one pad ``A1B12``) are one *site* when pads are
+matched by position.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .conventions import Point, board_to_cpl, local_to_up, normalize_angle, rotate, side_mirror
@@ -149,6 +158,8 @@ class Tolerances:
     mirror_margin: float = 0.05  # how much better the mirrored fit must be to flag it
     snap_deg: float = 1.0
     min_spread: float = 0.01  # points closer than this don't determine an orientation
+    same_site: float = 0.01  # pads closer than this are one land when matching by position
+    pad_size_ratio: float = 1.5  # pads whose longer sides differ more than this aren't paired by position
     symmetry_tol: float = 0.05
     min_matched_fraction: float = 0.5
 
@@ -186,14 +197,30 @@ def normalize_pad_number(number: str) -> str:
     return (number or "").strip().upper()
 
 
-def group_pads(pads: Sequence[PadRecord]) -> Dict[str, List[Point]]:
-    """Group pad positions by normalized number, skipping unnumbered pads."""
-    groups: Dict[str, List[Point]] = {}
-    for pad in pads:
+def _group_indices(pads: Sequence[PadRecord], tol: float) -> Dict[str, List[int]]:
+    """Indices of *pads* grouped by normalized number, skipping unnumbered pads.
+
+    A pad within *tol* of one already in its group is the same land (KiCad
+    stacks copies of a pad for each copper side or for thermal vias) and is
+    left out, so stacked copies don't pull the group's centre towards them.
+    """
+    groups: Dict[str, List[int]] = {}
+    for i, pad in enumerate(pads):
         num = normalize_pad_number(pad.number)
-        if num:
-            groups.setdefault(num, []).append((pad.x, pad.y))
+        if not num:
+            continue
+        group = groups.setdefault(num, [])
+        if all(math.hypot(pad.x - pads[j].x, pad.y - pads[j].y) > tol for j in group):
+            group.append(i)
     return groups
+
+
+def group_pads(pads: Sequence[PadRecord]) -> Dict[str, List[Point]]:
+    """Group pad positions by normalized number, skipping unnumbered pads and stacked copies."""
+    return {
+        num: [(pads[i].x, pads[i].y) for i in group]
+        for num, group in _group_indices(pads, DEFAULT_TOLERANCES.same_site).items()
+    }
 
 
 def _centroid(points: Sequence[Point]) -> Point:
@@ -435,6 +462,30 @@ def _assign_nearest(q: Sequence[Point], p: Sequence[Point], deg: float, t: Point
     return assignment, math.sqrt(sq / len(q))
 
 
+def _sites(points: Sequence[Point], tol: float) -> List[List[int]]:
+    """Indices of *points* grouped by position: a point within *tol* of a site's first point joins that site."""
+    sites: List[List[int]] = []
+    for i, (x, y) in enumerate(points):
+        for site in sites:
+            sx, sy = points[site[0]]
+            if math.hypot(x - sx, y - sy) <= tol:
+                site.append(i)
+                break
+        else:
+            sites.append([i])
+    return sites
+
+
+def _site_numbers(pads: Sequence[PadRecord], site: Sequence[int]) -> List[str]:
+    """The number of each pad at a site, repeats included.
+
+    A JLC pad matched to the site is copied once per board pad, so a number
+    stacked twice on the board (a pad on each copper side) is twice on JLC's
+    side too and the two footprints' groups keep the same weight.
+    """
+    return [pads[i].number for i in site]
+
+
 def match_pads_by_position(
     board_pads: Sequence[PadRecord],
     jlc_pads: Sequence[PadRecord],
@@ -446,10 +497,13 @@ def match_pads_by_position(
 ) -> Optional[List[PadRecord]]:
     """JLC's pads renamed with the board's pad numbers, matched by position.
 
-    For footprints with the same pads but different numbering.  Pad centroids
-    are aligned and every 90° step (and KiCad's angle plus 90° steps) is tried;
-    each JLC pad takes the number of the nearest board pad.  Returns None when
-    the pad counts differ or nothing fits within ``tol.medium_rms``.
+    For footprints with the same pads but different numbering.  Pads at the
+    same position (within ``tol.same_site``) count as one site, so KiCad's
+    USB-C pads A1 and B12, stacked on one land, match JLC's single ``A1B12``
+    pad.  Site centroids are aligned and every 90° step (and KiCad's angle
+    plus 90° steps) is tried; each JLC site takes the numbers of the nearest
+    board site, one pad per board pad.  Returns None when the site counts differ
+    or nothing fits within ``tol.medium_rms``.
 
     A symmetric pattern can fit in more than one orientation with a different
     numbering, and then position alone cannot tell which way round the part
@@ -462,10 +516,15 @@ def match_pads_by_position(
     """
     board = [pad for pad in board_pads if normalize_pad_number(pad.number)]
     jlc = [pad for pad in jlc_pads if normalize_pad_number(pad.number)]
-    if len(board) != len(jlc) or len(board) < 3:
+    board_points = [board_to_cpl(pad.x, pad.y) for pad in board]
+    jlc_points = [side_mirror(local_to_up(pad.x, pad.y), side) for pad in jlc]
+    board_sites = _sites(board_points, tol.same_site)
+    jlc_sites = _sites(jlc_points, tol.same_site)
+    if len(board_sites) != len(jlc_sites) or len(board_sites) < 3:
         return None
-    p = [board_to_cpl(pad.x, pad.y) for pad in board]
-    q = [side_mirror(local_to_up(pad.x, pad.y), side) for pad in jlc]
+    p = [board_points[site[0]] for site in board_sites]
+    q = [jlc_points[site[0]] for site in jlc_sites]
+    board_numbers = [_site_numbers(board, site) for site in board_sites]
     pc, qc = _centroid(p), _centroid(q)
 
     angles = [k * 90.0 for k in range(4)]
@@ -475,23 +534,24 @@ def match_pads_by_position(
     for angle in sorted({round(a, 6) for a in angles}):
         found = _assign_nearest(q, p, angle, _translation(qc, pc, angle))
         if found is not None and found[1] <= tol.medium_rms:
-            numbers = tuple(normalize_pad_number(board[j].number) for j in found[0])
+            numbers = tuple(tuple(normalize_pad_number(n) for n in board_numbers[j]) for j in found[0])
             fits.append((found[1], numbers, found[0]))
     if not fits:
         return None
     if len({numbers for _, numbers, _ in fits}) > 1:
         if not break_ties:
             return None
-        jlc_numbers = [normalize_pad_number(pad.number) for pad in jlc]
-        board_index = {normalize_pad_number(pad.number): j for j, pad in enumerate(board)}
-        first = min(jlc_numbers, key=natural_key)
+        jlc_numbers = [{normalize_pad_number(n) for n in _site_numbers(jlc, site)} for site in jlc_sites]
+        board_index = {normalize_pad_number(n): j for j, site in enumerate(board_numbers) for n in site}
+        first = min((n for site in jlc_numbers for n in site), key=natural_key)
+        first_site = next(i for i, site in enumerate(jlc_numbers) if first in site)
 
         def preference(fit):
             rms, numbers, assignment = fit
-            kept = sum(1 for a, b in zip(jlc_numbers, numbers) if a == b)
+            kept = sum(1 for a, b in zip(jlc_numbers, numbers) if a & set(b))
             pin1 = 0.0
             if first in board_index:
-                lands = p[assignment[jlc_numbers.index(first)]]
+                lands = p[assignment[first_site]]
                 target = p[board_index[first]]
                 pin1 = math.hypot(lands[0] - target[0], lands[1] - target[1])
             if rank_by_fit:
@@ -499,9 +559,120 @@ def match_pads_by_position(
             return (-kept, round(pin1, 6), rms)
 
         fits.sort(key=preference)
-        return [PadRecord(number=board[j].number, x=pad.x, y=pad.y) for pad, j in zip(jlc, fits[0][2])]
-    _, _, assignment = min(fits)
-    return [PadRecord(number=board[j].number, x=pad.x, y=pad.y) for pad, j in zip(jlc, assignment)]
+        assignment = fits[0][2]
+    else:
+        assignment = min(fits)[2]
+    return [
+        PadRecord(number=number, x=jlc[site[0]].x, y=jlc[site[0]].y)
+        for site, j in zip(jlc_sites, assignment)
+        for number in board_numbers[j]
+    ]
+
+
+def _claim_nearest(a: Sequence[Point], b: Sequence[Point]) -> Tuple[List[int], List[int]]:
+    """Pair points of *a* and *b* one-to-one, closest pairs first.  Returns the unpaired indices of each."""
+    pairs = sorted((math.hypot(ax - bx, ay - by), i, j) for i, (ax, ay) in enumerate(a) for j, (bx, by) in enumerate(b))
+    used_a, used_b = set(), set()
+    for _, i, j in pairs:
+        if i not in used_a and j not in used_b:
+            used_a.add(i)
+            used_b.add(j)
+    return [i for i in range(len(a)) if i not in used_a], [j for j in range(len(b)) if j not in used_b]
+
+
+def _longest_side(pads: Sequence[PadRecord]) -> float:
+    """The longest side of the largest pad (0 when the sizes are unknown)."""
+    return max(max(pad.width, pad.height) for pad in pads)
+
+
+def pair_unmatched_by_position(
+    board_pads: Sequence[PadRecord],
+    jlc_pads: Sequence[PadRecord],
+    side: str,
+    tol: Tolerances = DEFAULT_TOLERANCES,
+) -> Optional[List[PadRecord]]:
+    """JLC's pads, with those whose numbers don't pair renamed after the board pads they land on.
+
+    For footprints that number most pads alike but a few differently.  KiCad
+    numbers a SOT-223's tab 2, like the pin it joins, where JLC numbers it 4;
+    KiCad stacks a USB-C connector's A1 and B12 on one land that JLC calls
+    ``A1B12``, and numbers the shield pads SH where JLC numbers them 1-4.
+
+    The groups with the same number and pad count on both footprints fix the
+    transform; they must fit within ``tol.medium_rms``.  The other pads are
+    numbers only one footprint has, and the extra pads of a group that has
+    more pads on one footprint (the pads of the group nearest the other
+    footprint's keep the number).  Each JLC site among them is paired with a
+    board site when each is the other's nearest, they are no further apart
+    than half the longer side of the smaller of the two pads (at least
+    ``tol.medium_rms``), and neither pad's longer side is more than
+    ``tol.pad_size_ratio`` times the other's (a DPAK's tab is not a SOT-223's).
+    The JLC pad then takes the board site's numbers.  The fit is solved again
+    with :func:`solve_placement`, which judges it as usual.  Returns None
+    when no pad is renamed.
+    """
+    board = [pad for pad in board_pads if normalize_pad_number(pad.number)]
+    jlc = [pad for pad in jlc_pads if normalize_pad_number(pad.number)]
+    board_groups = _group_indices(board, tol.same_site)
+    jlc_groups = _group_indices(jlc, tol.same_site)
+    common = sorted(set(board_groups) & set(jlc_groups))
+    anchors = [n for n in common if len(board_groups[n]) == len(jlc_groups[n])]
+    if len(anchors) < 2:
+        return None
+
+    p_all = [board_to_cpl(pad.x, pad.y) for pad in board]
+    q_all = [side_mirror(local_to_up(pad.x, pad.y), side) for pad in jlc]
+    q = [_centroid([q_all[i] for i in jlc_groups[n]]) for n in anchors]
+    p = [_centroid([p_all[i] for i in board_groups[n]]) for n in anchors]
+    deg, qc, pc, spread_q, spread_p = _fit_rotation(q, p)
+    if min(spread_q, spread_p) < tol.min_spread * tol.min_spread:
+        return None
+    t = _translation(qc, pc, deg)
+    if _residuals(q, p, deg, t)[0] > tol.medium_rms:
+        return None
+    placed = []
+    for point in q_all:
+        rx, ry = rotate(point, deg)
+        placed.append((rx + t[0], ry + t[1]))
+
+    board_left = [i for n, group in board_groups.items() if n not in jlc_groups for i in group]
+    jlc_left = [i for n, group in jlc_groups.items() if n not in board_groups for i in group]
+    for n in common:
+        b, j = board_groups[n], jlc_groups[n]
+        if len(b) != len(j):
+            b_extra, j_extra = _claim_nearest([p_all[i] for i in b], [placed[i] for i in j])
+            board_left += [b[i] for i in b_extra]
+            jlc_left += [j[i] for i in j_extra]
+    if not board_left or not jlc_left:
+        return None
+
+    board_sites = [[board_left[i] for i in site] for site in _sites([p_all[i] for i in board_left], tol.same_site)]
+    jlc_sites = [[jlc_left[i] for i in site] for site in _sites([placed[i] for i in jlc_left], tol.same_site)]
+
+    def nearest(point: Point, points: Sequence[Point]) -> Tuple[int, float]:
+        dists = [math.hypot(point[0] - x, point[1] - y) for x, y in points]
+        k = min(range(len(dists)), key=dists.__getitem__)
+        return k, dists[k]
+
+    b_points = [p_all[site[0]] for site in board_sites]
+    j_points = [placed[site[0]] for site in jlc_sites]
+    renamed: Dict[int, List[str]] = {}
+    for js, site in enumerate(jlc_sites):
+        bs, dist = nearest(j_points[js], b_points)
+        if nearest(b_points[bs], j_points)[0] != js:
+            continue
+        sizes = sorted((_longest_side([board[i] for i in board_sites[bs]]), _longest_side([jlc[i] for i in site])))
+        if sizes[0] > 0 and sizes[1] > tol.pad_size_ratio * sizes[0]:
+            continue
+        if dist <= max(sizes[0] / 2, tol.medium_rms):
+            renamed[site[0]] = _site_numbers(board, board_sites[bs])
+            renamed.update((i, []) for i in site[1:])
+    if not renamed:
+        return None
+    out = [pad for pad in jlc_pads if not normalize_pad_number(pad.number)]
+    for i, pad in enumerate(jlc):
+        out.extend([replace(pad, number=n) for n in renamed[i]] if i in renamed else [pad])
+    return out
 
 
 def centred_origin(board_pads: Sequence[PadRecord], jlc_pads: Sequence[PadRecord], side: str, angle: float) -> Point:

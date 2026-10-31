@@ -2,6 +2,7 @@
 
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ from kicad_jlcimport.kicad.footprint_writer import write_footprint
 from kicad_jlcimport.production import conventions as cv
 from kicad_jlcimport.production.cache import KeyedCache
 from kicad_jlcimport.production.jlc_footprints import JlcFootprint, jlc_footprint_from_data
-from kicad_jlcimport.production.kicad_pcb import parse_sexpr, read_board_text
+from kicad_jlcimport.production.kicad_pcb import footprint_from_node, parse_sexpr, read_board_text
 from kicad_jlcimport.production.models import FootprintRecord, PadRecord
 from kicad_jlcimport.production.placement import ESTIMATED, KICAD, SOLVED, compute_placement, is_isolated_array
 from kicad_jlcimport.production.report import INFO, WARNING, run_check
@@ -21,6 +22,7 @@ from kicad_jlcimport.production.solver import (
     HIGH,
     HIGH_RESIDUAL,
     LOW,
+    MATCHED_BY_POSITION,
     MEDIUM,
     MIRRORED,
     MIRRORED_ARRAY,
@@ -35,6 +37,7 @@ from kicad_jlcimport.production.solver import (
     describe_flags,
     group_pads,
     match_pads_by_position,
+    pair_unmatched_by_position,
     solve_placement,
 )
 
@@ -615,3 +618,195 @@ class TestRepeatedPadNumbers:
         jlc = [("1", -3.0, -1.85), ("2", 3.0, -1.85), ("3", -3.0, 1.85), ("4", 3.0, 1.85)]
         pl = self.place(kicad, jlc)
         assert pl.rotation in (0.0, 180.0)
+
+
+# ---------------------------------------------------------------------------
+# KiCad library footprints numbered differently from JLC's
+# ---------------------------------------------------------------------------
+
+
+def kicad_library_footprint(name, x, y, theta, side=cv.TOP, ref="U1", lcsc="C1"):
+    """A footprint from KiCad's library (testdata/kicad_footprints) placed on a board, as KiCad saves it.
+
+    On the bottom side KiCad stores the pads with local Y mirrored.
+    """
+    node = parse_sexpr((TESTDATA / "kicad_footprints" / f"{name}.kicad_mod").read_text())
+    node = [c for c in node if not (isinstance(c, list) and c and c[0] in ("at", "layer"))]
+    if side == cv.BOTTOM:
+        for pad in (c for c in node if isinstance(c, list) and c and c[0] == "pad"):
+            at = next(c for c in pad if isinstance(c, list) and c[0] == "at")
+            at[2] = str(-float(at[2]))
+    node += [
+        ["at", str(x), str(y), str(theta)],
+        ["layer", "B.Cu" if side == cv.BOTTOM else "F.Cu"],
+        ["property", "Reference", ref],
+        ["property", "LCSC", lcsc],
+    ]
+    return footprint_from_node(node)
+
+
+def expected_cpl(x, y, theta, side, local):
+    """CPL position of a point at *local* (footprint frame, Y down) of a footprint placed at (x, y, theta)."""
+    lx, ly = local[0], (-local[1] if side == cv.BOTTOM else local[1])
+    rad = math.radians(theta)
+    return cv.board_to_cpl(x + lx * math.cos(rad) + ly * math.sin(rad), y - lx * math.sin(rad) + ly * math.cos(rad))
+
+
+POSES = [
+    (103.65, 115.0, -90.0, cv.TOP),  # J1 / U4 on the usb_uart test board, checked in JLC's placement preview
+    (10.0, 20.0, 0.0, cv.TOP),
+    (10.0, 20.0, 90.0, cv.TOP),
+    (10.0, 20.0, 180.0, cv.TOP),
+    (10.0, 20.0, 30.0, cv.TOP),
+    (10.0, 20.0, 0.0, cv.BOTTOM),
+    (10.0, 20.0, 90.0, cv.BOTTOM),
+]
+
+USB_C = "USB_C_Receptacle_HRO_TYPE-C-31-M-12"
+SOT_223 = "SOT-223-3_TabPin2"
+
+
+class TestStackedPads:
+    """KiCad footprints with several pads on one land.
+
+    KiCad's HRO TYPE-C-31-M-12 stacks A1/B12, A12/B1, A4/B9 and A9/B4 on one land each and numbers the shield
+    pads SH; JLC's C165948 draws each stacked pair as one pad (A1B12, B1A12, ...) and numbers the shield 1-4.
+    """
+
+    @pytest.mark.parametrize("x,y,theta,side", POSES)
+    def test_solves_with_medium_confidence(self, x, y, theta, side):
+        fp = kicad_library_footprint(USB_C, x, y, theta, side, ref="J1", lcsc="C165948")
+        pl = compute_placement(fp, load_jlc("C165948"))
+        assert pl.source == SOLVED and pl.confidence == MEDIUM
+        assert MATCHED_BY_POSITION in pl.fit.flags
+        assert pl.fit.rms <= 0.05
+        assert pl.rotation == pytest.approx(cv.cpl_rotation(theta, side))
+        # JLC's origin sits 1.56 mm behind KiCad's, towards the shield.
+        assert (pl.x, pl.y) == pytest.approx(expected_cpl(x, y, theta, side, (0.0, -1.562)), abs=0.005)
+
+    def test_stacked_pads_take_both_numbers(self):
+        fp = kicad_library_footprint(USB_C, 0.0, 0.0, 0.0)
+        jlc = load_jlc("C165948")
+        renumbered = match_pads_by_position(fp.pads, jlc.pads, cv.TOP, kicad_orientation=0.0)
+        assert renumbered is not None
+        at = {p.number: (p.x, p.y) for p in renumbered}
+        a1b12 = next(p for p in jlc.pads if p.number == "A1B12")
+        assert at["A1"] == at["B12"] == (a1b12.x, a1b12.y)
+        assert sorted(p.number for p in renumbered if p.number == "SH") == ["SH"] * 4
+        assert {p.number for p in renumbered} == {p.number for p in fp.pads if p.number}
+
+    def test_unmatched_pairing_finds_the_same_numbers(self):
+        fp = kicad_library_footprint(USB_C, 0.0, 0.0, 0.0)
+        paired = pair_unmatched_by_position(fp.pads, load_jlc("C165948").pads, cv.TOP)
+        assert sorted(p.number for p in paired) == sorted(p.number for p in fp.pads if p.number)
+
+    SMA = "SMA_Molex_73251-2120_EdgeMount_Horizontal"
+
+    def sma_lands(self):
+        """The SMA's pads with each land drawn once: KiCad has pad 2 on both copper sides at two of its lands."""
+        local, seen = [], set()
+        for pad in kicad_library_footprint(self.SMA, 0.0, 0.0, 0.0).pads:
+            if (pad.x, pad.y) not in seen:
+                seen.add((pad.x, pad.y))
+                local.append(pad)
+        return local
+
+    def test_stacked_copies_count_once(self):
+        board = kicad_library_footprint(self.SMA, 0.0, 0.0, 0.0).pads
+        assert len(group_pads(board)["2"]) == 4 < sum(1 for p in board if p.number == "2")
+
+    @pytest.mark.parametrize("x,y,theta,side", POSES)
+    def test_stacked_copies_dont_pull_the_fit(self, x, y, theta, side):
+        # JLC draws each land once under the same numbers: the stacked copies don't move pad 2's centre.
+        jlc = JlcFootprint("C1", pads=self.sma_lands())
+        pl = compute_placement(kicad_library_footprint(self.SMA, x, y, theta, side), jlc)
+        assert pl.source == SOLVED and pl.confidence == HIGH
+        assert GROUP_SIZE_MISMATCH not in pl.fit.flags
+        assert pl.rotation == pytest.approx(cv.cpl_rotation(theta, side))
+        assert (pl.x, pl.y) == pytest.approx(expected_cpl(x, y, theta, side, (0.0, 0.0)), abs=1e-6)
+
+    @pytest.mark.parametrize("x,y,theta,side", POSES)
+    def test_stacked_copies_dont_pull_a_position_match(self, x, y, theta, side):
+        # JLC numbers the lands 1-5: matched by position, each JLC land takes one pad per board pad.
+        jlc = JlcFootprint("C1", pads=[replace(pad, number=str(i)) for i, pad in enumerate(self.sma_lands(), 1)])
+        pl = compute_placement(kicad_library_footprint(self.SMA, x, y, theta, side), jlc)
+        assert pl.source == SOLVED and pl.confidence == MEDIUM
+        assert pl.fit.rms == pytest.approx(0.0, abs=1e-6)
+        assert pl.rotation == pytest.approx(cv.cpl_rotation(theta, side))
+        assert (pl.x, pl.y) == pytest.approx(expected_cpl(x, y, theta, side, (0.0, 0.0)), abs=1e-6)
+
+    def test_symmetric_stacked_pattern_is_still_ambiguous(self):
+        # Two pads stacked at each corner of a square: one site each, and a square fits four ways round.
+        corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
+        board = [PadRecord(f"{n}{k}", x, y) for n, (x, y) in enumerate(corners, 1) for k in ("a", "b")]
+        jlc = [PadRecord(c, x, y) for c, (x, y) in zip("wxyz", corners)]
+        assert match_pads_by_position(board, jlc, cv.TOP) is None
+
+
+class TestTabNumberedLikeAPin:
+    """KiCad's SOT-223-3_TabPin2 numbers the tab 2, like the output pin; JLC numbers it 4."""
+
+    # JLC's origin in KiCad's footprint frame: both land patterns are centred on the body, but JLC's pins
+    # sit nearer the tab (C16398 by 0.63 mm, C347220 by 0.1 mm), so the fit lands slightly towards the pins.
+    @pytest.mark.parametrize("lcsc,origin_x", [("C16398", -0.210), ("C347220", -0.034)])
+    @pytest.mark.parametrize("x,y,theta,side", POSES)
+    def test_solves_with_medium_confidence(self, lcsc, origin_x, x, y, theta, side):
+        fp = kicad_library_footprint(SOT_223, x, y, theta, side, ref="U4", lcsc=lcsc)
+        pl = compute_placement(fp, load_jlc(lcsc))
+        assert pl.source == SOLVED and pl.confidence == MEDIUM
+        assert HIGH_RESIDUAL not in pl.fit.flags and GROUP_SIZE_MISMATCH not in pl.fit.flags
+        assert not any("wrong package" in note for note in pl.notes)
+        assert pl.rotation == pytest.approx(cv.cpl_rotation(theta + 180.0, side))
+        assert (pl.x, pl.y) == pytest.approx(expected_cpl(x, y, theta, side, (origin_x, 0.0)), abs=0.005)
+
+    def test_jlc_tab_takes_the_tab_pin_number(self):
+        fp = kicad_library_footprint(SOT_223, 0.0, 0.0, 0.0)
+        jlc = load_jlc("C16398")
+        paired = pair_unmatched_by_position(fp.pads, jlc.pads, cv.TOP)
+        tab = next(p for p in jlc.pads if p.number == "4")
+        assert [(p.x, p.y) for p in paired if p.number == "2"] == [
+            next((p.x, p.y) for p in jlc.pads if p.number == "2"),
+            (tab.x, tab.y),
+        ]
+        assert sorted(p.number for p in paired) == ["1", "2", "2", "3"]
+
+    # A part in another package on KiCad's SOT-223 land: SOT-89 (pitch 1.5 mm), and TO-252 (same pin
+    # pitch, but the tab 0.55 mm further out and JLC numbers it 2, with no middle pin).
+    @pytest.mark.parametrize("lcsc", ["C347256", "C73181"])
+    def test_wrong_package_is_still_flagged(self, lcsc):
+        pl = compute_placement(kicad_library_footprint(SOT_223, 10.0, 20.0, 0.0, lcsc=lcsc), load_jlc(lcsc))
+        assert pl.source == ESTIMATED and pl.confidence == LOW
+        assert HIGH_RESIDUAL in pl.fit.flags
+
+    def test_sot223_part_on_a_dpak_land_is_flagged(self):
+        # KiCad's TO-252-3_TabPin2 has SOT-223's pin pitch and pin-to-tab distance, but a 6.4 x 5.8 mm tab
+        # against JLC's 2.47 x 3.6 mm one: different pads, so the tab isn't paired.
+        fp = kicad_library_footprint("TO-252-3_TabPin2", 10.0, 20.0, 0.0, lcsc="C16398")
+        jlc = load_jlc("C16398")
+        assert pair_unmatched_by_position(fp.pads, jlc.pads, cv.TOP) is None
+        pl = compute_placement(fp, jlc)
+        assert pl.source == ESTIMATED and pl.confidence == LOW
+        assert HIGH_RESIDUAL in pl.fit.flags
+
+    def test_swapped_pins_are_not_paired(self):
+        # Pins 1 and 3 swapped (numbered from the other end): pins 1 and 3 then turn the tab onto the pins' side.
+        jlc = load_jlc("C16398")
+        swap = {"1": "3", "3": "1"}
+        swapped = [replace(p, number=swap.get(p.number, p.number)) for p in jlc.pads]
+        fp = kicad_library_footprint(SOT_223, 10.0, 20.0, 0.0)
+        assert pair_unmatched_by_position(fp.pads, swapped, cv.TOP) is None
+        pl = compute_placement(fp, JlcFootprint("C16398", pads=swapped))
+        assert pl.source != SOLVED and pl.confidence == LOW
+
+    def test_tab_beyond_the_pad_is_not_paired(self):
+        # JLC's tab moved 2.5 mm further out: no longer on KiCad's tab, so it keeps its own number.
+        jlc = [replace(p, x=p.x - 2.5) if p.number == "4" else p for p in load_jlc("C16398").pads]
+        fp = kicad_library_footprint(SOT_223, 10.0, 20.0, 0.0)
+        assert pair_unmatched_by_position(fp.pads, jlc, cv.TOP) is None
+        assert compute_placement(fp, JlcFootprint("C16398", pads=jlc)).confidence == LOW
+
+    def test_needs_two_groups_that_pair_by_number(self):
+        # A tact switch numbered 1,1,2,2 against JLC's 1-4: no group pairs one-to-one, so nothing to anchor on.
+        board = [PadRecord(n, x, y) for n, x, y in (("1", -3, -2), ("1", 3, -2), ("2", -3, 2), ("2", 3, 2))]
+        jlc = [PadRecord(n, x, y) for n, x, y in (("1", -3, -2), ("2", 3, -2), ("3", -3, 2), ("4", 3, 2))]
+        assert pair_unmatched_by_position(board, jlc, cv.TOP) is None
