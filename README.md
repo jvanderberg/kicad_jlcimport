@@ -2,10 +2,10 @@
 
 A KiCad plugin that imports LCSC/JLCPCB parts (symbol, footprint and 3D model) into your project or global library, and writes the files for a JLCPCB assembly order.
 
-- Search parts with stock and Basic/Extended filters, and import them in one step.
+- Search parts with stock and Basic/Extended filters, on JLCPCB's global catalog or China's SZLCSC, and import them in one step.
 - Use a footprint from your KiCad libraries instead of JLC's, when one has the same pads ([details](docs/usage.md#using-a-kicad-library-footprint-instead-of-jlcs)).
 - Write the Gerbers, BOM and placement (CPL) file for JLCPCB assembly, with stock checked and rotations solved for each part.
-- Works as a KiCad plugin, a CLI, a desktop GUI and a terminal UI, with KiCad 8, 9 and 10.
+- Works as a KiCad plugin, a CLI and a desktop GUI, with KiCad 8, 9 and 10.
 
 ![Search and details](images/search_results.png)
 
@@ -34,19 +34,18 @@ On the **Production Files** tab, set the number of boards and click **Check JLCP
 
 Before ordering, check the parts the report warns about in JLCPCB's placement preview. To correct a part for good, add a `JLCPCB Rotation Offset` or `JLCPCB Position Offset` field to its footprint. `jlcimport-cli production` does the same from a saved board, with `--json` for scripts. See the [production export guide](docs/production-export.md).
 
-## CLI, GUI and TUI
+## CLI and GUI
 
 ```bash
 jlcimport-cli search "100nF 0402" -t basic
 jlcimport-cli import C427602 -p /path/to/project
 jlcimport-cli production board.kicad_pcb -n 10
 jlcimport-gui -p /path/to/project
-jlcimport-tui --kicad-version 9
 ```
 
-The plugin needs no extra Python packages. The GUI needs `wxPython` (`pip install -e '.[gui]'`); the TUI needs Python 3.10+ and `textual` (`pip install -e '.[tui]'`). For development, run `source install.sh` (macOS/Linux) or `. .\install.ps1` (Windows) to set up the environment, and link `src/kicad_jlcimport` into KiCad's plugin directory.
+The plugin needs no extra Python packages. The GUI needs `wxPython` (`pip install -e '.[gui]'`). For development, run `source install.sh` (macOS/Linux) or `. .\install.ps1` (Windows) to set up the environment, and link `src/kicad_jlcimport` into KiCad's plugin directory.
 
-Settings (mainly the library name) are kept in `jlcimport.json` in KiCad's config directory and shared by the plugin, CLI and TUI.
+Settings (the library name, project or global destination, a custom global library folder and the search region) are kept in `jlcimport.json` in KiCad's config directory and shared by the plugin, GUI and CLI ([locations](docs/usage.md#configuration-file)).
 
 On Windows with KiCad 9, symbol preview can fail if `wx.svg._nanosvg` is missing; see [fixes/README.md](fixes/README.md).
 

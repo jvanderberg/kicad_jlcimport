@@ -22,8 +22,6 @@ Files go to `<project>/production/` unless you choose another folder. A relative
    Rows with errors are shown in red and rows with warnings in yellow. If a part's stock lookup fails (network error, or an error answer from JLCPCB) it counts as an error, because nothing about it was checked. If JLC's footprint can't be fetched, the part keeps KiCad's own position and rotation, with a warning. Its buttons are **Cancel** (back to the summary) and **Generate**.
 5. **Generate** writes the Gerber zip, BOM, CPL and report, then shows where they went, with an **Open folder** button. If the board has changed since the check, it writes nothing and sends you back to the start screen, so the placement file always matches the Gerbers. The Gerbers and drill files are plotted first, into a temporary folder, and only moved into place once both have succeeded. If either fails, nothing is written: no new BOM or CPL, and no new Gerbers next to old drill files.
 
-`-o` takes the same forms as the tab's output folder (`${KIPRJMOD}`, environment variables, `~`), except that a relative folder is relative to the current directory, as usual on a command line. Quote `${KIPRJMOD}` so the shell leaves it alone.
-
 The tab always works on the board that is open now, so File > Revert, Open or Save As while the dialog is open is fine; the default output folder and file names follow the board.
 
 **Refill zones before plotting** (on by default) refills every zone on the open board, the same as pressing B in the editor, so the Gerbers match the copper. KiCad's Python API has no undo for this, so save the board afterwards if you want to keep the new fills.

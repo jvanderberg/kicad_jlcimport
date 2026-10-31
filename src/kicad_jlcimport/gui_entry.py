@@ -22,6 +22,8 @@ if _parent_dir not in sys.path:
 
 
 def main():
+    from kicad_jlcimport.kicad.version import DEFAULT_KICAD_VERSION, SUPPORTED_VERSIONS
+
     parser = argparse.ArgumentParser(
         description="JLCImport - Import JLCPCB/LCSC components into KiCad libraries",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -51,9 +53,9 @@ Examples:
     parser.add_argument(
         "--kicad-version",
         type=int,
-        choices=[8, 9, 10],
+        choices=sorted(SUPPORTED_VERSIONS),
         default=None,
-        help="Target KiCad version (default: 9)",
+        help=f"Target KiCad version (default: {DEFAULT_KICAD_VERSION})",
     )
     parser.add_argument(
         "--global-lib-dir",

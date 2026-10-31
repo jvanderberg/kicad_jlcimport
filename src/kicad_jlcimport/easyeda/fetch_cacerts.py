@@ -18,7 +18,7 @@ import subprocess
 import sys
 import urllib.request
 
-# Every host the plugin connects to (see api.py and _ALLOWED_IMAGE_HOSTS).
+# Every host the plugin connects to (see api.py, _ALLOWED_IMAGE_HOSTS and _ALLOWED_DIRECT_IMAGE_HOSTS).
 _HOSTS = [
     "easyeda.com",
     "modules.easyeda.com",
@@ -27,6 +27,8 @@ _HOSTS = [
     "lcsc.com",
     "www.lcsc.com",
     "assets.lcsc.com",
+    "so.szlcsc.com",
+    "alimg.szlcsc.com",
 ]
 
 _OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cacerts.pem")

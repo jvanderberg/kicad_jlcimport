@@ -18,10 +18,13 @@ system keychain or system certificate store.
 | `lcsc.com` | Product page fetch (images) | USERTrust RSA |
 | `www.lcsc.com` | Product page fetch (images) | USERTrust RSA |
 | `assets.lcsc.com` | Product image downloads | USERTrust RSA |
+| `so.szlcsc.com` | China (SZLCSC) parts search | USERTrust RSA |
+| `alimg.szlcsc.com` | China (SZLCSC) product images | USERTrust RSA |
 
 The host list is defined in `fetch_cacerts.py` (`_HOSTS`). The image hosts
-come from `api.py` (`_ALLOWED_IMAGE_HOSTS` and the `assets.lcsc.com` pattern
-in `fetch_product_image()`).
+come from `api.py` (`_ALLOWED_IMAGE_HOSTS`, `_ALLOWED_DIRECT_IMAGE_HOSTS` and
+the `assets.lcsc.com` pattern in `fetch_product_image()`). Both files live in
+`src/kicad_jlcimport/easyeda/`.
 
 ## When to regenerate
 
@@ -32,7 +35,7 @@ Regenerate when:
 
 Current root CA expiry dates can be checked with:
 ```bash
-openssl crl2pkcs7 -nocrl -certfile cacerts.pem \
+openssl crl2pkcs7 -nocrl -certfile src/kicad_jlcimport/easyeda/cacerts.pem \
   | openssl pkcs7 -print_certs \
   | openssl x509 -noout -subject -enddate
 ```
@@ -40,7 +43,7 @@ openssl crl2pkcs7 -nocrl -certfile cacerts.pem \
 ## How to regenerate
 
 ```bash
-python -m kicad_jlcimport.fetch_cacerts
+python -m kicad_jlcimport.easyeda.fetch_cacerts
 ```
 
 This connects to every endpoint, retrieves the server's certificate chain,
@@ -60,8 +63,8 @@ After regenerating, test with KiCad's Python to confirm:
 /path/to/kicad/python3 -c "
 import ssl, urllib.request
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-ctx.load_verify_locations(cafile='cacerts.pem')
-for host in ['jlcpcb.com', 'easyeda.com', 'lcsc.com', 'assets.lcsc.com']:
+ctx.load_verify_locations(cafile='src/kicad_jlcimport/easyeda/cacerts.pem')
+for host in ['jlcpcb.com', 'easyeda.com', 'lcsc.com', 'assets.lcsc.com', 'so.szlcsc.com']:
     req = urllib.request.Request(f'https://{host}', headers={'User-Agent': 'test'})
     urllib.request.urlopen(req, timeout=10, context=ctx)
     print(f'{host}: OK')
@@ -76,14 +79,17 @@ for host in ['jlcpcb.com', 'easyeda.com', 'lcsc.com', 'assets.lcsc.com']:
 2. **certifi** package — fallback if cacerts.pem fails to load
 3. **System certificate store** — fallback via `ssl.create_default_context()`
 
-If none work, HTTPS requests proceed unverified with a warning.
+If none work, HTTPS requests proceed unverified with a warning. If Python's
+`ssl` module can't be loaded at all (an OpenSSL mismatch in a Linux AppImage,
+say), requests go through the system `curl` instead.
 
 If a verified context exists but the server's certificate fails validation
-(e.g. expired CA, MITM proxy), `SSLCertError` is raised. Each UI handles
-this differently — see `api.py` for details.
+(e.g. expired CA, MITM proxy), `SSLCertError` is raised. The plugin dialog
+asks whether to continue without verification; the CLI and standalone GUI
+take `--insecure`.
 
 ## Why not just use certifi or the system store?
 
 KiCad's bundled Python (OpenSSL 1.1.1n on macOS) cannot access the macOS
 keychain, and certifi is not guaranteed to be installed. A small bundled PEM
-file with only the 2-3 root CAs we actually need is the most reliable option.
+file with only the two root CAs we actually need is the most reliable option.
