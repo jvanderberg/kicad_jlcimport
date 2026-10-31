@@ -33,17 +33,19 @@ Restart KiCad after install.
 
 Open `PCB Editor > Tools > External Plugins > JLCImport`.
 
-1. Search by keyword or LCSC part number.
+1. Search by keyword or LCSC part number. **Region** picks the catalog: Global (JLCPCB) or China (SZLCSC).
 2. Filter results by part type and stock.
 3. Choose destination: project library or global library.
 4. Set library name if needed.
-5. Import symbol, footprint, and 3D model.
+5. Click **Import**. The metadata dialog lets you edit the description and keywords, rename the footprint and 3D model, and use a KiCad library footprint instead of JLC's (see below). It then imports the symbol, footprint, and 3D model.
 
 If `sym-lib-table` or `fp-lib-table` is created for the first time, reopen the project.
 
+Opened from the PCB Editor, the dialog also has a **Production Files** tab for JLCPCB assembly orders; see [production export](production-export.md).
+
 ### Using a KiCad library footprint instead of JLC's
 
-Before an import, the metadata dialog (plugin, GUI and TUI) can offer a footprint from your KiCad libraries in place of the one converted from JLC's EasyEDA footprint. JLCPCB places parts by its own footprint, so a footprint is only offered when it has the same land pattern:
+Before an import, the metadata dialog (plugin and GUI) can offer a footprint from your KiCad libraries in place of the one converted from JLC's EasyEDA footprint. JLCPCB places parts by its own footprint, so a footprint is only offered when it has the same land pattern:
 
 1. **Name.** Footprints whose names share a package token with JLC's package (`SOT-363`, `QFN-24`, `SMA`, `0603`, ...) or a part number (`B4B-PH-K`) are considered, unless the name states a different pitch, body size or exposed pad. A pitch or size on its own (`P=2.54mm`) doesn't count as a part number. For two-pad parts only the kind of footprint the symbol's designator implies is considered: `R_` for `R`, `C_` / `CP_` for `C`, `LED_` for `LED`, `D_` for `D`, and so on. Two-pad parts with any other designator get no suggestion.
 2. **Pads.** The footprint must have the same pad numbers as JLC's (pads sharing a number count once) and the same through-hole pads, because the symbol's pins connect by number.
@@ -67,7 +69,7 @@ These scripts create or activate the local virtual environment and install proje
 
 ## CLI Reference
 
-`jlcimport-cli` has three main commands: `search`, `import` and `production`.
+`jlcimport-cli` has three main commands: `search`, `import` and `production` (short forms `s`, `i` and `p`).
 
 ### CLI Quick Index
 
@@ -98,6 +100,9 @@ jlcimport-cli search "RP2350" --min-stock 0
 
 # Export results to CSV
 jlcimport-cli search "RP2350" --csv > parts.csv
+
+# Search China's SZLCSC catalog instead of JLCPCB's
+jlcimport-cli search "ESP32" --region cn
 ```
 
 Useful search flags:
@@ -106,6 +111,7 @@ Useful search flags:
 - `-n, --count N` number of results (default `10`)
 - `--min-stock N` minimum stock (default `1`)
 - `--csv` machine-readable output
+- `--region global|cn` catalog to search: JLCPCB (global) or SZLCSC (China). Defaults to the region last chosen in the plugin or GUI, else `global`.
 
 ### Import Examples
 
@@ -139,18 +145,20 @@ jlcimport-cli import C427602 --global-lib-dir /path/to/libs
 
 Useful import flags:
 
-- `--lib-name MyParts` to use a custom library name.
+- `--lib-name MyParts` to use a custom library name (default: the name in `jlcimport.json`, else `JLCImport`).
 - `--show footprint|symbol|both` to print generated text.
 - `-o, --output DIR` export-only mode.
 - `-p, --project DIR` import into project libraries.
 - `--global` import into global 3rd-party libraries.
 - `--global-lib-dir DIR` one-run override of global path.
 - `--overwrite` replace existing entries.
-- `--kicad-version 8|9|10` target version-specific formats.
+- `--kicad-version 8|9|10` target version-specific formats (default `10`).
+
+Export-only mode (`-o`) writes `<name>.kicad_mod`, `<name>.kicad_sym` and a `3dmodels/` folder with the `.step` and `.wrl`, and touches no library tables. Project and global imports write into `<lib_name>.kicad_sym`, `<lib_name>.pretty/` and `<lib_name>.3dshapes/` (see [library structure](architecture.md#library-structure)).
 
 ### Network / TLS Example
 
-Use `--insecure` only when TLS interception on your network breaks certificate checks:
+Use `--insecure` only when TLS interception on your network breaks certificate checks. It goes before the command, and `jlcimport-gui` accepts it too:
 
 ```bash
 jlcimport-cli --insecure search "STM32"
@@ -172,25 +180,10 @@ jlcimport-gui
 jlcimport-gui -p /path/to/project
 jlcimport-gui --global
 jlcimport-gui --kicad-version 9
+jlcimport-gui --global-lib-dir /path/to/libs
 ```
 
-## Standalone TUI
-
-Install TUI dependencies:
-
-```bash
-pip install -e '.[tui]'
-```
-
-Run:
-
-```bash
-jlcimport-tui
-jlcimport-tui -p /path/to/project
-jlcimport-tui --kicad-version 9
-```
-
-TUI requires Python 3.10+.
+Without `-p` or `--global`, it asks for a project folder; Cancel uses only the global library. `--kicad-version` defaults to `10`.
 
 ## macOS Gatekeeper For Release Binaries
 
@@ -198,13 +191,12 @@ If macOS blocks downloaded binaries from Releases:
 
 ```bash
 xattr -cr jlcimport-cli/
-xattr -cr jlcimport-tui/
 xattr -cr jlcimport-gui/
 ```
 
 ## Configuration File
 
-Settings are stored in `jlcimport.json`:
+Settings are stored in `jlcimport.json`, shared by the plugin, GUI and CLI. It holds the library name (`lib_name`), whether imports go to the global library (`use_global`), a custom global library folder (`global_lib_dir`, empty for KiCad's default `3rdparty` folder) and the search region (`region`, `global` or `cn`).
 
 | OS | Path |
 | --- | --- |

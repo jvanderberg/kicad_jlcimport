@@ -17,9 +17,13 @@ python3 tools/compare_part.py <LCSC_ID> [<LCSC_ID> ...]
 ```
 
 Options:
+- `--regression` — compare every part in `tools/regression_parts.txt` (see below)
 - `--no-open` — generate the HTML without opening it in a browser
+- `--output-dir DIR` — write the HTML to `DIR` instead of a temp directory
+- `--workers N` — parts to process in parallel (default 20)
+- `--verbose` — show detailed progress for each part
 
-The script writes an HTML comparison page to a temp directory and opens it in your default browser.
+The script writes an HTML comparison page to a temp directory (or `--output-dir`) and opens it in your default browser.
 
 ### What to check
 

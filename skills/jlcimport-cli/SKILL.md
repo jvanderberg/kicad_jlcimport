@@ -12,7 +12,7 @@ The `jlcimport-cli` tool fetches component data from the JLCPCB and LCSC catalog
 ### 1. Sourcing `install.sh` (Local Development Workflow)
 The repository provides [`install.sh`](../../install.sh) to automatically create the project virtual environment (`.venv`), install dependencies in editable mode, and expose the `jlcimport-cli` command.
 
-`install.sh` must be **sourced** (not executed directly). On the first run, it creates `.venv`, activates it, and installs all dependencies (`pip install -e '.[dev,gui,tui]'`). On subsequent runs, it activates the existing `.venv`:
+`install.sh` must be **sourced** (not executed directly). On the first run, it creates `.venv`, activates it, and installs the package in editable mode with its dev and GUI dependencies. On subsequent runs, it activates the existing `.venv`:
 
 ```bash
 # Sourcing within the repository:
@@ -68,12 +68,12 @@ jlcimport-cli import C318884 -p /path/to/kicad/project --overwrite
 **What this creates inside the project:**
 - `<project>/JLCImport.kicad_sym` — Schematic symbol library
 - `<project>/JLCImport.pretty/<MPN>.kicad_mod` — PCB footprint file
-- `<project>/3dmodels/<MPN>.step` (and `.wrl`) — 3D CAD models
+- `<project>/JLCImport.3dshapes/<MPN>.step` and `.wrl` — 3D models (the footprint references the `.wrl`)
 - Updates `<project>/sym-lib-table` and `<project>/fp-lib-table` so KiCad instantly sees `JLCImport:<MPN>`
 
 ### 2. Export to a Standalone Directory (No Project Registration)
 
-If you just want the raw `.kicad_sym`, `.kicad_mod`, and 3D files saved to a folder:
+If you just want the raw `.kicad_sym`, `.kicad_mod`, and 3D files saved to a folder (`<MPN>.kicad_mod`, `<MPN>.kicad_sym`, and `3dmodels/<MPN>.step` / `.wrl`):
 
 ```bash
 jlcimport-cli import <LCSC_ID> -o ./output_folder
@@ -98,6 +98,9 @@ jlcimport-cli search "RP2350" -n 20 --min-stock 100
 
 # Export search results to CSV
 jlcimport-cli search "STM32F4" --csv > parts.csv
+
+# Search China's SZLCSC catalog instead of JLCPCB's
+jlcimport-cli search "ESP32" --region cn
 ```
 
 ### 4. Inspect / Dry-Run Without Saving
@@ -165,10 +168,12 @@ After importing a component into a KiCad project, verify the files and table reg
 
 4. **Verify 3D Model (if available)**:
    ```bash
-   ls <project>/3dmodels/<MPN>.step
+   ls <project>/JLCImport.3dshapes/<MPN>.step <project>/JLCImport.3dshapes/<MPN>.wrl
    ```
 
 ## Command Reference
+
+`--insecure` is a top-level option and goes before the command: `jlcimport-cli --insecure import C318884 -p ...`. The commands have short forms: `s` (search), `i` (import) and `p` (production).
 
 ### `jlcimport-cli import`
 
@@ -187,10 +192,10 @@ usage: jlcimport-cli import [-h] [--show {footprint,symbol,both}]
 | `-o`, `--output <DIR>` | Export files to directory without updating library tables. |
 | `--global` | Import into KiCad global 3rd-party library. |
 | `--overwrite` | Overwrite existing symbol or footprint if already imported. |
-| `--lib-name <NAME>` | Name of the library (defaults to `JLCImport`). |
-| `--kicad-version {8,9,10}` | KiCad target version formatting (defaults to 8). |
+| `--global-lib-dir <DIR>` | Use this global library folder for this run. |
+| `--lib-name <NAME>` | Name of the library (default: the name saved in `jlcimport.json`, else `JLCImport`). |
+| `--kicad-version {8,9,10}` | KiCad target version formatting (default: 10). |
 | `--show {footprint,symbol,both}` | Prints generated S-expression directly to stdout. |
-| `--insecure` | Skip SSL certificate validation (useful behind enterprise intercepting proxies). |
 
 ### `jlcimport-cli search`
 
@@ -205,9 +210,9 @@ usage: jlcimport-cli search [-h] [-n COUNT] [-t {basic,extended,both}]
 | `keyword` | Search term (e.g. `"100nF 0402"`, `"TS-1187A"`, `"ESP32"`). |
 | `-t`, `--type` | Filter by JLCPCB part type: `basic`, `extended`, or `both` (default: `both`). |
 | `-n`, `--count` | Number of results to return (default: 10). |
-| `--min-stock <N>` | Filter out parts with less than N available stock (default: 1). |
+| `--min-stock <N>` | Filter out parts with less than N available stock (default: 1; `0` for any). |
 | `--csv` | Output results in CSV format. |
-| `--region {global,cn}` | Search global JLCPCB catalog or Chinese SZLCSC catalog. |
+| `--region {global,cn}` | Search the global JLCPCB catalog or the Chinese SZLCSC catalog (default: the region saved in `jlcimport.json`, else `global`). |
 
 ### `jlcimport-cli production`
 
@@ -234,6 +239,6 @@ usage: jlcimport-cli production [-h] [-n BOARDS] [-o OUTPUT] [--check-only]
 
 ## Troubleshooting & Tips
 
-- **TLS / SSL Certificate Errors**: If you encounter an `SSLCertError` when querying EasyEDA endpoints, pass `--insecure` to bypass certificate verification.
-- **3D Model Pathing**: When imported into a project with `-p`, 3D models use KiCad's `${KIPRJMOD}` path variable (`${KIPRJMOD}/3dmodels/...`), ensuring the project remains fully portable across different machines and operating systems.
-- **Parts Without 3D Models**: Some passive parts (or obscure ICs) may not have an associated 3D STEP model in EasyEDA; the tool will log `(No 3D model)` and successfully generate the symbol and footprint.
+- **TLS / SSL Certificate Errors**: If you encounter an `SSLCertError` when querying EasyEDA endpoints, pass `--insecure` before the command (`jlcimport-cli --insecure import ...`) to bypass certificate verification.
+- **3D Model Pathing**: When imported into a project with `-p`, 3D models use KiCad's `${KIPRJMOD}` path variable (`${KIPRJMOD}/JLCImport.3dshapes/<MPN>.wrl`), ensuring the project remains fully portable across different machines and operating systems.
+- **Parts Without 3D Models**: Some passive parts (or obscure ICs) may not have an associated 3D STEP model in EasyEDA; the tool will log `No 3D model available` and successfully generate the symbol and footprint.
