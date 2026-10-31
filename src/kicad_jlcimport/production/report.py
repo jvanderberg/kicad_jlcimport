@@ -14,8 +14,8 @@ from ..easyeda.api import SSLCertError
 from . import availability as av
 from .cache import KeyedCache
 from .jlc_footprints import JlcFootprint
-from .models import FootprintRecord, natural_key
-from .outputs import BOM_HEADER, CPL_HEADER, build_bom_rows, build_cpl_rows
+from .models import FootprintRecord, natural_key, normalize_lcsc
+from .outputs import BOM_HEADER, CPL_HEADER, build_bom_rows, build_cpl_rows, distinct
 from .placement import ESTIMATED, KICAD, MANUAL, SOLVED, Placement, compute_placement
 from .solver import (
     HIGH,
@@ -444,6 +444,7 @@ def run_check(
     _check_duplicates(footprints, report)
     for fp in sorted(footprints, key=lambda f: natural_key(f.reference)):
         report.rows.append(_build_row(fp, report, fp_results))
+    _check_bom_lines(report)
     return report
 
 
@@ -455,6 +456,35 @@ def _check_duplicates(footprints: Sequence[FootprintRecord], report: ProductionR
     dups = sorted((r for r, n in seen.items() if n > 1), key=natural_key)
     if dups:
         report.board_issues.append(Issue(ERROR, "Duplicate designators: " + ", ".join(dups)))
+
+
+def _check_bom_lines(report: ProductionReport) -> None:
+    """Flag LCSC parts the BOM puts on different footprints or on several lines."""
+    by_lcsc: Dict[str, List[PartRow]] = {}
+    for row in report.rows:
+        lcsc = row.footprint.lcsc
+        if row.footprint.in_bom and lcsc:
+            by_lcsc.setdefault(lcsc, []).append(row)
+    for lcsc, rows in by_lcsc.items():
+        names = distinct(r.footprint.footprint for r in rows)
+        if len(names) > 1:
+            message = f"{lcsc} is used with different footprints ({', '.join(names)}); check the LCSC number"
+            for r in rows:
+                r.add(WARNING, message)
+
+    # JLCPCB unticks every line that shares a part number, so it assembles none of them.
+    # Valid numbers always share a line; identical invalid ones (say "C2286;" on
+    # parts with different Values) don't, and JLCPCB may still read them as one part.
+    lines: Dict[str, List[str]] = {}
+    for bom_row in report.bom_rows():
+        part = bom_row[3].strip()
+        if part:
+            lines.setdefault(normalize_lcsc(part) or part.upper(), []).append(part)
+    split = sorted((parts[0] for parts in lines.values() if len(parts) > 1), key=natural_key)
+    if split:
+        report.board_issues.append(
+            Issue(ERROR, "LCSC part on several BOM lines, so JLCPCB assembles none of them: " + ", ".join(split))
+        )
 
 
 def _build_row(

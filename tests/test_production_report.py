@@ -101,7 +101,15 @@ def caches(parts=None, footprints=None, part_error=None, fp_error=None):
 
 class TestModels:
     @pytest.mark.parametrize(
-        "raw,expected", [("C25804", "C25804"), (" c25804 ", "C25804"), ("25804", "C25804"), ("", None), ("abc", None)]
+        "raw,expected",
+        [
+            ("C25804", "C25804"),
+            (" c25804 ", "C25804"),
+            ("25804", "C25804"),
+            ("", None),
+            ("abc", None),
+            ("C２２８６", None),
+        ],
     )
     def test_normalize_lcsc(self, raw, expected):
         assert normalize_lcsc(raw) == expected
@@ -273,6 +281,27 @@ class TestOutputs:
             ["MCU", "U1", "QFN", "bogus"],
         ]
 
+    def test_bom_one_line_per_lcsc_part(self):
+        # JLCPCB unticks every BOM line that shares a part number, so the two
+        # LEDs must share one line even though their Values differ.
+        rows = build_bom_rows(
+            [
+                fp("D2", value="RX (red)", footprint="LED_0603", lcsc="C2286"),
+                fp("D1", value="TX (red)", footprint="LED_0603", lcsc="C2286"),
+                fp("D3", value="PWR (red)", footprint="LED_0805", lcsc="2286"),
+                fp("R1", value="1k"),
+                fp("R2"),
+                fp("J1", value="A", footprint="PinHeader", lcsc=None),
+                fp("J2", value="B", footprint="PinHeader", lcsc=None),
+            ]
+        )
+        assert rows == [
+            ["TX (red) / RX (red) / PWR (red)", "D1,D2,D3", "LED_0603 / LED_0805", "C2286"],
+            ["A", "J1", "PinHeader", ""],
+            ["B", "J2", "PinHeader", ""],
+            ["1k / 10k", "R1,R2", "R_0603", "C25804"],
+        ]
+
     def test_cpl_rows(self):
         pls = [
             Placement("R10", cv.TOP, 1.0, -2.5, 90.0, SOLVED, "high"),
@@ -416,6 +445,39 @@ class TestRunCheck:
         assert "[ERROR] Duplicate" in report.to_text()
         assert report.estimated_parts_cost() is None
 
+    def test_same_lcsc_with_different_values_passes(self):
+        part_cache, fp_cache = caches(
+            parts={"C2286": part_info("C2286")}, footprints={"C2286": JlcFootprint("C2286", pads=RES_PADS)}
+        )
+        footprints = [fp("D1", value="TX (red)", lcsc="C2286"), fp("D2", value="RX (red)", lcsc="C2286", x=20)]
+        report = run_check(footprints, 1, part_cache, fp_cache)
+        assert report.count(ERROR) == 0 and report.count(WARNING) == 0
+        assert [r[3] for r in report.bom_rows()] == ["C2286"]
+
+    def test_same_lcsc_on_different_footprints_warns(self):
+        part_cache, fp_cache = caches(parts={"C2286": part_info("C2286")})
+        footprints = [
+            fp("D1", lcsc="C2286", footprint="LED_0603"),
+            fp("D2", lcsc="C2286", footprint="LED_0805"),
+            fp("D3", lcsc="C2286", footprint="LED_0603", dnp=True),
+        ]
+        report = run_check(footprints, 1, part_cache, fp_cache)
+        assert [r[3] for r in report.bom_rows()] == ["C2286"]
+        assert (
+            "[WARNING] D1, D2: C2286 is used with different footprints (LED_0603, LED_0805); check the LCSC number"
+            in report.issue_lines()
+        )
+
+    def test_lcsc_on_several_bom_lines_is_an_error(self):
+        # An invalid number keeps the old grouping, so two Values give two lines.
+        part_cache, fp_cache = caches()
+        footprints = [fp("D1", value="TX", lcsc="C2286;"), fp("D2", value="RX", lcsc="c2286;"), fp("R1", lcsc="x")]
+        report = run_check(footprints, 1, part_cache, fp_cache)
+        assert [r[3] for r in report.bom_rows()] == ["C2286;", "c2286;", "x"]
+        assert [i.message for i in report.board_issues] == [
+            "LCSC part on several BOM lines, so JLCPCB assembles none of them: C2286;"
+        ]
+
     def test_issue_lines_grouped_worst_first(self):
         part_cache, fp_cache = caches(parts={"C999": part_info("C999", kind="Extended")})
         report = run_check(
@@ -537,6 +599,17 @@ class TestExport:
         with open(paths["bom"]) as f:
             assert f.read().splitlines()[1] == "10k,R1,R_0603,C25804"
         assert "JLCPCB production check" in open(paths["report"]).read()
+
+    def test_write_bom_one_line_per_lcsc_part(self, tmp_path):
+        part_cache, fp_cache = caches(parts={"C2286": part_info("C2286")})
+        footprints = [
+            fp("D1", value="TX (red)", footprint="LED_0603", lcsc="C2286"),
+            fp("D2", value="RX (red)", footprint="LED_0603", lcsc="C2286", x=20),
+        ]
+        report = run_check(footprints, 5, part_cache, fp_cache)
+        paths = write_bom_cpl(report, str(tmp_path / "production"), "b")
+        with open(paths["bom"], newline="") as f:
+            assert list(csv.reader(f))[1:] == [["TX (red) / RX (red)", "D1,D2", "LED_0603", "C2286"]]
 
     def test_make_caches_use_api(self):
         pc, fc = make_caches()
