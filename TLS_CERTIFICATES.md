@@ -4,8 +4,19 @@
 
 `cacerts.pem` is a minimal bundle of root CA certificates for the specific
 HTTPS endpoints the plugin connects to. It allows TLS verification to work in
-KiCad's bundled Python, which uses OpenSSL and has no access to the macOS
-system keychain or system certificate store.
+two environments that can't find the system's certificates:
+
+- **KiCad's bundled Python**, which uses its own OpenSSL and has no access to
+  the macOS system keychain or system certificate store.
+- **The PyInstaller release binaries** (`jlcimport-cli`, `jlcimport-tui`,
+  `jlcimport-gui`). A frozen binary carries the build machine's OpenSSL, whose
+  default certificate path points at the build machine's filesystem and
+  usually doesn't exist on the user's machine. The release workflow bundles
+  the PEM with `--add-data` so `api.py` finds it next to itself.
+
+A CLI installed with `pip` into a normal Python doesn't need the bundle, since
+that Python can use the system store, but it loads the bundle first anyway
+because it shares `api.py` with the plugin.
 
 ## Endpoints covered
 
@@ -91,5 +102,7 @@ take `--insecure`.
 ## Why not just use certifi or the system store?
 
 KiCad's bundled Python (OpenSSL 1.1.1n on macOS) cannot access the macOS
-keychain, and certifi is not guaranteed to be installed. A small bundled PEM
-file with only the two root CAs we actually need is the most reliable option.
+keychain, and certifi is not guaranteed to be installed. The PyInstaller
+binaries don't include certifi either, and their system-store lookup points
+at the build machine's OpenSSL directory. A small bundled PEM file with only
+the two root CAs we actually need is the most reliable option.
