@@ -1,6 +1,72 @@
 from types import SimpleNamespace
 
 
+def test_find_exact_search_result_prefers_datasheet_match(monkeypatch):
+    import kicad_jlcimport.cli as cli
+
+    def fake_global_search(keyword, page_size=10):
+        assert keyword == "C116592"
+        assert page_size == 10
+        return {
+            "results": [
+                {"lcsc": "C999999", "datasheet": "https://example.invalid/wrong.pdf"},
+                {"lcsc": "C116592", "datasheet": ""},
+            ]
+        }
+
+    def fake_cn_search(keyword, page_size=10):
+        assert keyword == "C116592"
+        assert page_size == 10
+        return {"results": [{"lcsc": "C116592", "datasheet": "https://example.invalid/correct.pdf"}]}
+
+    monkeypatch.setattr(cli, "search_components", fake_global_search)
+    monkeypatch.setattr(cli, "search_components_cn", fake_cn_search)
+
+    result = cli._find_exact_search_result("C116592")
+
+    assert result["lcsc"] == "C116592"
+    assert result["datasheet"] == "https://example.invalid/correct.pdf"
+
+
+def test_cli_import_passes_exact_catalog_metadata(tmp_path, monkeypatch):
+    import kicad_jlcimport.cli as cli
+
+    exact_result = {
+        "lcsc": "C116592",
+        "brand": "Texas Instruments",
+        "description": "Buck converter",
+        "datasheet": "https://example.invalid/tps563201.pdf",
+    }
+    captured = {}
+
+    def fake_import_component(lcsc_id, lib_dir, lib_name, **kwargs):
+        captured["lcsc_id"] = lcsc_id
+        captured["lib_dir"] = lib_dir
+        captured["lib_name"] = lib_name
+        captured.update(kwargs)
+        return {"title": "TPS563201DDCR", "name": "TPS563201DDCR", "fp_content": "fp\n", "sym_content": ""}
+
+    monkeypatch.setattr(cli, "_find_exact_search_result", lambda lcsc_id: exact_result)
+    monkeypatch.setattr(cli, "import_component", fake_import_component)
+
+    args = SimpleNamespace(
+        part="C116592",
+        show=None,
+        output=str(tmp_path),
+        project=None,
+        global_dest=False,
+        global_lib_dir=None,
+        overwrite=False,
+        lib_name="MyLib",
+        kicad_version=10,
+        catalog_metadata=True,
+    )
+    cli.cmd_import(args)
+
+    assert captured["lcsc_id"] == "C116592"
+    assert captured["search_result"] is exact_result
+
+
 def test_cli_import_project_writes_kicad_library(tmp_path, monkeypatch, capsys):
     import kicad_jlcimport.cli as cli
     import kicad_jlcimport.importer as importer
