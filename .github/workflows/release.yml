@@ -16,7 +16,8 @@ jobs:
         include:
           - os: macos-latest
             platform: macos-arm64
-          - os: ubuntu-latest
+          # Pinned to match the ubuntu-24.04 wxPython wheel index.
+          - os: ubuntu-24.04
             platform: linux-x86_64
           - os: windows-latest
             platform: windows-x86_64

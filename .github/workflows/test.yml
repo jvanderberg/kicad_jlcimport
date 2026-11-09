@@ -19,7 +19,9 @@ jobs:
       - run: ruff format --check .
 
   test:
-    runs-on: ubuntu-latest
+    # Pinned: setup-python has no 3.9 for newer images, and wxPython comes
+    # from the ubuntu-24.04 wheel index.
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: ["3.9", "3.11", "3.12"]
@@ -48,7 +50,8 @@ jobs:
           fail_ci_if_error: false
 
   coverage:
-    runs-on: ubuntu-latest
+    # Pinned to match the ubuntu-24.04 wxPython wheel index.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
