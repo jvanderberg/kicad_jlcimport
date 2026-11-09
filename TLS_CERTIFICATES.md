@@ -3,9 +3,14 @@
 ## What this is
 
 `cacerts.pem` is a minimal bundle of root CA certificates for the specific
-HTTPS endpoints the plugin connects to. It allows TLS verification to work in
-KiCad's bundled Python, which uses OpenSSL and has no access to the macOS
-system keychain or system certificate store.
+HTTPS endpoints the plugin connects to. **Only the KiCad plugin uses it.**
+KiCad's bundled Python uses its own OpenSSL and has no access to the macOS
+system keychain or system certificate store, so it needs its own roots.
+
+The plugin turns the bundle on at load time: `__init__.py` calls
+`api.use_bundled_cacerts()` when `pcbnew` is importable. The CLI, the
+standalone GUI and TUI, and the PyInstaller release binaries never call it, so
+they verify against the operating system's certificates instead.
 
 ## Endpoints covered
 
@@ -73,11 +78,29 @@ for host in ['jlcpcb.com', 'easyeda.com', 'lcsc.com', 'assets.lcsc.com', 'so.szl
 
 ## How verification works at runtime
 
-`api._make_ssl_context()` tries certificate sources in order:
+`api._make_ssl_context()` picks a certificate source depending on where it
+runs.
 
-1. **Bundled `cacerts.pem`** (this file) — preferred, works in KiCad's Python
-2. **certifi** package — fallback if cacerts.pem fails to load
-3. **System certificate store** — fallback via `ssl.create_default_context()`
+**Inside KiCad** (after `use_bundled_cacerts()`):
+
+1. **Bundled `cacerts.pem`** (this file)
+2. **certifi**, if it's installed
+3. **System certificate store**, via `ssl.create_default_context()`
+
+**Everywhere else** (CLI, standalone GUI/TUI, release binaries):
+
+1. **OS trust store via [`truststore`](https://pypi.org/project/truststore/)**,
+   if it's installed. It calls the macOS Security framework, the Windows
+   certificate store or the Linux system CA files directly. The release
+   workflow installs it so the PyInstaller binaries get it; a frozen
+   binary's own OpenSSL looks for certificates at the build machine's path,
+   which usually doesn't exist on the user's machine. It also means
+   corporate or proxy root CAs the OS trusts are honoured.
+2. **System certificate store**, if OpenSSL loaded any CA certificates. This
+   is the normal case for a pip install into a python.org, Homebrew or distro
+   Python.
+3. **certifi**, if it's installed
+4. **System certificate store**, unconditionally
 
 If none work, HTTPS requests proceed unverified with a warning. If Python's
 `ssl` module can't be loaded at all (an OpenSSL mismatch in a Linux AppImage,
@@ -88,8 +111,9 @@ If a verified context exists but the server's certificate fails validation
 asks whether to continue without verification; the CLI and standalone GUI
 take `--insecure`.
 
-## Why not just use certifi or the system store?
+## Why not just use certifi or the system store in KiCad?
 
 KiCad's bundled Python (OpenSSL 1.1.1n on macOS) cannot access the macOS
-keychain, and certifi is not guaranteed to be installed. A small bundled PEM
-file with only the two root CAs we actually need is the most reliable option.
+keychain, and certifi is not guaranteed to be installed. `truststore` needs
+Python 3.10+, and KiCad on macOS bundles 3.9. A small bundled PEM file with
+only the two root CAs we actually need is the most reliable option there.

@@ -17,7 +17,7 @@ src/kicad_jlcimport/
 │   ├── disk_cache.py     #   One-week on-disk cache of EasyEDA component data
 │   ├── parser.py         #   Shape string → dataclass conversion
 │   ├── ee_types.py       #   Dataclasses for parsed EasyEDA primitives
-│   ├── cacerts.pem       #   Root CAs for the hosts the plugin connects to (see TLS_CERTIFICATES.md)
+│   ├── cacerts.pem       #   Root CAs the KiCad plugin trusts (see TLS_CERTIFICATES.md)
 │   └── fetch_cacerts.py  #   Regenerates cacerts.pem
 ├── kicad/                # KiCad file generation and library management
 │   ├── symbol_writer.py  #   .kicad_sym S-expression output
@@ -88,7 +88,7 @@ The codebase is organized in layers from top to bottom:
 ### `easyeda/` — EasyEDA Data Fetching & Parsing
 
 - **`easyeda/disk_cache.py`** — On-disk cache (one week) for EasyEDA component data, used by `api.fetch_component_uuids` and `api.fetch_component_data`. Best-effort: a cache that can't be read or written just means a network fetch.
-- **`easyeda/api.py`** — HTTP client that talks to the JLCPCB, SZLCSC and EasyEDA APIs. Handles search queries, exact part lookups (`lookup_part`, for production export), component data fetching, image scraping, and 3D model downloads. Includes SSRF protection (domain whitelist), TLS verification against the bundled `cacerts.pem` (see `TLS_CERTIFICATES.md`), and a `curl` fallback when Python's `ssl` module can't load.
+- **`easyeda/api.py`** — HTTP client that talks to the JLCPCB, SZLCSC and EasyEDA APIs. Handles search queries, exact part lookups (`lookup_part`, for production export), component data fetching, image scraping, and 3D model downloads. Includes SSRF protection (domain whitelist), TLS verification (the KiCad plugin uses the bundled `cacerts.pem`; everything else uses the OS trust store; see `TLS_CERTIFICATES.md`), and a `curl` fallback when Python's `ssl` module can't load.
 - **`easyeda/parser.py`** — Converts EasyEDA's proprietary shape strings into structured Python dataclasses. Handles coordinate conversion (mils to mm), layer mapping (EasyEDA layers to KiCad layers), and geometry calculations (arc midpoints, origin offsets).
 - **`easyeda/ee_types.py`** — Dataclasses representing parsed EasyEDA primitives: pads, tracks, arcs, pins, polygons, etc. These are the intermediate representation between parsing and writing.
 
@@ -221,7 +221,7 @@ The config file is shared between the plugin, GUI, and CLI. It stores:
 - **No external dependencies** — Only uses Python's standard library plus `wx` (bundled with KiCad). This avoids installation complexity and version conflicts.
 - **Configurable library name** — Users can target any library name, including existing ones. The setting persists across sessions and is shared between all interfaces.
 - **SSRF protection** — Image fetching validates URLs against a domain whitelist (product pages on `jlcpcb.com` / `lcsc.com`, images on `assets.lcsc.com` / `alimg.szlcsc.com`) to prevent server-side request forgery.
-- **Verified TLS** — Connections are verified against a bundled root CA file, then certifi, then the system store, because KiCad's bundled Python may lack a usable certificate store. A certificate that fails verification raises `SSLCertError` rather than silently downgrading; the plugin dialog asks whether to continue unverified, and the CLI and GUI also take `--insecure`. HTTPS goes unverified only when no CA source loads at all, with a warning. See `TLS_CERTIFICATES.md`.
+- **Verified TLS** — Inside KiCad, connections are verified against a bundled root CA file, then certifi, then the system store, because KiCad's bundled Python can't read the OS certificate store. Outside KiCad (CLI, standalone GUI, release binaries) they're verified against the OS trust store, through `truststore` when it's installed, then certifi. A certificate that fails verification raises `SSLCertError` rather than silently downgrading; the plugin dialog asks whether to continue unverified, and the CLI and GUI also take `--insecure`. HTTPS goes unverified only when no CA source loads at all, with a warning. See `TLS_CERTIFICATES.md`.
 - **Background threading** — Network operations run in worker threads so the UI remains responsive during searches and imports.
 - **Coordinate conversion at parse time** — EasyEDA uses mils; conversion to millimeters happens once during parsing rather than at write time.
 - **Non-destructive library writes** — Other symbols in an existing `.kicad_sym` file are kept byte for byte (including line endings), and files are replaced atomically, so an interrupted import never leaves a corrupt library.

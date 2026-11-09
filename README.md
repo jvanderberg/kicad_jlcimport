@@ -51,6 +51,7 @@ On Windows with KiCad 9, symbol preview can fail if `wx.svg._nanosvg` is missing
 
 ## Recent Updates
 
+- `v1.7.1`: standalone CLI/GUI binaries now verify TLS against the OS trust store, fixing certificate errors on machines without the build's OpenSSL path; the bundled CA certificates are used only inside KiCad.
 - `v1.7.0`: JLCPCB production export (Gerbers, BOM, CPL) with a placement solver, available from the plugin and CLI; 3D models placed from EasyEDA's outline; safer library writes and name validation.
 - `v1.6.7`: snap tiny EasyEDA rounding errors to metric/imperial grids, keeping exact mil values.
 - `v1.6.5`: fall back to the LCSC product page URL when JLCPCB's search omits it.

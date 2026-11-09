@@ -1,14 +1,33 @@
 """Extended tests for api.py to improve coverage."""
 
+import importlib
 import json
+import os
 import ssl
+import sys
 import urllib.error
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from kicad_jlcimport.easyeda import api
 from kicad_jlcimport.easyeda.api import APIError
+
+_PROJECT_PEM = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "src", "kicad_jlcimport", "easyeda", "cacerts.pem"
+)
+
+
+def _bundled_ca_count():
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.load_verify_locations(cafile=_PROJECT_PEM)
+    return len(ctx.get_ca_certs())
+
+
+def _empty_context():
+    """A verified context with no CA certificates, like a frozen binary's."""
+    return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 class TestMakeSslContext:
@@ -21,95 +40,139 @@ class TestMakeSslContext:
         assert ctx.check_hostname is True
         assert ctx.verify_mode == ssl.CERT_REQUIRED
 
-    def test_prefers_bundled_cacerts(self, monkeypatch, tmp_path):
-        """When cacerts.pem exists and is valid, it should be used."""
-        import os
 
-        # Use the project's own cacerts.pem as a known-good CA bundle
-        project_pem = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "src", "kicad_jlcimport", "easyeda", "cacerts.pem"
-        )
-        pem = tmp_path / "cacerts.pem"
-        pem.write_text(open(project_pem).read())
-        monkeypatch.setattr(api, "_CACERTS_PEM", str(pem))
+class TestKicadSslContext:
+    """Inside KiCad, the bundled cacerts.pem is preferred."""
 
+    @pytest.fixture(autouse=True)
+    def _kicad_mode(self, monkeypatch):
+        monkeypatch.setattr(api, "_USE_BUNDLED_CACERTS", True)
+
+    def test_prefers_bundled_cacerts(self, monkeypatch):
+        monkeypatch.setattr(api, "_CACERTS_PEM", _PROJECT_PEM)
         ctx = api._make_ssl_context()
-        assert ctx is not None
         assert ctx.check_hostname is True
+        assert len(ctx.get_ca_certs()) == _bundled_ca_count()
 
-    def test_falls_back_to_certifi(self, monkeypatch, tmp_path):
-        """When no cacerts.pem exists, certifi should be tried."""
-        import os
+    def test_skips_truststore(self, monkeypatch):
+        monkeypatch.setattr(api, "_CACERTS_PEM", _PROJECT_PEM)
+        fake_truststore = MagicMock()
+        monkeypatch.setitem(sys.modules, "truststore", fake_truststore)
+        api._make_ssl_context()
+        fake_truststore.SSLContext.assert_not_called()
 
+    def test_falls_back_to_certifi(self, monkeypatch):
         monkeypatch.setattr(api, "_CACERTS_PEM", "/nonexistent/cacerts.pem")
-
-        # certifi may not be installed; provide a fake module using the project's real CA bundle
-        project_pem = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "src", "kicad_jlcimport", "easyeda", "cacerts.pem"
-        )
-        fake_certifi = MagicMock()
-        fake_certifi.where.return_value = project_pem
-
-        import builtins
-
-        real_import = builtins.__import__
-
-        def mock_import(name, *args, **kwargs):
-            if name == "certifi":
-                return fake_certifi
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", mock_import)
-
+        monkeypatch.setitem(sys.modules, "certifi", SimpleNamespace(where=lambda: _PROJECT_PEM))
         ctx = api._make_ssl_context()
-        assert ctx is not None
-        assert ctx.verify_mode == ssl.CERT_REQUIRED
+        assert len(ctx.get_ca_certs()) == _bundled_ca_count()
+
+    def test_unloadable_pem_falls_through(self, monkeypatch, tmp_path):
+        bad_pem = tmp_path / "cacerts.pem"
+        bad_pem.write_text("this is not a valid certificate")
+        monkeypatch.setattr(api, "_CACERTS_PEM", str(bad_pem))
+        monkeypatch.setitem(sys.modules, "certifi", SimpleNamespace(where=lambda: _PROJECT_PEM))
+        ctx = api._make_ssl_context()
+        assert len(ctx.get_ca_certs()) == _bundled_ca_count()
 
     def test_returns_none_when_nothing_available(self, monkeypatch):
-        """When all CA sources fail, returns None."""
         monkeypatch.setattr(api, "_CACERTS_PEM", "/nonexistent/cacerts.pem")
-        # Block certifi import
-        import builtins
+        monkeypatch.setitem(sys.modules, "certifi", None)
+        monkeypatch.setattr(ssl, "create_default_context", MagicMock(side_effect=OSError("mocked")))
+        assert api._make_ssl_context() is None
 
-        real_import = builtins.__import__
 
-        def mock_import(name, *args, **kwargs):
-            if name == "certifi":
-                raise ImportError("mocked")
-            return real_import(name, *args, **kwargs)
+class TestDefaultSslContext:
+    """Outside KiCad (CLI, standalone GUI, release binaries), the OS store is used."""
 
-        monkeypatch.setattr(builtins, "__import__", mock_import)
-        # Block system store
-        monkeypatch.setattr(ssl, "create_default_context", lambda: (_ for _ in ()).throw(OSError("mocked")))
+    @pytest.fixture(autouse=True)
+    def _default_mode(self, monkeypatch):
+        monkeypatch.setattr(api, "_USE_BUNDLED_CACERTS", False)
+        monkeypatch.setitem(sys.modules, "truststore", None)
 
+    def test_never_loads_bundled_cacerts(self, monkeypatch):
+        bundled = MagicMock(return_value=_empty_context())
+        monkeypatch.setattr(api, "_bundled_ssl_context", bundled)
+        monkeypatch.setitem(sys.modules, "certifi", None)
+        monkeypatch.setattr(ssl, "create_default_context", MagicMock(side_effect=OSError("mocked")))
+        assert api._make_ssl_context() is None
+        bundled.assert_not_called()
+
+    def test_prefers_truststore(self, monkeypatch):
+        sentinel = _empty_context()
+        fake_truststore = SimpleNamespace(SSLContext=MagicMock(return_value=sentinel))
+        monkeypatch.setitem(sys.modules, "truststore", fake_truststore)
+        assert api._make_ssl_context() is sentinel
+        fake_truststore.SSLContext.assert_called_once_with(ssl.PROTOCOL_TLS_CLIENT)
+
+    def test_truststore_failure_falls_through(self, monkeypatch):
+        fake_truststore = SimpleNamespace(SSLContext=MagicMock(side_effect=RuntimeError("mocked")))
+        monkeypatch.setitem(sys.modules, "truststore", fake_truststore)
+        system = ssl.create_default_context()
+        monkeypatch.setattr(ssl, "create_default_context", lambda: system)
+        if system.cert_store_stats()["x509_ca"] == 0:
+            pytest.skip("this Python's system store loads no CA files up front")
+        assert api._make_ssl_context() is system
+
+    def test_uses_populated_system_store_before_certifi(self, monkeypatch):
+        populated = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        populated.load_verify_locations(cafile=_PROJECT_PEM)
+        monkeypatch.setattr(ssl, "create_default_context", lambda: populated)
+        certifi = SimpleNamespace(where=MagicMock(return_value=_PROJECT_PEM))
+        monkeypatch.setitem(sys.modules, "certifi", certifi)
+        assert api._make_ssl_context() is populated
+        certifi.where.assert_not_called()
+
+    def test_empty_system_store_falls_back_to_certifi(self, monkeypatch):
+        monkeypatch.setattr(ssl, "create_default_context", _empty_context)
+        monkeypatch.setitem(sys.modules, "certifi", SimpleNamespace(where=lambda: _PROJECT_PEM))
         ctx = api._make_ssl_context()
-        assert ctx is None
+        assert len(ctx.get_ca_certs()) == _bundled_ca_count()
+
+    def test_empty_system_store_without_certifi_still_returns_it(self, monkeypatch):
+        empty = _empty_context()
+        monkeypatch.setattr(ssl, "create_default_context", lambda: empty)
+        monkeypatch.setitem(sys.modules, "certifi", None)
+        assert api._make_ssl_context() is empty
 
     def test_certifi_load_failure_falls_through(self, monkeypatch, tmp_path):
-        """When certifi is importable but load_verify_locations fails, fall through to system store."""
-        monkeypatch.setattr(api, "_CACERTS_PEM", "/nonexistent/cacerts.pem")
-
-        # Create a file with invalid cert content so load_verify_locations fails
         bad_pem = tmp_path / "bad_certifi.pem"
         bad_pem.write_text("this is not a valid certificate")
+        empty = _empty_context()
+        monkeypatch.setattr(ssl, "create_default_context", lambda: empty)
+        monkeypatch.setitem(sys.modules, "certifi", SimpleNamespace(where=lambda: str(bad_pem)))
+        assert api._make_ssl_context() is empty
 
-        fake_certifi = MagicMock()
-        fake_certifi.where.return_value = str(bad_pem)
 
-        import builtins
+class TestUseBundledCacerts:
+    def test_switches_mode_and_resets_cached_context(self, monkeypatch):
+        monkeypatch.setattr(api, "_USE_BUNDLED_CACERTS", False)
+        monkeypatch.setattr(api, "_SSL_CTX", "stale")
+        monkeypatch.setattr(api, "_SSL_CTX_INITIALIZED", True)
+        api.use_bundled_cacerts()
+        assert api._USE_BUNDLED_CACERTS is True
+        assert api._SSL_CTX is None
+        assert api._SSL_CTX_INITIALIZED is False
 
-        real_import = builtins.__import__
+    def test_plugin_load_enables_bundled_cacerts(self, monkeypatch):
+        """Loading the package inside KiCad (pcbnew importable) turns it on."""
+        import kicad_jlcimport
 
-        def mock_import(name, *args, **kwargs):
-            if name == "certifi":
-                return fake_certifi
-            return real_import(name, *args, **kwargs)
+        enable = MagicMock()
+        monkeypatch.setattr(api, "use_bundled_cacerts", enable)
+        monkeypatch.setitem(sys.modules, "pcbnew", SimpleNamespace())
+        monkeypatch.setitem(sys.modules, "kicad_jlcimport.plugin", SimpleNamespace(JLCImportPlugin=MagicMock()))
+        importlib.reload(kicad_jlcimport)
+        enable.assert_called_once_with()
 
-        monkeypatch.setattr(builtins, "__import__", mock_import)
+    def test_package_import_outside_kicad_leaves_it_off(self, monkeypatch):
+        import kicad_jlcimport
 
-        # System store fallback should still work
-        ctx = api._make_ssl_context()
-        assert ctx is not None
+        enable = MagicMock()
+        monkeypatch.setattr(api, "use_bundled_cacerts", enable)
+        monkeypatch.setitem(sys.modules, "pcbnew", None)
+        importlib.reload(kicad_jlcimport)
+        enable.assert_not_called()
 
 
 class TestUrlopen:

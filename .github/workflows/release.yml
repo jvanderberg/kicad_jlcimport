@@ -16,7 +16,8 @@ jobs:
         include:
           - os: macos-latest
             platform: macos-arm64
-          - os: ubuntu-latest
+          # Pinned to match the ubuntu-24.04 wxPython wheel index.
+          - os: ubuntu-24.04
             platform: linux-x86_64
           - os: windows-latest
             platform: windows-x86_64
@@ -41,7 +42,7 @@ jobs:
         run: |
           pip install setuptools==80.10.2 wheel
           pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython==4.2.4
-          pip install pyinstaller==6.18.0 pyinstaller-hooks-contrib==2026.0 textual==7.5.0 "textual-image[textual]==0.8.5" Pillow==12.1.0
+          pip install pyinstaller==6.18.0 pyinstaller-hooks-contrib==2026.0 truststore==0.10.5 textual==7.5.0 "textual-image[textual]==0.8.5" Pillow==12.1.0
 
       - name: Build CLI
         run: |
