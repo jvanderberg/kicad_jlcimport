@@ -41,19 +41,19 @@ jobs:
         run: |
           pip install setuptools==80.10.2 wheel
           pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython==4.2.4
-          pip install pyinstaller==6.18.0 pyinstaller-hooks-contrib==2026.0 textual==7.5.0 "textual-image[textual]==0.8.5" Pillow==12.1.0
+          pip install pyinstaller==6.18.0 pyinstaller-hooks-contrib==2026.0 truststore==0.10.5 textual==7.5.0 "textual-image[textual]==0.8.5" Pillow==12.1.0
 
       - name: Build CLI
         run: |
-          pyinstaller --onedir src/kicad_jlcimport/cli.py --name jlcimport-cli --add-data src/kicad_jlcimport/easyeda/cacerts.pem:kicad_jlcimport/easyeda --paths src
+          pyinstaller --onedir src/kicad_jlcimport/cli.py --name jlcimport-cli --paths src
 
       - name: Build TUI
         run: |
-          pyinstaller --onedir src/kicad_jlcimport/tui_entry.py --name jlcimport-tui --add-data src/kicad_jlcimport/easyeda/cacerts.pem:kicad_jlcimport/easyeda --paths src --collect-all textual --collect-all textual_image --collect-all rich
+          pyinstaller --onedir src/kicad_jlcimport/tui_entry.py --name jlcimport-tui --paths src --collect-all textual --collect-all textual_image --collect-all rich
 
       - name: Build GUI
         run: |
-          pyinstaller --onedir src/kicad_jlcimport/gui_entry.py --name jlcimport-gui --add-data src/kicad_jlcimport/easyeda/cacerts.pem:kicad_jlcimport/easyeda --paths src --collect-all wx --windowed
+          pyinstaller --onedir src/kicad_jlcimport/gui_entry.py --name jlcimport-gui --paths src --collect-all wx --windowed
 
       - name: Codesign (macOS)
         if: runner.os == 'macOS'

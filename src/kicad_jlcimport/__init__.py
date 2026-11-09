@@ -6,6 +6,10 @@ except ImportError:
     pass  # pcbnew not available (running outside KiCad)
 else:
     try:
+        from .easyeda.api import use_bundled_cacerts
+
+        use_bundled_cacerts()
+
         from .plugin import JLCImportPlugin
 
         JLCImportPlugin().register()

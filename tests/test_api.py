@@ -476,7 +476,7 @@ class TestMakeSslContext:
         import ssl
 
         with mock.patch.object(api, "_CACERTS_PEM", "/nonexistent/cacerts.pem"):
-            with mock.patch.dict("sys.modules", {"certifi": None}):
+            with mock.patch.dict("sys.modules", {"certifi": None, "truststore": None}):
                 with mock.patch.object(ssl, "create_default_context", side_effect=Exception("no certs")):
                     ctx = api._make_ssl_context()
                     assert ctx is None

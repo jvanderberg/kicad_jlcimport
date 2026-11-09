@@ -104,50 +104,126 @@ socket.getaddrinfo = _cached_getaddrinfo
 
 _CACERTS_PEM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cacerts.pem")
 
+# Only the KiCad plugin loads the bundled cacerts.pem. KiCad's bundled Python
+# can't see the OS certificate store, so it needs its own roots. Everywhere
+# else (pip-installed CLI/GUI, the PyInstaller binaries) the OS store is used.
+_USE_BUNDLED_CACERTS = False
+
+
+def _bundled_ssl_context():
+    """Context trusting only the bundled endpoint-specific root CAs."""
+    import ssl
+
+    if not os.path.isfile(_CACERTS_PEM):
+        return None
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.load_verify_locations(cafile=_CACERTS_PEM)
+    except Exception:
+        logger.debug("TLS: cacerts.pem exists but failed to load", exc_info=True)
+        return None
+    logger.debug("TLS: using bundled cacerts.pem")
+    return ctx
+
+
+def _truststore_ssl_context():
+    """Context that verifies through the OS trust store via truststore.
+
+    truststore (Python 3.10+) calls the macOS Security framework, the Windows
+    certificate store, or the Linux system CA files directly, so it works in
+    frozen binaries whose OpenSSL can't find the system certificates.
+    """
+    import ssl
+
+    try:
+        import truststore
+    except ImportError:
+        return None
+    try:
+        ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        logger.debug("TLS: truststore available but failed to load", exc_info=True)
+        return None
+    logger.debug("TLS: using OS trust store via truststore")
+    return ctx
+
+
+def _populated_system_ssl_context():
+    """System store context, but only when OpenSSL actually found CA certs."""
+    import ssl
+
+    try:
+        ctx = ssl.create_default_context()
+    except Exception:
+        logger.debug("TLS: system certificate store unavailable", exc_info=True)
+        return None
+    if ctx.cert_store_stats().get("x509_ca", 0) == 0:
+        logger.debug("TLS: system certificate store has no CA certificates loaded")
+        return None
+    logger.debug("TLS: using system certificate store")
+    return ctx
+
+
+def _certifi_ssl_context():
+    """Context trusting certifi's Mozilla CA bundle, if certifi is installed."""
+    import ssl
+
+    try:
+        import certifi
+    except ImportError:
+        return None
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.load_verify_locations(cafile=certifi.where())
+    except Exception:
+        logger.debug("TLS: certifi available but failed to load", exc_info=True)
+        return None
+    logger.debug("TLS: using certifi CA bundle")
+    return ctx
+
+
+def _system_ssl_context():
+    """System store context, even if OpenSSL found no CA certs up front."""
+    import ssl
+
+    try:
+        ctx = ssl.create_default_context()
+    except Exception:
+        logger.debug("TLS: system certificate store unavailable", exc_info=True)
+        return None
+    logger.debug("TLS: using system certificate store")
+    return ctx
+
 
 def _make_ssl_context():
     """Create a verified SSL context from the best available CA source.
 
-    Tries in order:
-    1. Bundled cacerts.pem (endpoint-specific root CAs, works everywhere)
-    2. certifi package (Mozilla's CA bundle)
-    3. System certificate store (may be incomplete in KiCad's bundled Python)
+    Inside KiCad (after ``use_bundled_cacerts()``):
+    1. Bundled cacerts.pem
+    2. certifi
+    3. System certificate store
+
+    Everywhere else:
+    1. OS trust store via truststore, if installed (the release binaries)
+    2. System certificate store, if OpenSSL found CA certificates
+    3. certifi
+    4. System certificate store, unconditionally
 
     Returns None only if no certificate source is usable.
     """
-    import ssl
-
-    # 1. Bundled endpoint-specific CAs — preferred, works in KiCad's Python
-    if os.path.isfile(_CACERTS_PEM):
-        try:
-            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            ctx.load_verify_locations(cafile=_CACERTS_PEM)
-            logger.debug("TLS: using bundled cacerts.pem")
+    if _USE_BUNDLED_CACERTS:
+        sources = (_bundled_ssl_context, _certifi_ssl_context, _system_ssl_context)
+    else:
+        sources = (
+            _truststore_ssl_context,
+            _populated_system_ssl_context,
+            _certifi_ssl_context,
+            _system_ssl_context,
+        )
+    for source in sources:
+        ctx = source()
+        if ctx is not None:
             return ctx
-        except Exception:
-            logger.debug("TLS: cacerts.pem exists but failed to load", exc_info=True)
-
-    # 2. certifi — good cross-platform fallback
-    try:
-        import certifi
-
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.load_verify_locations(cafile=certifi.where())
-        logger.debug("TLS: using certifi CA bundle")
-        return ctx
-    except ImportError:
-        pass
-    except Exception:
-        logger.debug("TLS: certifi available but failed to load", exc_info=True)
-
-    # 3. System certificate store
-    try:
-        ctx = ssl.create_default_context()
-        logger.debug("TLS: using system certificate store")
-        return ctx
-    except Exception:
-        logger.debug("TLS: system certificate store unavailable", exc_info=True)
-
     return None
 
 
@@ -177,6 +253,19 @@ def _get_ssl_ctx():
             _SSL_CTX = _make_ssl_context()
         _SSL_CTX_INITIALIZED = True
     return _SSL_CTX
+
+
+def use_bundled_cacerts() -> None:
+    """Verify TLS against the bundled cacerts.pem instead of the OS store.
+
+    Called by the KiCad plugin at load time, because KiCad's bundled Python
+    can't read the OS certificate store. The CLI and standalone GUI never call
+    it.
+    """
+    global _USE_BUNDLED_CACERTS, _SSL_CTX, _SSL_CTX_INITIALIZED
+    _USE_BUNDLED_CACERTS = True
+    _SSL_CTX = None
+    _SSL_CTX_INITIALIZED = False
 
 
 # ---------------------------------------------------------------------------
@@ -327,8 +416,8 @@ def allow_unverified_ssl():
 def _urlopen(req, timeout=30):
     """Open a URL with certificate verification.
 
-    Uses the best available verified SSL context (bundled CAs → certifi →
-    system store).  Falls back to unverified HTTPS **only** when no CA source
+    Uses the best available verified SSL context (see ``_make_ssl_context``).
+    Falls back to unverified HTTPS **only** when no CA source
     could be loaded at all, and emits a warning each time this happens.
 
     When the ssl module is entirely unusable (e.g. OpenSSL version mismatch
