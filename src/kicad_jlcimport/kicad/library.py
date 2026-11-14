@@ -369,16 +369,64 @@ def get_global_config_dir(kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
     return os.path.join(_kicad_config_base(), ver)
 
 
+def _dir_key(path: str) -> str:
+    """Normalize a directory path so two spellings of the same folder compare equal."""
+    return os.path.normcase(os.path.normpath(os.path.expanduser(path)))
+
+
+def find_path_variable(directory: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
+    """Return the name of a KiCad path variable whose value is *directory*, or ``""``.
+
+    Reads the variables set in KiCad's Preferences > Configure Paths
+    (``kicad_common.json``), preferring the config of *kicad_version* and
+    otherwise the newest installed version. A file that refers to the folder as
+    ``${NAME}/...`` keeps working on other machines where the same variable
+    points to wherever that folder lives there, such as a library shared
+    through git.
+    """
+    target = _dir_key(directory)
+    preferred = get_global_config_dir(kicad_version)
+    for ver_dir in [preferred] + [d for d in _iter_kicad_config_versions() if d != preferred]:
+        try:
+            with open(os.path.join(ver_dir, "kicad_common.json"), encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        env = data.get("environment") if isinstance(data, dict) else None
+        variables = env.get("vars") if isinstance(env, dict) else None
+        if not isinstance(variables, dict):
+            variables = {}
+        # Only the config KiCad would actually use counts, so stop at the first readable one.
+        matches = sorted(
+            name for name, value in variables.items() if isinstance(value, str) and value and _dir_key(value) == target
+        )
+        return matches[0] if matches else ""
+    return ""
+
+
+def lib_dir_reference(lib_dir: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
+    """How files should refer to *lib_dir*: ``${NAME}`` if a path variable points there, else its absolute path."""
+    var = find_path_variable(lib_dir, kicad_version)
+    if var:
+        return f"${{{var}}}"
+    return lib_dir.replace("\\", "/")
+
+
 def update_global_lib_tables(
     lib_dir: str, lib_name: str = "JLCImport", kicad_version: int = DEFAULT_KICAD_VERSION
 ) -> None:
-    """Add library entries to the global sym-lib-table and fp-lib-table."""
+    """Add library entries to the global sym-lib-table and fp-lib-table.
+
+    The URIs use a KiCad path variable when one points to *lib_dir*, so the
+    entries stay valid if the folder sits at a different path on another machine.
+    """
     config_dir = get_global_config_dir(kicad_version)
     if not os.path.isdir(config_dir):
         os.makedirs(config_dir, exist_ok=True)
 
-    sym_uri = os.path.join(lib_dir, f"{lib_name}.kicad_sym").replace("\\", "/")
-    fp_uri = os.path.join(lib_dir, f"{lib_name}.pretty").replace("\\", "/")
+    base = lib_dir_reference(lib_dir, kicad_version).rstrip("/")
+    sym_uri = f"{base}/{lib_name}.kicad_sym"
+    fp_uri = f"{base}/{lib_name}.pretty"
 
     _update_lib_table(os.path.join(config_dir, "sym-lib-table"), "sym_lib_table", lib_name, "KiCad", sym_uri)
     _update_lib_table(os.path.join(config_dir, "fp-lib-table"), "fp_lib_table", lib_name, "KiCad", fp_uri)

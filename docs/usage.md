@@ -204,6 +204,10 @@ Settings are stored in `jlcimport.json`, shared by the plugin, GUI and CLI. It h
 | Linux | `~/.config/kicad/jlcimport.json` |
 | Windows | `%APPDATA%\kicad\jlcimport.json` |
 
+### Sharing a global library between machines
+
+A custom `global_lib_dir` is normally written into footprints and the global library tables as an absolute path, which only works on the machine that imported the part. To share the library, for example by keeping it in a git repository, define a path variable for the folder in KiCad (**Preferences > Configure Paths**). Each machine sets the variable to wherever its copy lives. When a path variable points to the global library folder, imports refer to it through that variable, such as `${TEAM_LIB}/TeamLib.3dshapes/PART.wrl`, so the 3D models and library tables resolve everywhere.
+
 ## Download Cache
 
 Footprint and symbol data downloaded from EasyEDA is kept for a week, so the import previews, imports and production checks don't fetch the same part twice. Stock and prices are always fetched live. To get fresh footprint data sooner, delete the folder; set `JLCIMPORT_CACHE_DIR` to put it somewhere else.
