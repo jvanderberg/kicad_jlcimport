@@ -16,6 +16,7 @@ from .kicad.library import (
     add_symbol_to_lib,
     check_symbol_lib,
     ensure_lib_structure,
+    find_path_variable,
     sanitize_name,
     save_footprint,
     symbol_exists,
@@ -108,12 +109,17 @@ def _global_model_path(lib_dir: str, lib_name: str, model_name: str, kicad_versi
     """Build the 3D model path for a global library import.
 
     Uses the ``${KICADxx_3RD_PARTY}`` variable when the library lives in the
-    default 3rd-party directory, otherwise falls back to an absolute path so
+    default 3rd-party directory, or a path variable from KiCad's Configure
+    Paths when one points to the library folder (so a library shared between
+    machines keeps its 3D models). Otherwise falls back to an absolute path so
     custom directories (e.g. ~/Downloads) resolve correctly.
     """
     default_dir = _default_3rdparty_dir(kicad_version)
     if os.path.normpath(lib_dir) == os.path.normpath(default_dir):
         return f"${{KICAD{kicad_version}_3RD_PARTY}}/{lib_name}.3dshapes/{model_name}.wrl"
+    var = find_path_variable(lib_dir, kicad_version)
+    if var:
+        return f"${{{var}}}/{lib_name}.3dshapes/{model_name}.wrl"
     return os.path.join(lib_dir, f"{lib_name}.3dshapes", f"{model_name}.wrl").replace("\\", "/")
 
 
