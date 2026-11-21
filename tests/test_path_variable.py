@@ -53,10 +53,16 @@ class TestFindPathVariable:
         kicad_config("9.0", {"FROM_NINE": lib_dir})
         assert library.find_path_variable(lib_dir, kicad_version=9) == "FROM_NINE"
 
-    def test_falls_back_to_newest_readable_config(self, kicad_config, lib_dir):
+    def test_ignores_other_versions_when_target_config_missing(self, kicad_config, lib_dir):
+        """KiCad 10 without a config of its own uses its defaults, so 9.0's variables don't resolve there."""
         kicad_config("9.0", {"FROM_NINE": lib_dir})
-        kicad_config("8.0", {"FROM_EIGHT": lib_dir})
-        assert library.find_path_variable(lib_dir, kicad_version=10) == "FROM_NINE"
+        assert library.find_path_variable(lib_dir, kicad_version=10) == ""
+
+    def test_ignores_newer_version_variable(self, kicad_config, lib_dir):
+        """A variable only KiCad 10 defines must not be written into KiCad 9's files."""
+        kicad_config("10.0", {"FROM_TEN": lib_dir})
+        kicad_config("9.0", {"UNRELATED": "/elsewhere"})
+        assert library.find_path_variable(lib_dir, kicad_version=9) == ""
 
     def test_only_the_config_kicad_would_use_counts(self, kicad_config, lib_dir):
         """A variable that only an older KiCad defines must not be used: the current KiCad can't resolve it."""
@@ -64,12 +70,45 @@ class TestFindPathVariable:
         kicad_config("9.0", {"OLD_VAR": lib_dir})
         assert library.find_path_variable(lib_dir, kicad_version=10) == ""
 
-    def test_skips_unreadable_config(self, kicad_config, lib_dir, tmp_path):
+    def test_unreadable_target_config_returns_empty(self, kicad_config, lib_dir, tmp_path):
+        """KiCad falls back to defaults on a corrupt config; another version's variables still don't count."""
         ver_dir = tmp_path / "kicad-config" / "10.0"
         ver_dir.mkdir()
         (ver_dir / "kicad_common.json").write_text("{not json", encoding="utf-8")
         kicad_config("9.0", {"FROM_NINE": lib_dir})
-        assert library.find_path_variable(lib_dir, kicad_version=10) == "FROM_NINE"
+        assert library.find_path_variable(lib_dir, kicad_version=10) == ""
+
+    def test_environment_overrides_stored_value(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        """KiCad resolves the variable from the environment, so a stale stored value must not match."""
+        kicad_config("10.0", {"SHARED_LIB": lib_dir})
+        monkeypatch.setenv("SHARED_LIB", str(tmp_path / "somewhere-else"))
+        assert library.find_path_variable(lib_dir, kicad_version=10) == ""
+
+    def test_environment_value_matches(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        kicad_config("10.0", {"SHARED_LIB": str(tmp_path / "stale")})
+        monkeypatch.setenv("SHARED_LIB", lib_dir)
+        assert library.find_path_variable(lib_dir, kicad_version=10) == "SHARED_LIB"
+
+    def test_expands_nested_variable(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        monkeypatch.setenv("JLC_TEST_ROOT", str(tmp_path))
+        kicad_config("10.0", {"SHARED_LIB": "${JLC_TEST_ROOT}/shared/library"})
+        assert library.find_path_variable(lib_dir, kicad_version=10) == "SHARED_LIB"
+
+    def test_expands_variable_defined_alongside(self, kicad_config, lib_dir, tmp_path):
+        kicad_config("10.0", {"ROOT": str(tmp_path / "shared"), "SHARED_LIB": "${ROOT}/library"})
+        assert library.find_path_variable(lib_dir, kicad_version=10) == "SHARED_LIB"
+
+    def test_unresolvable_or_relative_values_are_skipped(self, kicad_config, lib_dir, monkeypatch):
+        monkeypatch.delenv("JLC_TEST_UNSET", raising=False)
+        kicad_config("10.0", {"A": "${JLC_TEST_UNSET}/library", "B": "relative/library", "C": "${C}"})
+        assert library.find_path_variable(lib_dir, kicad_version=10) == ""
+
+    @pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt", reason="needs POSIX symlinks")
+    def test_matches_through_symlink(self, kicad_config, lib_dir, tmp_path):
+        link = tmp_path / "link-to-library"
+        link.symlink_to(lib_dir, target_is_directory=True)
+        kicad_config("10.0", {"SHARED_LIB": lib_dir})
+        assert library.find_path_variable(str(link), kicad_version=10) == "SHARED_LIB"
 
     @pytest.mark.parametrize(
         "content",
@@ -127,3 +166,35 @@ class TestGlobalLibTables:
         expected = lib_dir.replace("\\", "/")
         assert self._uris(config_dir / "sym-lib-table") == [f"{expected}/shared.kicad_sym"]
         assert self._uris(config_dir / "fp-lib-table") == [f"{expected}/shared.pretty"]
+
+
+class TestResolveUserVariable:
+    """Library tables that use a path variable read back as the folder the import matched."""
+
+    def test_prefers_target_version_config(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        monkeypatch.delenv("SHARED_LIB", raising=False)
+        other = tmp_path / "other"
+        other.mkdir()
+        kicad_config("10.0", {"SHARED_LIB": str(other)})
+        kicad_config("9.0", {"SHARED_LIB": lib_dir})
+        assert library.resolve_kicad_var("SHARED_LIB", kicad_version=9) == lib_dir
+        assert library.resolve_kicad_var("SHARED_LIB", kicad_version=10) == str(other)
+
+    def test_falls_back_to_other_versions(self, kicad_config, lib_dir, monkeypatch):
+        monkeypatch.delenv("SHARED_LIB", raising=False)
+        kicad_config("9.0", {"SHARED_LIB": lib_dir})
+        assert library.resolve_kicad_var("SHARED_LIB", kicad_version=10) == lib_dir
+
+    def test_expands_nested_variable(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        monkeypatch.delenv("SHARED_LIB", raising=False)
+        kicad_config("10.0", {"ROOT": str(tmp_path / "shared"), "SHARED_LIB": "${ROOT}/library"})
+        assert os.path.normpath(library.resolve_kicad_var("SHARED_LIB", kicad_version=10)) == lib_dir
+
+    def test_footprint_table_round_trip(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        """An fp-lib-table entry written with a variable is found again when listing footprint libraries."""
+        monkeypatch.delenv("SHARED_LIB", raising=False)
+        os.makedirs(os.path.join(lib_dir, "shared.pretty"))
+        kicad_config("10.0", {"SHARED_LIB": lib_dir})
+        library.update_global_lib_tables(lib_dir, "shared", kicad_version=10)
+        libs = library._iter_footprint_libraries("", kicad_version=10)
+        assert ("shared", os.path.normpath(os.path.join(lib_dir, "shared.pretty"))) in libs

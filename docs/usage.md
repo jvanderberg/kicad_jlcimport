@@ -206,7 +206,11 @@ Settings are stored in `jlcimport.json`, shared by the plugin, GUI and CLI. It h
 
 ### Sharing a global library between machines
 
-A custom `global_lib_dir` is normally written into footprints and the global library tables as an absolute path, which only works on the machine that imported the part. To share the library, for example by keeping it in a git repository, define a path variable for the folder in KiCad (**Preferences > Configure Paths**). Each machine sets the variable to wherever its copy lives. When a path variable points to the global library folder, imports refer to it through that variable, such as `${TEAM_LIB}/TeamLib.3dshapes/PART.wrl`, so the 3D models and library tables resolve everywhere.
+A custom `global_lib_dir` is normally written into footprints and the global library tables as an absolute path, which only works on the machine that imported the part. To share the library, for example by keeping it in a git repository, define a path variable for the folder in KiCad (**Preferences > Configure Paths**). Each machine sets the variable to wherever its copy lives. When a path variable points to the global library folder, imports refer to it through that variable, such as `${TEAM_LIB}/TeamLib.3dshapes/PART.wrl`, so the footprints' 3D models resolve on every machine.
+
+- The variable must be defined in the KiCad version you import for. An environment variable with the same name takes precedence over Configure Paths, as it does in KiCad.
+- The global library tables belong to each machine and are not part of the shared folder. On every other machine, set the variable and then add the library once: import any part into it, or add `${TEAM_LIB}/TeamLib.kicad_sym` and `${TEAM_LIB}/TeamLib.pretty` in **Preferences > Manage Symbol/Footprint Libraries**.
+- Only new imports and new library table entries use the variable. Footprints imported before you defined it keep their absolute 3D model paths, and an existing table entry is left as it is. Re-import those parts, and edit the entry in Manage Libraries to use the variable.
 
 ## Download Cache
 
