@@ -394,17 +394,24 @@ def _read_path_vars(kicad_version: int = DEFAULT_KICAD_VERSION) -> dict[str, str
     return {name: value for name, value in variables.items() if isinstance(name, str) and isinstance(value, str)}
 
 
-def _expand_path_var_refs(value: str, variables: dict[str, str]) -> str:
+def _running_in_kicad() -> bool:
+    """True when this code runs inside KiCad (the plugin), where pcbnew is loaded."""
+    return "pcbnew" in sys.modules
+
+
+def _expand_path_var_refs(value: str, variables: dict[str, str], env_first: bool = True) -> str:
     """Expand ``${NAME}`` references inside a path variable's value.
 
-    Looks names up in the process environment first, which overrides
-    Configure Paths in KiCad, then in *variables*. References that can't be
-    resolved are left in place.
+    Names are looked up in the process environment and in *variables*; with
+    *env_first* the environment wins, as it does inside KiCad. References that
+    can't be resolved are left in place.
     """
 
     def _replace(match) -> str:
         key = match.group(1)
-        return os.environ.get(key) or variables.get(key) or match.group(0)
+        if env_first:
+            return os.environ.get(key) or variables.get(key) or match.group(0)
+        return variables.get(key) or os.environ.get(key) or match.group(0)
 
     # A few rounds cover chained variables; the limit stops self-references.
     for _ in range(8):
@@ -423,17 +430,21 @@ def find_path_variable(directory: str, kicad_version: int = DEFAULT_KICAD_VERSIO
     keeps working on other machines where the same variable points to wherever
     that folder lives there, such as a library shared through git.
 
-    A variable is matched on the value KiCad would use: the process
-    environment overrides the stored value, and ``${OTHER}`` references in it
-    are expanded.
+    A variable is matched on the value KiCad would use, with ``${OTHER}``
+    references expanded. Inside KiCad the process environment overrides the
+    stored value, as KiCad itself does. The CLI and standalone GUI use the
+    stored value: their shell environment is not what a KiCad started from the
+    Dock or Start menu sees.
     """
     variables = _read_path_vars(kicad_version)
     if not variables:
         return ""
+    in_kicad = _running_in_kicad()
     target = _dir_key(directory)
     matches = []
     for name, stored in variables.items():
-        value = _expand_path_var_refs(os.environ.get(name) or stored, variables)
+        value = (os.environ.get(name) if in_kicad else None) or stored
+        value = _expand_path_var_refs(value, variables, env_first=in_kicad)
         value = os.path.expanduser(value)
         if not value or "${" in value or not os.path.isabs(value):
             continue
@@ -623,13 +634,14 @@ def resolve_kicad_var(key: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> s
         try:
             with open(common, encoding="utf-8") as f:
                 data = json.load(f)
-            variables = (data.get("environment") or {}).get("vars") or {}
+            raw_vars = (data.get("environment") or {}).get("vars") or {}
+            variables = {k: v for k, v in raw_vars.items() if isinstance(k, str) and isinstance(v, str)}
             val = variables.get(key, "")
-            if isinstance(val, str) and val:
+            if val:
                 val = os.path.expanduser(_expand_path_var_refs(val, variables))
             if val and os.path.isdir(val):
                 return val
-        except (OSError, ValueError, KeyError, AttributeError, TypeError):
+        except (OSError, ValueError, KeyError, AttributeError):
             continue
 
     # Derive the subdir from the variable name (e.g. KICAD9_FOOTPRINT_DIR)
@@ -699,6 +711,8 @@ def _iter_footprint_libraries(
         tables.append((os.path.join(project_dir, "fp-lib-table"), project_dir))
     tables.append((os.path.join(get_global_config_dir(kicad_version), "fp-lib-table"), ""))
 
+    # Keyed with _dir_key so a library reached through a symlinked path
+    # variable and through global_lib_dir counts once.
     seen: set[tuple[str, str]] = set()
     # Track visited table files to prevent cycles in (type "Table") chains.
     seen_tables: set[str] = set()
@@ -716,11 +730,11 @@ def _iter_footprint_libraries(
             if lt == "kicad":
                 if not path.lower().endswith(".pretty") or not os.path.isdir(path):
                     continue
-                key = (lib_name, os.path.normpath(path))
-                if key in seen:
+                seen_key = (lib_name, _dir_key(path))
+                if seen_key in seen:
                     continue
-                seen.add(key)
-                candidates.append(key)
+                seen.add(seen_key)
+                candidates.append((lib_name, os.path.normpath(path)))
             elif lt == "table":
                 # KiCad 10 indirection: the URI points at another fp-lib-table.
                 # Resolve relative URIs inside the nested table relative to its
@@ -744,11 +758,11 @@ def _iter_footprint_libraries(
     for lib_name, path in jlc_search_dirs:
         if not os.path.isdir(path):
             continue
-        key = (lib_name, os.path.normpath(path))
-        if key in seen:
+        seen_key = (lib_name, _dir_key(path))
+        if seen_key in seen:
             continue  # already in lib-table, nothing to do
-        seen.add(key)
-        candidates.append(key)
+        seen.add(seen_key)
+        candidates.append((lib_name, os.path.normpath(path)))
 
     return candidates
 

@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 
 import pytest
 
@@ -17,12 +18,21 @@ def kicad_config(tmp_path, monkeypatch):
     monkeypatch.setattr(library, "_kicad_config_base", lambda: str(base))
 
     def write_vars(version, variables):
+        # A variable of the same name in the developer's or CI shell must not leak in.
+        for name in variables:
+            monkeypatch.delenv(name, raising=False)
         ver_dir = base / version
         ver_dir.mkdir(exist_ok=True)
         (ver_dir / "kicad_common.json").write_text(json.dumps({"environment": {"vars": variables}}), encoding="utf-8")
         return ver_dir
 
     return write_vars
+
+
+@pytest.fixture
+def inside_kicad(monkeypatch):
+    """Run as the plugin does, with pcbnew loaded."""
+    monkeypatch.setitem(sys.modules, "pcbnew", object())
 
 
 @pytest.fixture
@@ -78,15 +88,33 @@ class TestFindPathVariable:
         kicad_config("9.0", {"FROM_NINE": lib_dir})
         assert library.find_path_variable(lib_dir, kicad_version=10) == ""
 
-    def test_environment_overrides_stored_value(self, kicad_config, lib_dir, tmp_path, monkeypatch):
-        """KiCad resolves the variable from the environment, so a stale stored value must not match."""
+    def test_in_kicad_environment_overrides_stored_value(
+        self, kicad_config, lib_dir, tmp_path, monkeypatch, inside_kicad
+    ):
+        """KiCad resolves the variable from its environment, so a stale stored value must not match."""
         kicad_config("10.0", {"SHARED_LIB": lib_dir})
         monkeypatch.setenv("SHARED_LIB", str(tmp_path / "somewhere-else"))
         assert library.find_path_variable(lib_dir, kicad_version=10) == ""
 
-    def test_environment_value_matches(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+    def test_in_kicad_environment_value_matches(self, kicad_config, lib_dir, tmp_path, monkeypatch, inside_kicad):
         kicad_config("10.0", {"SHARED_LIB": str(tmp_path / "stale")})
         monkeypatch.setenv("SHARED_LIB", lib_dir)
+        assert library.find_path_variable(lib_dir, kicad_version=10) == "SHARED_LIB"
+
+    def test_outside_kicad_stored_value_wins(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        """A shell export doesn't reach a KiCad started from the Dock, so the CLI matches the stored value."""
+        kicad_config("10.0", {"SHARED_LIB": lib_dir})
+        monkeypatch.setenv("SHARED_LIB", str(tmp_path / "somewhere-else"))
+        assert library.find_path_variable(lib_dir, kicad_version=10) == "SHARED_LIB"
+
+    def test_outside_kicad_environment_value_ignored(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        kicad_config("10.0", {"SHARED_LIB": str(tmp_path / "stale")})
+        monkeypatch.setenv("SHARED_LIB", lib_dir)
+        assert library.find_path_variable(lib_dir, kicad_version=10) == ""
+
+    def test_outside_kicad_nested_reference_prefers_stored_variable(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        kicad_config("10.0", {"ROOT": str(tmp_path / "shared"), "SHARED_LIB": "${ROOT}/library"})
+        monkeypatch.setenv("ROOT", str(tmp_path / "elsewhere"))
         assert library.find_path_variable(lib_dir, kicad_version=10) == "SHARED_LIB"
 
     def test_expands_nested_variable(self, kicad_config, lib_dir, tmp_path, monkeypatch):
@@ -198,3 +226,24 @@ class TestResolveUserVariable:
         library.update_global_lib_tables(lib_dir, "shared", kicad_version=10)
         libs = library._iter_footprint_libraries("", kicad_version=10)
         assert ("shared", os.path.normpath(os.path.join(lib_dir, "shared.pretty"))) in libs
+
+    def test_malformed_value_does_not_hide_the_config(self, kicad_config, lib_dir, tmp_path, monkeypatch):
+        monkeypatch.delenv("SHARED_LIB", raising=False)
+        ver_dir = tmp_path / "kicad-config" / "10.0"
+        ver_dir.mkdir()
+        content = {"environment": {"vars": {"N": 5, "SHARED_LIB": lib_dir, "OTHER": "${N}/x"}}}
+        (ver_dir / "kicad_common.json").write_text(json.dumps(content), encoding="utf-8")
+        assert library.resolve_kicad_var("SHARED_LIB", kicad_version=10) == lib_dir
+
+    @pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt", reason="needs POSIX symlinks")
+    def test_symlinked_variable_lists_library_once(self, kicad_config, lib_dir, tmp_path):
+        """A table entry reached through a symlinked variable and the global_lib_dir copy are one library."""
+        os.makedirs(os.path.join(lib_dir, "shared.pretty"))
+        link = tmp_path / "link-to-library"
+        link.symlink_to(lib_dir, target_is_directory=True)
+        kicad_config("10.0", {"SHARED_LIB": str(link)})
+        library.update_global_lib_tables(lib_dir, "shared", kicad_version=10)
+        libs = library._iter_footprint_libraries(
+            "", kicad_version=10, jlc_lib_name="shared", jlc_global_lib_dir=lib_dir
+        )
+        assert [name for name, _ in libs].count("shared") == 1
