@@ -369,16 +369,113 @@ def get_global_config_dir(kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
     return os.path.join(_kicad_config_base(), ver)
 
 
+def _dir_key(path: str) -> str:
+    """Normalize a directory path so two spellings of the same folder (or a symlink to it) compare equal."""
+    return os.path.normcase(os.path.realpath(os.path.expanduser(path)))
+
+
+def _read_path_vars(kicad_version: int = DEFAULT_KICAD_VERSION) -> dict[str, str]:
+    """Return the variables set in Configure Paths for *kicad_version*, or ``{}``.
+
+    Only that version's ``kicad_common.json`` is read: it is the one that KiCad
+    uses, and it falls back to its defaults when the file is missing or
+    unreadable, so another version's variables would not resolve there.
+    """
+    path = os.path.join(get_global_config_dir(kicad_version), "kicad_common.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    env = data.get("environment") if isinstance(data, dict) else None
+    variables = env.get("vars") if isinstance(env, dict) else None
+    if not isinstance(variables, dict):
+        return {}
+    return {name: value for name, value in variables.items() if isinstance(name, str) and isinstance(value, str)}
+
+
+def _running_in_kicad() -> bool:
+    """True when this code runs inside KiCad (the plugin), where pcbnew is loaded."""
+    return "pcbnew" in sys.modules
+
+
+def _expand_path_var_refs(value: str, variables: dict[str, str], env_first: bool = True) -> str:
+    """Expand ``${NAME}`` references inside a path variable's value.
+
+    Names are looked up in the process environment and in *variables*; with
+    *env_first* the environment wins, as it does inside KiCad. References that
+    can't be resolved are left in place.
+    """
+
+    def _replace(match) -> str:
+        key = match.group(1)
+        if env_first:
+            return os.environ.get(key) or variables.get(key) or match.group(0)
+        return variables.get(key) or os.environ.get(key) or match.group(0)
+
+    # A few rounds cover chained variables; the limit stops self-references.
+    for _ in range(8):
+        expanded = _ENV_VAR_RE.sub(_replace, value)
+        if expanded == value:
+            break
+        value = expanded
+    return value
+
+
+def find_path_variable(directory: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
+    """Return the name of a KiCad path variable whose value is *directory*, or ``""``.
+
+    Reads the variables set in Preferences > Configure Paths of *kicad_version*
+    (``kicad_common.json``). A file that refers to the folder as ``${NAME}/...``
+    keeps working on other machines where the same variable points to wherever
+    that folder lives there, such as a library shared through git.
+
+    A variable is matched on the value KiCad would use, with ``${OTHER}``
+    references expanded. Inside KiCad the process environment overrides the
+    stored value, as KiCad itself does. The CLI and standalone GUI use the
+    stored value: their shell environment is not what a KiCad started from the
+    Dock or Start menu sees.
+    """
+    variables = _read_path_vars(kicad_version)
+    if not variables:
+        return ""
+    in_kicad = _running_in_kicad()
+    target = _dir_key(directory)
+    matches = []
+    for name, stored in variables.items():
+        value = (os.environ.get(name) if in_kicad else None) or stored
+        value = _expand_path_var_refs(value, variables, env_first=in_kicad)
+        value = os.path.expanduser(value)
+        if not value or "${" in value or not os.path.isabs(value):
+            continue
+        if _dir_key(value) == target:
+            matches.append(name)
+    return min(matches) if matches else ""
+
+
+def lib_dir_reference(lib_dir: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> str:
+    """How files should refer to *lib_dir*: ``${NAME}`` if a path variable points there, else its absolute path."""
+    var = find_path_variable(lib_dir, kicad_version)
+    if var:
+        return f"${{{var}}}"
+    return lib_dir.replace("\\", "/")
+
+
 def update_global_lib_tables(
     lib_dir: str, lib_name: str = "JLCImport", kicad_version: int = DEFAULT_KICAD_VERSION
 ) -> None:
-    """Add library entries to the global sym-lib-table and fp-lib-table."""
+    """Add library entries to the global sym-lib-table and fp-lib-table.
+
+    The URIs use a KiCad path variable when one points to *lib_dir*, so the
+    entries stay valid if the folder sits at a different path on another machine.
+    """
     config_dir = get_global_config_dir(kicad_version)
     if not os.path.isdir(config_dir):
         os.makedirs(config_dir, exist_ok=True)
 
-    sym_uri = os.path.join(lib_dir, f"{lib_name}.kicad_sym").replace("\\", "/")
-    fp_uri = os.path.join(lib_dir, f"{lib_name}.pretty").replace("\\", "/")
+    base = lib_dir_reference(lib_dir, kicad_version).rstrip("/")
+    sym_uri = f"{base}/{lib_name}.kicad_sym"
+    fp_uri = f"{base}/{lib_name}.pretty"
 
     _update_lib_table(os.path.join(config_dir, "sym-lib-table"), "sym_lib_table", lib_name, "KiCad", sym_uri)
     _update_lib_table(os.path.join(config_dir, "fp-lib-table"), "fp_lib_table", lib_name, "KiCad", fp_uri)
@@ -516,7 +613,8 @@ def resolve_kicad_var(key: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> s
 
     Checks, in order:
     1. The process environment (``os.environ``).
-    2. ``kicad_common.json`` from the newest installed KiCad version.
+    2. ``kicad_common.json`` of *kicad_version*, then the other installed
+       versions, newest first. ``${OTHER}`` references in a value are expanded.
     3. The installed KiCad application directory for *kicad_version* (the
        target version we are running against, which may differ from the
        version number embedded in the variable name).
@@ -527,16 +625,23 @@ def resolve_kicad_var(key: str, kicad_version: int = DEFAULT_KICAD_VERSION) -> s
     if env_val and os.path.isdir(env_val):
         return env_val
 
-    for ver_dir in _iter_kicad_config_versions():
+    # The target version's config first, so a variable written into its
+    # lib-tables reads back as the folder it was matched against.
+    preferred = os.path.normpath(get_global_config_dir(kicad_version))
+    config_dirs = sorted(_iter_kicad_config_versions(), key=lambda d: os.path.normpath(d) != preferred)
+    for ver_dir in config_dirs:
         common = os.path.join(ver_dir, "kicad_common.json")
         try:
             with open(common, encoding="utf-8") as f:
                 data = json.load(f)
-            val = (data.get("environment") or {}).get("vars") or {}
-            val = val.get(key, "")
+            raw_vars = (data.get("environment") or {}).get("vars") or {}
+            variables = {k: v for k, v in raw_vars.items() if isinstance(k, str) and isinstance(v, str)}
+            val = variables.get(key, "")
+            if val:
+                val = os.path.expanduser(_expand_path_var_refs(val, variables))
             if val and os.path.isdir(val):
                 return val
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, AttributeError):
             continue
 
     # Derive the subdir from the variable name (e.g. KICAD9_FOOTPRINT_DIR)
@@ -606,6 +711,8 @@ def _iter_footprint_libraries(
         tables.append((os.path.join(project_dir, "fp-lib-table"), project_dir))
     tables.append((os.path.join(get_global_config_dir(kicad_version), "fp-lib-table"), ""))
 
+    # Keyed with _dir_key so a library reached through a symlinked path
+    # variable and through global_lib_dir counts once.
     seen: set[tuple[str, str]] = set()
     # Track visited table files to prevent cycles in (type "Table") chains.
     seen_tables: set[str] = set()
@@ -623,11 +730,11 @@ def _iter_footprint_libraries(
             if lt == "kicad":
                 if not path.lower().endswith(".pretty") or not os.path.isdir(path):
                     continue
-                key = (lib_name, os.path.normpath(path))
-                if key in seen:
+                seen_key = (lib_name, _dir_key(path))
+                if seen_key in seen:
                     continue
-                seen.add(key)
-                candidates.append(key)
+                seen.add(seen_key)
+                candidates.append((lib_name, os.path.normpath(path)))
             elif lt == "table":
                 # KiCad 10 indirection: the URI points at another fp-lib-table.
                 # Resolve relative URIs inside the nested table relative to its
@@ -651,11 +758,11 @@ def _iter_footprint_libraries(
     for lib_name, path in jlc_search_dirs:
         if not os.path.isdir(path):
             continue
-        key = (lib_name, os.path.normpath(path))
-        if key in seen:
+        seen_key = (lib_name, _dir_key(path))
+        if seen_key in seen:
             continue  # already in lib-table, nothing to do
-        seen.add(key)
-        candidates.append(key)
+        seen.add(seen_key)
+        candidates.append((lib_name, os.path.normpath(path)))
 
     return candidates
 
