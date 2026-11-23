@@ -187,6 +187,11 @@ class TestWriteSymbol:
         result = write_symbol(sym, "Test", description='Has "quotes" and\nnewlines')
         assert '\\"quotes\\"' in result
 
+    def test_datasheet_trailing_backslash_keeps_string_closed(self):
+        sym = _make_symbol()
+        result = write_symbol(sym, "Test", datasheet="https://example.com/ds.pdf?inline\\")
+        assert '(property "Datasheet" "https://example.com/ds.pdf?inline\\\\" (at 0 0 0)' in result
+
     def test_unit_sub_symbol_naming(self):
         sym = _make_symbol()
         result = write_symbol(sym, "MyPart")
