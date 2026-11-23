@@ -327,6 +327,22 @@ class TestParseSymbolShapes:
         assert pin.number == "1"
         assert pin.electrical_type == "unspecified"
 
+    def test_parse_pin_styles(self):
+        def pin_style(dot_visible: str, clock_visible: str) -> str:
+            shape = (
+                "P~show~0~1~400~300~0~id1^^400~300^^M400,300h10~#880000"
+                "^^1~0~0~0~CLK~start~~~#0000FF^^1~0~0~0~1~end~~~#0000FF"
+                f"^^{dot_visible}~400~300^^{clock_visible}~M 397 297 L 400 300 L 397 303"
+            )
+            sym = parse_symbol_shapes([shape], 400, 300)
+            assert len(sym.pins) == 1
+            return sym.pins[0].style
+
+        assert pin_style("0", "0") == "line"
+        assert pin_style("1", "0") == "inverted"
+        assert pin_style("0", "1") == "clock"
+        assert pin_style("1", "1") == "inverted_clock"
+
     def test_parse_pin_horizontal_right(self):
         """Test horizontal pin extending right (h +N) -> KiCad 0°."""
         shape = "P~show~0~1~400~300~0~id1^^400~300^^M 400 300 h 10~#880000^^1~0~0~0~1~start~~#0000FF"
